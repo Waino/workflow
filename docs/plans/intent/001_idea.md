@@ -50,8 +50,8 @@ and an extra instruction concerning security should be followed (override to add
 
 - Use click for the CLI
 - Use rich for color and tabular layouts
-- Use pydantic for models and for validation of the yaml config
-- Use pathlib.Path
+- Use pydantic v2 for schemas and for validation of the yaml config
+- Use pathlib for path handling and globs
 - Can call out to shell tools rather than implementing heavy custom components or adding complex dependencies
 
 ## Plan contents
