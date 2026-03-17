@@ -38,6 +38,7 @@ addopts = "-v --cov=workflow --cov-report html --ignore-glob docs/**"
 
 [tool.ruff]
 line-length = 120
+extend-exclude = ["docs"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -47,6 +48,8 @@ ignore = [
     "D401",
     "D412",
     "D413",
+    "D203",
+    "D213",
     "FBT002",
     "FIX001",
     "FIX002",
@@ -64,6 +67,9 @@ ignore = [
     "UP015",
     "T201",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"**/{tests}/*" = ["INP001"]
 
 [dependency-groups]
 dev = [
