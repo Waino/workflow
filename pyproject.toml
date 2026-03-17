@@ -33,12 +33,14 @@ workflow = "workflow:main"
 
 [tool.black]
 line-length = 120
+target-version = ['py311']
 
 [tool.pytest.ini_options]
 addopts = "-v --cov=workflow --cov-report html --ignore-glob docs/**"
 
 [tool.ruff]
 line-length = 120
+target-version = "py311"
 extend-exclude = ["docs"]
 
 [tool.ruff.lint]
