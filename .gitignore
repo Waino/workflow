@@ -1,0 +1,10 @@
+*.log
+*.orig
+.coverage
+__pycache__
+dist/**
+docs/build/**
+docs/source/autodoc/**
+htmlcov
+.venv
+activate

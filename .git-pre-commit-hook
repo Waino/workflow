@@ -1,0 +1,14 @@
+#!/bin/bash
+set -eux
+
+# Reformat using black
+black --skip-string-normalization workflow tests/*
+
+# Lint using ruff
+ruff check --fix
+
+# Unit tests
+python -m pytest -m "not slow"
+
+# Type checking
+mypy workflow
