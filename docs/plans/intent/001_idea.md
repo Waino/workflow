@@ -1,6 +1,3 @@
-FIXME: pushes and pulls
-FIXME: branch naming and lifespan
-
 ## Goals
 
 - Ability to run (limited, 3 is enough) parallel agents:
@@ -9,7 +6,10 @@ FIXME: branch naming and lifespan
   There are multiple points where the human operator can review, adjust, and intervene.
   While it is ok that these add some friction to the workflow, the tool aims to streamline the process.
 - Git history protection: the bare repo is readable from the sandboxes, but only the human operator pushes.
-- Codifying lessons learned about how to optimize workflow, as continuous improvement. 
+- Forward-only flow: work only flows forward through the pipeline (planner → builder → reviewer),
+  allowing the three agents to act with pipeline parallelism.
+  When reviews cause changes to existing features, the changes reenter the pipeline as new plans.
+- Codifying lessons learned about how to optimize workflow, as continuous improvement.
 
 ## Components
 
@@ -33,6 +33,28 @@ This is a security critical feature, pay extra attention to untrusted inputs.
 The above means that any instructions in the `pr` workflow concerning how to review deprecating functionality should be ignored (override to subtract from the workflow),
 and an extra instruction concerning security should be followed (override to add to the workflow).
 
+## Git branch strategy
+
+- `main` is the only long-lived branch. All other branches are short-lived and deleted after merge.
+- All agents pull before starting any command.
+- Agents have read access to the bare repo (can pull), but cannot push.
+  Only the human operator pushes, enforcing a quality gate at each handoff.
+
+### Planner
+- Branches from `main`, named `plan/{command}/{input_plan}` (e.g. `plan/subdivide/001_idea`, `plan/plan/003_foo`).
+- For `critique`: if already on a branch for the plan being critiqued, commit there.
+  Otherwise, create `plan/critique/{plan_name}`.
+- Plan branches are merged to `main` via the `todo` or `implement` scripts.
+
+### Builder
+- Branches from `main`, named `feat/{plan_name}`.
+- Works on a single plan at a time.
+
+### Reviewer
+- For `pr` and `fix`: works on the `feat/{plan_name}` branch (fetched from bare after `push`).
+  Review documents and fixes are committed on the same branch. `accept` merges the whole branch to `main`.
+- For `full review` and `followthrough`: branches from `main`, named `review/{output_name}`.
+
 ## Loose path parsing
 
 - Humans are lazy writers. The path_to_plan parameters in both scripts and prompts should match loosely
@@ -45,6 +67,8 @@ and an extra instruction concerning security should be followed (override to add
     - intent/012_frobnicator                                    # distinguish state when necessary
     - 002                                                       # sequence number is enough, when clear from context
     - intent/012                                                # state and sequence number
+- Collision validation: if two non-intent plans share the same sequence number, log a loud error.
+  To refer to an intent when an agent-generated plan with the same number exists, use `intent/{number}` explicitly.
 
 ## Libraries
 
@@ -88,6 +112,8 @@ and an extra instruction concerning security should be followed (override to add
             - The previous agent recommendation is removed, if it recommended the discarded choice
         - Compacting and rephrasing the discarded sections avoids accidentally spilling them into the implementation,
           while still keeping a record of decisions.
+- Dependencies: if a plan depends on another plan, note this in a "Dependencies" section.
+  This is a lightweight convention; the tooling does not validate or enforce ordering.
 - Include an analysis of potential risks towards the end of the plan
     - The revise discussion after the `critique` shorthand will add risks to this section,
       when the decision is "let's keep the plan, but document this as a risk".
@@ -157,7 +183,7 @@ and an extra instruction concerning security should be followed (override to add
 
 - Review of the implementation of a plan
 - Should always reference the plan being implemented
-- id: name of critiqued plan + hash of reviewed commit
+- id: `{plan_name}_{commit_hash}` — the commit hash allows multiple review rounds on the same branch
 
 #### reviews/full
 
@@ -270,6 +296,7 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 
 - script: workflow implement {path_to_plan}
 - Plan must be in state `planning` or `todo` on the `main` branch of the `master` repo.
+- If plan is in `planning`, first perform the same push-pull-merge sequence as `todo`.
 - Transition the plan to `implementing`. Commit. Push.
 - Print workflow reminder: "next step is: workflow ask {new_path_to_plan}". Pause briefly so it can be seen.
 - tmux attach to the builder
@@ -313,18 +340,26 @@ Also consider integration-style tests:
 are they worth the cost for this feature,
 and is the codebase ready for them (or should they be postponed to a later phase).
 
-Write a report on the results into `docs/plans/reviews/pr/{plan_name}.md`.
+Write a report on the results into `docs/plans/reviews/pr/{plan_name}_{commit}.md`.
 Commit your changes. Do not modify the code.
 """
 
 ### @ Fix
 
 - prompt: workflow fix [{path_to_review}]
+- agent: reviewer
 - Path to plan may be omitted, if the review is in the session history. In that case, fix what was most recently reviewed.
+- Reviewer implements the fixes on the `feat/{plan_name}` branch.
+- Outcomes after fix:
+    1. Human runs `doublecheck` + `accept` if satisfied.
+    2. Human runs `reject` if the branch is unrecoverably off-track, re-specs with lessons learned.
+    3. Human continues iterating in chat, potentially with another `pr` + `fix` cycle.
 
 ### Doublecheck
 
 - script: workflow doublecheck {path_to_plan}
+- The checks are implemented as a reusable function (`doublecheck-func`),
+  also called as part of `push` and potentially other commands.
 - checks
     - verify that planner only touches plans, and that builder does not touch intents
     - list all added noqa and nosec comments
@@ -365,14 +400,25 @@ Commit your changes. Do not modify the code.
 - Compare features against the codebase. List unimplemented and only partially implemented features.
 
 
+### New: Create a new intent
+
+- script: workflow new {slug}
+- Finds the first free sequence number (checking all states and the planner's audit log for plans on branches).
+- Opens `docs/plans/intent/{num}_{slug}.md` using `${EDITOR}`.
+
 ### Status
 
 - script: workflow status
 - Use the subdirectories that plans are in, together with the audit log, to show how far along plans are
 - Omit done and rejected plans from the listing
-- In addition to current sate, show next step(s) for each plan
-- Print the lowest free number for plans (check existing plans across all states)
+- In addition to current state, show next step(s) for each plan
+- Print the lowest free number for plans (check existing plans across all states and planner's audit log)
 
+### Log
+
+- script: workflow log
+- Pretty-prints the JSONL audit logs in chronological order, merged across all agents, with rich formatting.
+- Filtering options: by agent, by plan, by time range, by command.
 
 ### Generate CLAUDE.md
 
@@ -385,19 +431,41 @@ Both the script and the agent write logs (in jsonl format) of the executed workf
 There is one log file per agent (e.g. /home/auggie/projects/foo/planner/workflow.log.jsonl),
 plus one in master (/home/auggie/projects/foo/master/workflow.log.jsonl).
 The logs should not be under version control.
+Each entry includes:
+- `timestamp`: ISO 8601 timestamp
+- `actor`: agent identity (e.g. "planner", "builder", "reviewer", "human")
+- `command`: the command executed (e.g. "critique", "subdivide", "todo")
+- `input_plan`: the input plan (if applicable)
+- `output_plans`: list of output plans (if applicable, e.g. for subdivide)
 Example row:
-`{"actor": "agent", "step": "critique", "plan": "003_add_message_queue"}`
+`{"timestamp": "2026-03-18T14:30:00Z", "actor": "planner", "command": "subdivide", "input_plan": "001_idea", "output_plans": ["002_pydantic_models", "003_core_algorithm"]}`
 
 
-## Configurability
+## Dry-run mode
+
+- Global flag: `workflow --dry-run <command> [<args>]`
+- Prints the shell commands (git, docker, tmux, mv, etc.) that would be executed, without running them.
+- Propagates to all script commands.
+
+## Configuration
+
+### Config location
+
+- During development: config file in the project root (`config.yaml`).
+- Installed location: `~/.config/workflow/config.yaml`.
+- CLI flag to override: `workflow --config <path> <command> [<args>]`.
+- All settings (agent names, models, workflow graph, workflow contents) are in a single config file.
+
+### Configurability
 
 Hardcoding the workflow steps in code and CLAUDE.md is too inflexible: making any changes would be tricky.
 The opposite extreme of making all steps fully defined in configuration is not optimal either,
 as the configuration would become quite complex due to needing to represent multi-step scripts.
 Let's aim for a sweet spot where
 - the transition graph and some easily represented data is in a yaml config,
-- scrips are hardcoded as python functions,
+- scripts are hardcoded as python functions,
 - the two are linked by a registry.
+- Config validation: fail fast at startup if the config references a non-existent script name.
 
 ```yaml
 intent:
