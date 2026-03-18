@@ -13,8 +13,8 @@ FIXME: branch naming and lifespan
 
 ## Components
 
-- Python helper script `agentic_workflow` for the human operator
-    - Steps marked "script: agentic_workflow <subcommand> [<args>]"
+- Python helper script `workflow` for the human operator
+    - Steps marked "script: workflow <subcommand> [<args>]"
     - Always run outside the sandboxes, but may docker exec commands inside the sandboxes
 - CLAUDE.md and/or skills: instructions for the agent, referenced by shorthand for convenience
     - Steps marked "prompt: workflow <subcommand> [<args>]"
@@ -177,7 +177,7 @@ Directory structure:
 
 ### Cheat-sheet
 
-- script: agentic_workflow cheat
+- script: workflow cheat
 - Prints a cheat sheet outlining the workflow
     - Use color: distinguish by markers, fade out table delimiters to gray.
 - Markers, `-` for script, `@` for prompt shorthand, `( ... )` for other, `>` for transition
@@ -200,7 +200,7 @@ intent                     | planning      | todo          | implementing  | che
 
 ### Init
 
-- script: agentic_workflow init
+- script: workflow init
 - Call out to git to create clones of the master repo
 - Default agents: planner, builder, reviewer. Can be modified in config.
 
@@ -214,7 +214,7 @@ Directory structure after:
 
 ### Start
 
-- script: agentic_workflow start
+- script: workflow start
 - Call out to tmux to open one window for each agent
     - In the tmux session, start a sandbox container for the agent (run or start, depending on container existence)
     - Pass in the model that the agent should be using (configurable per agent)
@@ -257,18 +257,18 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 
 ### Todo: Approve a plan
 
-- script: agentic_workflow todo {path_to_plan}
+- script: workflow todo {path_to_plan}
 - Plan must be in state `planning` in a branch on the `planner` repo.
 - Push from `planner` to `bare`.
 - Pull to `master`.
 - Transition the plan to `todo`. Commit.
 - Merge to `main` branch.
 - Push from `master` to `bare`.
-- Print workflow reminder: "next step is: agentic_workflow implement {new_path_to_plan}"
+- Print workflow reminder: "next step is: workflow implement {new_path_to_plan}"
 
 ### Implement: Schedule a plan for implementation
 
-- script: agentic_workflow implement {path_to_plan}
+- script: workflow implement {path_to_plan}
 - Plan must be in state `planning` or `todo` on the `main` branch of the `master` repo.
 - Transition the plan to `implementing`. Commit. Push.
 - Print workflow reminder: "next step is: workflow ask {new_path_to_plan}". Pause briefly so it can be seen.
@@ -286,7 +286,7 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 
 ### Push
 
-- script: agentic_workflow push {path_to_plan}
+- script: workflow push {path_to_plan}
 - Plan must be in state `checking` on a branch in the `builder` repo.
 - Rerun the pre-commit-hook inside the sandbox.
 - Run doublecheck
@@ -324,7 +324,7 @@ Commit your changes. Do not modify the code.
 
 ### Doublecheck
 
-- script: agentic_workflow doublecheck {path_to_plan}
+- script: workflow doublecheck {path_to_plan}
 - checks
     - verify that planner only touches plans, and that builder does not touch intents
     - list all added noqa and nosec comments
@@ -337,7 +337,7 @@ Commit your changes. Do not modify the code.
 
 ### Accept
 
-- script: agentic_workflow accept {path_to_plan}
+- script: workflow accept {path_to_plan}
 - Push the branch from `reviewer`
 - Pull to `master`
 - Transitions plan into `done`
@@ -346,7 +346,7 @@ Commit your changes. Do not modify the code.
 
 ### Reject
 
-- script: agentic_workflow reject {path_to_plan}
+- script: workflow reject {path_to_plan}
 - Transitions plan into `reject`
 
 ### Full review
@@ -367,7 +367,7 @@ Commit your changes. Do not modify the code.
 
 ### Status
 
-- script: agentic_workflow status
+- script: workflow status
 - Use the subdirectories that plans are in, together with the audit log, to show how far along plans are
 - Omit done and rejected plans from the listing
 - In addition to current sate, show next step(s) for each plan
@@ -376,7 +376,7 @@ Commit your changes. Do not modify the code.
 
 ### Generate CLAUDE.md
 
-- script: agentic_workflow claude.md
+- script: workflow claude.md
 - Generate (the shorthand section of) the CLAUDE.md file based on the current configuration.
 
 ## Audit log
@@ -435,4 +435,4 @@ def implement(command: ScriptCommand, canonical_path_to_plan: Plan, ...) -> int:
         - check that tests only read from project dir or /tmp, and only write to /tmp
         - check that tests properly mock requests and other common networking
     - maybe in the future: if doing TDD, check that test and build only touch appropriate files
-- MCP to allow agents to perform some selected git operations outside the sandbox, e.g. `agentic_workflow push`
+- MCP to allow agents to perform some selected git operations outside the sandbox, e.g. `workflow push`
