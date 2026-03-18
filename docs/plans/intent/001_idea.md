@@ -75,6 +75,7 @@ and an extra instruction concerning security should be followed (override to add
 - Use click for the CLI
 - Use rich for color and tabular layouts
 - Use pydantic v2 for schemas and for validation of the yaml config
+- Use jinja2 for templating (intent file creation, CLAUDE.md generation)
 - Use pathlib for path handling and globs
 - Can call out to shell tools rather than implementing heavy custom components or adding complex dependencies
 
@@ -331,7 +332,7 @@ Focus on aspects such as
 software architecture,
 logic errors,
 missing or only partially implemented requirements,
-fit with existing conventions in the codebase,
+fit with existing architecture and conventions in the codebase,
 unit test quality and coverage,
 security,
 and any other relevant aspects.
@@ -502,5 +503,6 @@ def implement(command: ScriptCommand, canonical_path_to_plan: Plan, ...) -> int:
     - in the future: custom bandit rules
         - check that tests only read from project dir or /tmp, and only write to /tmp
         - check that tests properly mock requests and other common networking
+        - check that tests mock sleep, to avoid unnecessarily slow tests
     - maybe in the future: if doing TDD, check that test and build only touch appropriate files
 - MCP to allow agents to perform some selected git operations outside the sandbox, e.g. `workflow push`
