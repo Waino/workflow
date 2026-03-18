@@ -7,8 +7,8 @@ black --skip-string-normalization workflow tests/*
 # Lint using ruff
 ruff check --fix
 
-# Unit tests
-python -m pytest -m "not slow"
+# Unit tests (temporarily disabled, enable when the first test has been written)
+# python -m pytest -m "not slow"
 
 # Type checking
 mypy workflow
