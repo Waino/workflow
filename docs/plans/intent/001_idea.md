@@ -238,6 +238,7 @@ Directory structure after:
         planner/                            # repo for planner agent
         builder/                            # repo for builder agent
         reviewer/                           # repo for reviewer agent
+        .workflow_root                      # marker for the project directory
 
 ### Start
 
@@ -260,7 +261,7 @@ Directory structure after:
 - agent: planner
 - plan can be in any state, but typically intent or planning
 """
-Critique the idea.
+Critique the idea/plan.
 Please be honest, even harsh if necessary.
 Point out any flaws or weak points in the design.
 Point out any decisions that have a high risk of becoming technical debt.

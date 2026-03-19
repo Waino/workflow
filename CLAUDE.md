@@ -1,5 +1,7 @@
 # Project Guidelines
 
+Always start by reading docs/plans/intent/001_idea.md
+
 ## Code Style
 - black
 - Maximum line length 120.

@@ -1,0 +1,158 @@
+agents:
+  - name: planner
+    model: claude-sonnet-4-20250514
+  - name: builder
+    model: claude-sonnet-4-20250514
+  - name: reviewer
+    model: claude-sonnet-4-20250514
+
+states:
+  intent:
+    agent: planner
+    commands:
+      - command_type: prompt
+        name: ask
+        prompt: |
+          Read the plan at {path_to_plan}.
+          Ask any questions until you have a clear understanding.
+      - command_type: manual
+        name: answer
+      - command_type: prompt
+        name: critique
+        prompt: |
+          Read the plan at {path_to_plan}.
+          Critique the idea.
+          Please be honest, even harsh if necessary.
+          Point out any flaws or weak points in the design.
+          Point out any decisions that have a high risk of becoming technical debt.
+          Propose additional features, to improve the effectiveness, robustness, and usability of the system.
+      - command_type: manual
+        name: revise
+      - command_type: prompt
+        name: subdivide
+        prompt: |
+          Read the plan at {path_to_plan}.
+          Break it down into several detailed implementation plans.
+          Write each plan into docs/plans/planning/.
+        transition: planning
+
+  planning:
+    agent: planner
+    commands:
+      - command_type: prompt
+        name: ask
+        prompt: |
+          Read the plan at {path_to_plan}.
+          Ask any questions until you have a clear understanding.
+      - command_type: manual
+        name: answer
+      - command_type: prompt
+        name: plan
+        prompt: |
+          Read the intent at {path_to_plan}.
+          Write a detailed implementation plan into docs/plans/planning/.
+        transition: planning
+      - command_type: manual
+        name: adjust
+      - command_type: prompt
+        name: critique
+        prompt: |
+          Read the plan at {path_to_plan}.
+          Critique the plan.
+          Please be honest, even harsh if necessary.
+          Point out any flaws or weak points in the design.
+          Point out any decisions that have a high risk of becoming technical debt.
+      - command_type: manual
+        name: revise
+      - command_type: script
+        name: doublecheck
+        script: doublecheck
+      - command_type: script
+        name: todo
+        script: todo
+        transition: todo
+
+  todo:
+    agent: null
+    commands:
+      - command_type: script
+        name: implement
+        script: implement
+        transition: implementing
+
+  implementing:
+    agent: builder
+    commands:
+      - command_type: manual
+        name: pull
+      - command_type: manual
+        name: branch
+      - command_type: prompt
+        name: ask
+        prompt: |
+          Read the plan at {path_to_plan}.
+          Ask any questions until you have a clear understanding.
+      - command_type: manual
+        name: answer
+      - command_type: prompt
+        name: build
+        prompt: |
+          Read the plan at {path_to_plan}.
+          Implement the plan. When done, transition the plan state to checking.
+        transition: checking
+      - command_type: script
+        name: push
+        script: push
+
+  checking:
+    agent: reviewer
+    commands:
+      - command_type: manual
+        name: review
+      - command_type: prompt
+        name: pr
+        prompt: |
+          Derive the plan name from the workflow command.
+          Perform a thorough code review of the changes on the feat/{plan_name} branch.
+          Focus on software architecture, logic errors, missing or partially implemented requirements,
+          fit with existing architecture and conventions, unit test quality and coverage, and security.
+          Write a report into docs/plans/reviews/pr/{plan_name}_{commit}.md.
+          Commit your changes. Do not modify the code.
+      - command_type: manual
+        name: adjust
+      - command_type: prompt
+        name: fix
+        prompt: |
+          Fix the issues identified in the most recent review.
+      - command_type: script
+        name: doublecheck
+        script: doublecheck
+      - command_type: script
+        name: accept
+        script: accept
+        transition: done
+
+  done:
+    agent: null
+    commands: []
+
+  rejected:
+    agent: null
+    commands: []
+
+  review:
+    agent: reviewer
+    commands:
+      - command_type: prompt
+        name: full review
+        prompt: |
+          Perform a full review of the current state of the codebase.
+          Search for dead code, propose integration tests, and review overall architecture.
+          Write a report into docs/plans/reviews/full/.
+      - command_type: prompt
+        name: followthrough
+        prompt: |
+          Go through all plans in the states intent, checking, and done.
+          Compare features against the codebase.
+          List unimplemented and only partially implemented features.
+

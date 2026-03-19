@@ -72,7 +72,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"**/{tests}/*" = ["INP001", "BLE001", "PLR2004", "S101", "SLF001", "E402"]
+"**/{tests}/*" = ["INP001", "BLE001", "PLR2004", "S101", "SLF001", "E402", "D100", "D101", "D102", "D103", "S108"]
 
 [dependency-groups]
 dev = [
@@ -86,4 +86,5 @@ dev = [
     "pytest-cov>=7.0.0",
     "ruff>=0.15.6",
     "sphinx>=8.1.3",
+    "types-pyyaml>=6.0.12.20250915",
 ]
