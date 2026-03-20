@@ -55,6 +55,16 @@ and an extra instruction concerning security should be followed (override to add
   Review documents and fixes are committed on the same branch. `accept` merges the whole branch to `main`.
 - For `full review` and `followthrough`: branches from `main`, named `review/{output_name}`.
 
+## Terminology
+
+- **actor**: A participant that takes actions in the workflow and writes audit log entries.
+  Can be `"planner"`, `"builder"`, `"reviewer"`, or `"human"`. Includes the human operator; not tied to any repo.
+- **agent**: One of the three AI agents (planner, builder, reviewer) running in a sandbox.
+  Does not include the human operator.
+- **repo**: A git clone of the project used by a participant.
+  The named repos are `master` (human operator), `planner`, `builder`, `reviewer`, and `bare`.
+  `master` is a repo but not an agent; `human` is an actor but not a repo.
+
 ## Loose path parsing
 
 - Humans are lazy writers. The path_to_plan parameters in both scripts and prompts should match loosely
