@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from workflow.models import AuditLogEntry, Plan, PlanState, ReviewSubState
+from workflow.models import AuditLogEntry, Plan, PlanState, Review, ReviewSubState
 
 
 class TestPlanState:
@@ -44,38 +44,91 @@ class TestPlan:
         assert plan.sequence_number_str == "012.1"
         assert plan.name == "012.1_frobnicator_backend"
 
-    def test_review_with_sub_state(self) -> None:
-        plan = Plan(
-            sequence_number=[5],
-            slug="review_pr",
-            state=PlanState.REVIEW,
-            review_sub_state=ReviewSubState.PR,
-            path=Path("/tmp/r.md"),
-        )
-        assert plan.state == PlanState.REVIEW
-        assert plan.review_sub_state == ReviewSubState.PR
-
-    def test_review_sub_state_defaults_to_none(self) -> None:
-        plan = Plan(sequence_number=[1], slug="idea", state=PlanState.INTENT, path=Path("/tmp/i.md"))
-        assert plan.review_sub_state is None
-
     def test_empty_sequence_number_rejected(self) -> None:
         with pytest.raises(ValidationError, match="List should have at least 1 item"):
             Plan(sequence_number=[], slug="idea", state=PlanState.INTENT, path=Path("/tmp/i.md"))
 
-    def test_review_state_requires_sub_state(self) -> None:
-        with pytest.raises(ValidationError, match="review_sub_state must be set"):
+    def test_plan_rejects_review_state(self) -> None:
+        with pytest.raises(ValidationError, match="Use Review, not Plan"):
             Plan(sequence_number=[5], slug="r", state=PlanState.REVIEW, path=Path("/tmp/r.md"))
 
-    def test_non_review_state_rejects_sub_state(self) -> None:
-        with pytest.raises(ValidationError, match="review_sub_state must be None"):
-            Plan(
-                sequence_number=[5],
-                slug="r",
-                state=PlanState.INTENT,
-                review_sub_state=ReviewSubState.PR,
+
+class TestReview:
+    _ts = datetime(2026, 3, 18, 14, 30, tzinfo=UTC)
+
+    def _pr(self, **kwargs: object) -> Review:
+        return Review(
+            sequence_number=[2],
+            slug="pydantic_models",
+            path=Path("/tmp/r.md"),
+            review_sub_state=ReviewSubState.PR,
+            review_commit="0e6baa9",
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    def _critique(self, **kwargs: object) -> Review:
+        return Review(
+            sequence_number=[2],
+            slug="pydantic_models",
+            path=Path("/tmp/r.md"),
+            review_sub_state=ReviewSubState.CRITIQUE,
+            review_timestamp=self._ts,
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    def test_pr_review_valid(self) -> None:
+        r = self._pr()
+        assert r.state == PlanState.REVIEW
+        assert r.review_sub_state == ReviewSubState.PR
+        assert r.review_commit == "0e6baa9"
+        assert r.review_timestamp is None
+
+    def test_critique_review_valid(self) -> None:
+        r = self._critique()
+        assert r.review_sub_state == ReviewSubState.CRITIQUE
+        assert r.review_timestamp == self._ts
+        assert r.review_commit is None
+
+    def test_pr_review_name(self) -> None:
+        assert self._pr().name == "002_pydantic_models_0e6baa9"
+
+    def test_critique_review_name(self) -> None:
+        assert self._critique().name == "002_pydantic_models_2026-03-18T14:30:00Z"
+
+    def test_pr_review_requires_commit(self) -> None:
+        with pytest.raises(ValidationError, match="PR review requires review_commit"):
+            Review(
+                sequence_number=[2],
+                slug="pydantic_models",
                 path=Path("/tmp/r.md"),
+                review_sub_state=ReviewSubState.PR,
             )
+
+    def test_critique_review_requires_timestamp(self) -> None:
+        with pytest.raises(ValidationError, match="CRITIQUE review requires review_timestamp"):
+            Review(
+                sequence_number=[2],
+                slug="pydantic_models",
+                path=Path("/tmp/r.md"),
+                review_sub_state=ReviewSubState.CRITIQUE,
+            )
+
+    def test_review_rejects_non_review_state(self) -> None:
+        with pytest.raises(ValidationError, match=r"Review\.state must be REVIEW"):
+            Review(
+                sequence_number=[2],
+                slug="pydantic_models",
+                path=Path("/tmp/r.md"),
+                state=PlanState.CHECKING,
+                review_sub_state=ReviewSubState.PR,
+                review_commit="0e6baa9",
+            )
+
+    def test_review_is_subclass_of_plan(self) -> None:
+        assert isinstance(self._pr(), Plan)
+
+    def test_review_state_defaults_to_review(self) -> None:
+        assert self._pr().state == PlanState.REVIEW
 
 
 class TestAuditLogEntry:

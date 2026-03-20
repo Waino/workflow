@@ -41,24 +41,17 @@ class Plan(BaseModel):
 
     state: PlanState
 
-    review_sub_state: ReviewSubState | None = None
-    """Set when state is REVIEW to distinguish critique, pr, and full."""
-
     path: Path
     """Absolute path to the .md file."""
 
     @model_validator(mode="after")
-    def validate_review_sub_state(self) -> Plan:
-        """Enforce consistency between state and review_sub_state.
+    def state_must_not_be_review(self) -> Plan:
+        """Prevent plain Plan from being created with state=REVIEW.
 
-        - state == REVIEW requires review_sub_state to be set.
-        - state != REVIEW requires review_sub_state to be None.
+        Review documents must use the Review subclass instead.
         """
-        if self.state == PlanState.REVIEW and self.review_sub_state is None:
-            msg = "review_sub_state must be set when state is REVIEW"
-            raise ValueError(msg)
-        if self.state != PlanState.REVIEW and self.review_sub_state is not None:
-            msg = "review_sub_state must be None when state is not REVIEW"
+        if self.state == PlanState.REVIEW:
+            msg = "Use Review, not Plan, for review documents"
             raise ValueError(msg)
         return self
 
@@ -73,6 +66,49 @@ class Plan(BaseModel):
     def name(self) -> str:
         """Full name, e.g. '002_pydantic_models'."""
         return f"{self.sequence_number_str}_{self.slug}"
+
+
+class Review(Plan):
+    """A review document under docs/plans/reviews/{sub_state}/."""
+
+    state: PlanState = PlanState.REVIEW
+    review_sub_state: ReviewSubState
+    """The kind of review: critique, pr, or full."""
+
+    review_timestamp: datetime | None = None
+    """Set for CRITIQUE reviews: the timestamp suffix in the filename."""
+
+    review_commit: str | None = None
+    """Set for PR reviews: the abbreviated commit hash suffix in the filename."""
+
+    @model_validator(mode="after")
+    def state_must_not_be_review(self) -> Review:  # type: ignore[override]
+        """No-op: overrides Plan's validator so state=REVIEW is accepted here."""
+        return self
+
+    @model_validator(mode="after")
+    def validate_review_fields(self) -> Review:
+        """Enforce that state is REVIEW and that the right timestamp/commit is present."""
+        if self.state != PlanState.REVIEW:
+            msg = "Review.state must be REVIEW"
+            raise ValueError(msg)
+        if self.review_sub_state == ReviewSubState.CRITIQUE and self.review_timestamp is None:
+            msg = "CRITIQUE review requires review_timestamp"
+            raise ValueError(msg)
+        if self.review_sub_state == ReviewSubState.PR and self.review_commit is None:
+            msg = "PR review requires review_commit"
+            raise ValueError(msg)
+        return self
+
+    @property
+    def name(self) -> str:
+        """Review document name, e.g. '002_pydantic_models_0e6baa9' or '002_plan_2026-03-18T14:30:00Z'."""
+        base = f"{self.sequence_number_str}_{self.slug}"
+        if self.review_sub_state == ReviewSubState.PR:
+            return f"{base}_{self.review_commit}"
+        if self.review_sub_state == ReviewSubState.CRITIQUE and self.review_timestamp is not None:
+            return f"{base}_{self.review_timestamp.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        return base
 
 
 class AuditLogEntry(BaseModel):
