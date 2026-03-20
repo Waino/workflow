@@ -20,11 +20,12 @@ From most specific to least specific:
 1. `/absolute/path/to/docs/plans/planning/002_pydantic_models.md`
 2. `planner/docs/plans/planning/002_pydantic_models.md` (relative with agent prefix)
 3. `docs/plans/planning/002_pydantic_models.md` (relative without agent)
-4. `planning/002_pydantic_models.md` (state + name)
-5. `002_pydantic_models.md` (name only, with .md)
-6. `002_pydantic_models` (name only)
-7. `intent/012` (state + sequence number)
-8. `012` (sequence number only)
+4. `planning/002_pydantic_models.md` (state + name, with .md)
+5. `planning/002_pydantic_models` (state + name)
+6. `002_pydantic_models.md` (name only, with .md)
+7. `002_pydantic_models` (name only)
+8. `intent/012` (state + sequence number)
+9. `012` (sequence number only)
 
 ## Resolution algorithm
 
@@ -58,7 +59,7 @@ def resolve_plan(
 
 1. **Normalize**: strip `.md` suffix if present, normalize path separators.
 2. **Extract components**: determine which parts are present (agent, state, sequence number, slug).
-3. **Search**: scan `docs/plans/` subdirectories in the relevant repo(s).
+3. **Search**: scan `docs/plans/` subdirectories in the relevant repo(s). Use pathlib's glob.
    When `agent` is specified, search only that repo. Otherwise search `master/`.
 4. **Filter**: if `expected_states` is provided, filter matches to those states.
 5. **Collision check**: if multiple non-intent plans match the same sequence number, raise `PlanCollisionError`.
