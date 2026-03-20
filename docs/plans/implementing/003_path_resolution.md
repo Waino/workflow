@@ -9,37 +9,91 @@ to canonical plan file paths. This is a core utility used by nearly every comman
 
 ## Scope
 
-- Extend the `Plan` model (plan 002) with optional `review_timestamp` and `review_commit` fields
-  to correctly represent review documents alongside regular plans
+- Add a `Review` subclass of `Plan` carrying all review-specific fields as required fields;
+  remove `review_sub_state` from `Plan` (it belongs only on `Review`)
 - Parse various shorthand forms into a canonical `Plan` object
 - Collision validation: loud error if two non-intent plans share a sequence number,
   checked whenever a scan is performed (no dedicated separate pass)
 - Resolution context: when a command constrains the expected state, use that to disambiguate
 - Cross-repo disambiguation: most-progressed state wins; ambiguity within a single repo is an error
 
-## Extension to the Plan model
+## Changes to the models
+
+### Plan
 
 Plan 002 defines `Plan` with `sequence_number`, `slug`, `state`, `review_sub_state`, and `path`.
-Add two optional fields to correctly represent review documents:
+Remove `review_sub_state` from `Plan` (it moves to `Review`) and add a validator that prevents
+`state == REVIEW` on a plain `Plan`:
 
 ```python
 class Plan(BaseModel):
-    ...
-    review_timestamp: datetime | None = None
-    """Set for critique and full reviews, parsed from the ISO 8601 timestamp in the filename."""
+    sequence_number: list[int] = Field(min_length=1)
+    slug: str
+    state: PlanState
+    path: Path
 
-    review_commit: str | None = None
-    """Set for PR reviews: the abbreviated commit hash suffix in the filename."""
+    @model_validator(mode="after")
+    def state_must_not_be_review(self) -> Plan:
+        if self.state == PlanState.REVIEW:
+            msg = "Use Review, not Plan, for review documents"
+            raise ValueError(msg)
+        return self
+
+    @property
+    def sequence_number_str(self) -> str: ...
+
+    @property
+    def name(self) -> str:
+        return f"{self.sequence_number_str}_{self.slug}"
 ```
 
-Consistency rules (enforced by an extended `validate_review_sub_state` validator):
-- `CRITIQUE` review: `review_sub_state=CRITIQUE`, `review_timestamp` set, `review_commit` None
-- `PR` review: `review_sub_state=PR`, `review_commit` set, `review_timestamp` None
-- `FULL` review: `review_sub_state=FULL`, `review_timestamp` set, `review_commit` None.
-  Full reviews have no associated plan, so `sequence_number` and `slug` are not meaningful —
-  use `sequence_number=[0]` and `slug=""` as sentinels, or skip them in `find_all_plans` entirely.
-  **Recommended**: skip full review files in `find_all_plans`; they are write-only output documents
-  that are never resolved by fuzzy path (no CLI command takes a full review as input).
+### Review
+
+Add `Review` as a subclass of `Plan`. All review-specific fields live here as required fields,
+so no optional fields pollute the base class. The `name` property is overridden to produce the
+review document naming convention.
+
+`Review` overrides `state_must_not_be_review` with a no-op to prevent the inherited validator
+from firing on the fixed `state = PlanState.REVIEW`.
+
+```python
+class Review(Plan):
+    """A review document under docs/plans/reviews/{sub_state}/."""
+
+    state: PlanState = PlanState.REVIEW
+    review_sub_state: ReviewSubState
+    review_timestamp: datetime | None = None  # set for CRITIQUE
+    review_commit: str | None = None          # set for PR
+
+    @model_validator(mode="after")
+    def state_must_not_be_review(self) -> Review:  # no-op: overrides Plan's validator
+        return self
+
+    @model_validator(mode="after")
+    def validate_review_fields(self) -> Review:
+        if self.review_sub_state == ReviewSubState.CRITIQUE and self.review_timestamp is None:
+            msg = "CRITIQUE review requires review_timestamp"
+            raise ValueError(msg)
+        if self.review_sub_state == ReviewSubState.PR and self.review_commit is None:
+            msg = "PR review requires review_commit"
+            raise ValueError(msg)
+        return self
+
+    @property
+    def name(self) -> str:
+        base = f"{self.sequence_number_str}_{self.slug}"
+        if self.review_sub_state == ReviewSubState.PR:
+            return f"{base}_{self.review_commit}"
+        if self.review_sub_state == ReviewSubState.CRITIQUE and self.review_timestamp is not None:
+            return f"{base}_{self.review_timestamp.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        return base
+```
+
+`find_all_plans_in_repo` returns `list[Plan]`; `Review` instances appear in that list via
+polymorphism. Callers that need to distinguish narrow with `isinstance(plan, Review)`.
+
+Full review files (`docs/plans/reviews/full/`) are skipped by `find_all_plans_in_repo` — they
+are write-only output documents that no CLI command resolves by fuzzy path.
 
 ## Supported input forms
 
@@ -189,7 +243,7 @@ def parse_review_filename(
 - `workflow/plan_resolver.py` — `resolve_plan`, `find_all_plans`, `find_all_plans_in_repo`,
   `parse_plan_filename`, `parse_review_filename`
 - `workflow/exceptions.py` — `PlanNotFoundError`, `AmbiguousPlanError`, `PlanCollisionError`
-- `workflow/models.py` — extend `Plan` with `review_timestamp` and `review_commit` fields
+- `workflow/models.py` — remove `review_sub_state` from `Plan`; add `Review` subclass
 
 ## Dependencies
 
