@@ -70,10 +70,12 @@ class WorkflowConfig(BaseModel):
 
     project_dir and project_name are not in the YAML config file.
     They are discovered at runtime and populated by load_config.
+    Both are None when no .workflow_root marker was found (i.e. outside a project directory).
+    Only the 'init' and 'cheat' commands are supported in that case.
     """
 
-    project_dir: Path
-    project_name: str
+    project_dir: Path | None = None
+    project_name: str | None = None
     agents: list[AgentConfig]
     states: dict[PlanState, StateConfig]
 
@@ -83,6 +85,16 @@ class WorkflowConfig(BaseModel):
 
         No-op until the registry (plan 004) is implemented.
         """
+        return self
+
+    @model_validator(mode="after")
+    def validate_agent_names_unique(self) -> WorkflowConfig:
+        """Check that agent names are unique."""
+        names = [a.name for a in self.agents]
+        if len(names) != len(set(names)):
+            duplicates = {n for n in names if names.count(n) > 1}
+            msg = f"Duplicate agent names: {sorted(duplicates)}"
+            raise ValueError(msg)
         return self
 
     @model_validator(mode="after")
@@ -127,6 +139,11 @@ def load_config(config_path: Path | None = None, project_dir: Path | None = None
 
     project_dir is discovered via find_project_root() unless explicitly provided.
     project_name is derived from project_dir.
+
+    If no project root is found and no project_dir is given, project_dir and
+    project_name are set to None in the returned config. Commands that require
+    a project directory must check for this and fail fast with a clear error.
+    Only 'init' and 'cheat' are supported without a project root.
     """
     if project_dir is None:
         project_dir = find_project_root()
@@ -135,11 +152,14 @@ def load_config(config_path: Path | None = None, project_dir: Path | None = None
 
     yaml_path = _resolve_config_path(config_path, project_dir)
     with yaml_path.open() as f:
-        raw = yaml.safe_load(f)
+        try:
+            raw = yaml.safe_load(f)
+        except yaml.YAMLError as exc:
+            msg = f"Could not parse config file at {yaml_path}: {exc}"
+            raise ValueError(msg) from exc
 
-    effective_project_dir = project_dir or Path.cwd().resolve()
-    raw["project_dir"] = str(effective_project_dir)
-    raw["project_name"] = effective_project_dir.name
+    raw["project_dir"] = str(project_dir) if project_dir is not None else None
+    raw["project_name"] = project_dir.name if project_dir is not None else None
 
     return WorkflowConfig(**raw)
 

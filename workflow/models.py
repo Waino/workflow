@@ -6,7 +6,7 @@ from datetime import datetime  # noqa: TC003 - used at runtime by Pydantic
 from enum import StrEnum
 from pathlib import Path  # noqa: TC003 - used at runtime by Pydantic
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class PlanState(StrEnum):
@@ -33,7 +33,7 @@ class ReviewSubState(StrEnum):
 class Plan(BaseModel):
     """A plan in the workflow state machine."""
 
-    sequence_number: list[int]
+    sequence_number: list[int] = Field(min_length=1)
     """Hierarchical sequence number, e.g. [2] or [12, 1]."""
 
     slug: str
@@ -46,6 +46,21 @@ class Plan(BaseModel):
 
     path: Path
     """Absolute path to the .md file."""
+
+    @model_validator(mode="after")
+    def validate_review_sub_state(self) -> Plan:
+        """Enforce consistency between state and review_sub_state.
+
+        - state == REVIEW requires review_sub_state to be set.
+        - state != REVIEW requires review_sub_state to be None.
+        """
+        if self.state == PlanState.REVIEW and self.review_sub_state is None:
+            msg = "review_sub_state must be set when state is REVIEW"
+            raise ValueError(msg)
+        if self.state != PlanState.REVIEW and self.review_sub_state is not None:
+            msg = "review_sub_state must be None when state is not REVIEW"
+            raise ValueError(msg)
+        return self
 
     @property
     def sequence_number_str(self) -> str:

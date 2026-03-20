@@ -76,6 +76,22 @@ class TestLoadConfig:
             assert isinstance(key, PlanState)
 
 
+class TestLoadConfigNoProjectRoot:
+    def test_project_dir_is_none_when_no_root_found(self, tmp_path: Path) -> None:
+        """When no .workflow_root marker exists, project_dir and project_name are None."""
+        config = {
+            "agents": [{"name": "planner", "model": "test"}],
+            "states": {"intent": {"agent": "planner", "commands": []}},
+        }
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump(config))
+        # No .workflow_root in tmp_path, and no find_project_root() from cwd either
+        # (the dev repo has no .workflow_root marker).
+        result = load_config(config_path=config_path)
+        assert result.project_dir is None
+        assert result.project_name is None
+
+
 class TestWorkflowConfigValidation:
     def test_rejects_unknown_agent_in_state(self, project_dir: Path) -> None:
         config_data = yaml.safe_load((project_dir / "config.yaml").read_text())
@@ -87,6 +103,25 @@ class TestWorkflowConfigValidation:
     def test_accepts_null_agent(self, project_dir: Path) -> None:
         config = load_config(project_dir=project_dir)
         assert config.states[PlanState.TODO].agent is None
+
+    def test_rejects_duplicate_agent_names(self, tmp_path: Path) -> None:
+        config = {
+            "agents": [
+                {"name": "planner", "model": "test"},
+                {"name": "planner", "model": "test2"},
+            ],
+            "states": {"intent": {"agent": "planner", "commands": []}},
+        }
+        (tmp_path / "config.yaml").write_text(yaml.dump(config))
+        with pytest.raises(Exception, match="Duplicate agent names"):
+            load_config(project_dir=tmp_path)
+
+
+class TestLoadConfigMalformedYAML:
+    def test_raises_value_error_on_bad_yaml(self, tmp_path: Path) -> None:
+        (tmp_path / "config.yaml").write_text(": bad: yaml: [unmatched")
+        with pytest.raises(ValueError, match="Could not parse config file"):
+            load_config(project_dir=tmp_path)
 
 
 class TestCommandModels:

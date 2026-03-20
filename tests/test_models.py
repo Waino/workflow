@@ -3,6 +3,9 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from workflow.models import AuditLogEntry, Plan, PlanState, ReviewSubState
 
 
@@ -55,6 +58,24 @@ class TestPlan:
     def test_review_sub_state_defaults_to_none(self) -> None:
         plan = Plan(sequence_number=[1], slug="idea", state=PlanState.INTENT, path=Path("/tmp/i.md"))
         assert plan.review_sub_state is None
+
+    def test_empty_sequence_number_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="List should have at least 1 item"):
+            Plan(sequence_number=[], slug="idea", state=PlanState.INTENT, path=Path("/tmp/i.md"))
+
+    def test_review_state_requires_sub_state(self) -> None:
+        with pytest.raises(ValidationError, match="review_sub_state must be set"):
+            Plan(sequence_number=[5], slug="r", state=PlanState.REVIEW, path=Path("/tmp/r.md"))
+
+    def test_non_review_state_rejects_sub_state(self) -> None:
+        with pytest.raises(ValidationError, match="review_sub_state must be None"):
+            Plan(
+                sequence_number=[5],
+                slug="r",
+                state=PlanState.INTENT,
+                review_sub_state=ReviewSubState.PR,
+                path=Path("/tmp/r.md"),
+            )
 
 
 class TestAuditLogEntry:
