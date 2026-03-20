@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from contextlib import suppress
 from datetime import UTC, datetime
-from pathlib import Path  # noqa: TC003 - used at runtime in path operations
+from pathlib import Path
+from typing import TYPE_CHECKING
 
-from workflow.exceptions import PlanCollisionError
+if TYPE_CHECKING:
+    from collections.abc import Collection
+
+from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError
 from workflow.models import Plan, PlanState, Review, ReviewSubState
 
 # ISO 8601 timestamp as used in critique review filenames: 2026-03-18T14:30:00Z
@@ -27,6 +32,10 @@ _STATE_PROGRESSION: tuple[PlanState, ...] = (
 )
 
 _REPOS = ("master", "planner", "builder", "reviewer")
+
+# Minimum path depths for absolute-path parsing
+_MIN_PLAN_PARTS = 5  # (repo, docs, plans, state, filename)
+_MIN_REVIEW_PARTS = 6  # (repo, docs, plans, reviews, sub_state, filename)
 
 
 def _state_rank(state: PlanState) -> int:
@@ -50,7 +59,8 @@ def parse_plan_filename(filename: str) -> tuple[list[int], str]:
 
 
 def parse_review_filename(
-    filename: str, sub_state: ReviewSubState,
+    filename: str,
+    sub_state: ReviewSubState,
 ) -> tuple[list[int], str, datetime | None, str | None]:
     """Parse a review filename into (sequence_number, slug, review_timestamp, review_commit).
 
@@ -166,3 +176,165 @@ def find_all_plans(project_dir: Path) -> list[Plan]:
                 merged[key] = plan
 
     return list(merged.values())
+
+
+def _resolve_absolute_review(fuzzy_path: str, path: Path, sub_state_str: str) -> Review:
+    """Parse a Review from a validated absolute path inside reviews/{sub_state}/."""
+    try:
+        sub_state = ReviewSubState(sub_state_str)
+    except ValueError:
+        raise PlanNotFoundError(fuzzy_path, []) from None
+    if sub_state == ReviewSubState.FULL:
+        raise PlanNotFoundError(fuzzy_path, [])
+    try:
+        seq, slug, ts, commit = parse_review_filename(path.stem, sub_state)
+    except ValueError:
+        raise PlanNotFoundError(fuzzy_path, []) from None
+    return Review(
+        sequence_number=seq,
+        slug=slug,
+        path=path,
+        review_sub_state=sub_state,
+        review_timestamp=ts,
+        review_commit=commit,
+    )
+
+
+def _parse_absolute_parts(fuzzy_path: str, path: Path, parts: tuple[str, ...]) -> Plan:
+    """Construct a Plan from the parts of a validated absolute path."""
+    if len(parts) < _MIN_PLAN_PARTS or parts[1] != "docs" or parts[2] != "plans":
+        raise PlanNotFoundError(fuzzy_path, [])
+    if parts[3] == "reviews":
+        if len(parts) < _MIN_REVIEW_PARTS:
+            raise PlanNotFoundError(fuzzy_path, [])
+        return _resolve_absolute_review(fuzzy_path, path, parts[4])
+    try:
+        state = PlanState(parts[3])
+    except ValueError:
+        raise PlanNotFoundError(fuzzy_path, []) from None
+    if state == PlanState.REVIEW:
+        raise PlanNotFoundError(fuzzy_path, [])
+    try:
+        seq, slug = parse_plan_filename(path.stem)
+    except ValueError:
+        raise PlanNotFoundError(fuzzy_path, []) from None
+    return Plan(sequence_number=seq, slug=slug, state=state, path=path)
+
+
+def _resolve_absolute(fuzzy_path: str, project_dir: Path) -> Plan:
+    """Resolve an absolute path to a Plan directly, without a directory scan."""
+    path = Path(fuzzy_path).resolve()
+    if not path.exists():
+        raise PlanNotFoundError(fuzzy_path, [])
+    try:
+        relative = path.relative_to(project_dir.resolve())
+    except ValueError:
+        raise PlanNotFoundError(fuzzy_path, []) from None
+    return _parse_absolute_parts(fuzzy_path, path, relative.parts)
+
+
+def _disambiguate(fuzzy_path: str, matches: list[Plan], repos_searched: list[str]) -> Plan:
+    """Return the single unambiguous match, or raise an appropriate error.
+
+    When the only ambiguity is intent vs. exactly one non-intent plan,
+    the non-intent plan is preferred (it is the canonical, progressed document).
+    """
+    if not matches:
+        raise PlanNotFoundError(fuzzy_path, repos_searched)
+    if len(matches) == 1:
+        return matches[0]
+    non_intent = [p for p in matches if p.state != PlanState.INTENT]
+    if len(non_intent) == 1:
+        return non_intent[0]
+    raise AmbiguousPlanError(fuzzy_path, matches)
+
+
+def _extract_components(
+    parts: list[str],
+) -> tuple[str | None, PlanState | None, list[int] | None, str | None]:
+    """Parse normalized path parts into (repo_hint, state_hint, seq_hint, slug_hint)."""
+    state_values = {s.value: s for s in PlanState}
+    repo_hint: str | None = None
+    state_hint: PlanState | None = None
+    seq_hint: list[int] | None = None
+    slug_hint: str | None = None
+
+    idx = 0
+    if idx < len(parts) and parts[idx] in _REPOS:
+        repo_hint = parts[idx]
+        idx += 1
+
+    if idx + 1 < len(parts) and parts[idx] == "docs" and parts[idx + 1] == "plans":
+        idx += 2
+
+    if idx < len(parts) and parts[idx] in state_values:
+        state_hint = state_values[parts[idx]]
+        idx += 1
+
+    if idx < len(parts):
+        name_part = parts[idx]
+        if "_" in name_part:
+            with suppress(ValueError):
+                seq_hint, slug_hint = parse_plan_filename(name_part)
+        else:
+            with suppress(ValueError):
+                seq_hint = [int(n) for n in name_part.split(".")]
+
+    return repo_hint, state_hint, seq_hint, slug_hint
+
+
+def resolve_plan(
+    fuzzy_path: str,
+    project_dir: Path,
+    expected_states: Collection[PlanState] | None = None,
+    repo: str | None = None,
+) -> Plan:
+    """Resolve a fuzzy path reference to a canonical Plan.
+
+    Args:
+        fuzzy_path: The human-provided path reference. Supported forms (most
+            to least specific): absolute path, repo/docs/plans/state/name,
+            docs/plans/state/name, state/name, name, state/seq, seq.
+        project_dir: Root of the project (contains master/, planner/, etc.).
+        expected_states: Constrain which states are valid; used to disambiguate
+            when multiple matches exist.
+        repo: Which repo to search. Defaults to 'master'. A repo prefix
+            embedded in fuzzy_path takes precedence over this parameter.
+
+    Returns:
+        A Plan object with the resolved canonical path.
+
+    Raises:
+        PlanNotFoundError: No matching plan found.
+        AmbiguousPlanError: Multiple matches and no clear winner.
+        PlanCollisionError: Two non-intent plans share the same sequence number.
+    """
+    # Step 1: Absolute path fast-path
+    if Path(fuzzy_path).is_absolute():
+        return _resolve_absolute(fuzzy_path, project_dir)
+
+    # Step 2: Normalize — strip .md, split on forward slash, drop empty parts
+    parts = [p for p in fuzzy_path.removesuffix(".md").replace("\\", "/").split("/") if p]
+
+    # Steps 3: Extract repo/state/seq/slug hints from the path components
+    repo_hint, state_hint, seq_hint, slug_hint = _extract_components(parts)
+
+    # Step 4: Search one repo
+    target_repo = repo_hint or repo or "master"
+    plans = find_all_plans_in_repo(project_dir, target_repo)
+
+    # Step 5: Filter by extracted components
+    matches: list[Plan] = plans
+    if seq_hint is not None:
+        matches = [p for p in matches if p.sequence_number == seq_hint]
+    if slug_hint is not None:
+        matches = [p for p in matches if p.slug == slug_hint]
+    if state_hint is not None:
+        matches = [p for p in matches if p.state == state_hint]
+
+    # Step 6: Filter by expected_states
+    if expected_states:
+        matches = [p for p in matches if p.state in expected_states]
+
+    # Step 7: Disambiguate
+    return _disambiguate(fuzzy_path, matches, [target_repo])
