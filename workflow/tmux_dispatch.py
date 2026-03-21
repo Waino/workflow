@@ -17,6 +17,7 @@ from pathlib import Path
 import click
 import libtmux
 from jinja2 import Environment, StrictUndefined, UndefinedError
+from pydantic import BaseModel
 
 from workflow.audit import write_audit_log
 from workflow.config import PromptCommand, WorkflowConfig
@@ -30,6 +31,14 @@ from workflow.git_helpers import git_pull
 from workflow.models import AuditLogEntry, PlanState
 from workflow.plan_resolver import resolve_plan
 from workflow.shell import console
+
+
+class _PromptContext(BaseModel):
+    """Resolved context shared between the setup helpers and _dispatch_prompt."""
+
+    agent_name: str
+    prompt: str
+    audit_input_plan: str | None = None
 
 
 def _find_prompt_command(
@@ -81,10 +90,10 @@ def _setup_has_plan(
     config: WorkflowConfig,
     cmd_name: str,
     plan_path_str: str,
-) -> tuple[str, str, str | None] | None:
+) -> _PromptContext | None:
     """Resolve plan and render prompt for commands that take a plan argument.
 
-    Returns ``(agent_name, rendered_prompt, plan_name)`` on success,
+    Returns a :class:`_PromptContext` on success,
     or ``None`` after printing an error message.
     """
     assert config.project_dir is not None  # caller guarantees this
@@ -106,16 +115,16 @@ def _setup_has_plan(
     except WorkflowError as exc:
         console.print(f"[red]{exc}[/red]")
         return None
-    return agent_name, rendered, plan.name
+    return _PromptContext(agent_name=agent_name, prompt=rendered, audit_input_plan=plan.name)
 
 
 def _setup_stateless(
     config: WorkflowConfig,
     cmd_name: str,
-) -> tuple[str, str, None] | None:
+) -> _PromptContext | None:
     """Resolve agent and render prompt for state-less commands (no plan argument).
 
-    Returns ``(agent_name, rendered_prompt, None)`` on success,
+    Returns a :class:`_PromptContext` on success,
     or ``None`` after printing an error message.
     """
     cmd_obj = _find_prompt_command(config, cmd_name, PlanState.REVIEW)
@@ -132,7 +141,7 @@ def _setup_stateless(
     except WorkflowError as exc:
         console.print(f"[red]{exc}[/red]")
         return None
-    return agent_name, rendered, None
+    return _PromptContext(agent_name=agent_name, prompt=rendered)
 
 
 def _dispatch_prompt(
@@ -160,7 +169,9 @@ def _dispatch_prompt(
     if result is None:
         return 1
 
-    agent_name, prompt, audit_input_plan = result
+    agent_name = result.agent_name
+    prompt = result.prompt
+    audit_input_plan = result.audit_input_plan
 
     git_pull(config.project_dir / agent_name, dry_run=dry_run)
 
