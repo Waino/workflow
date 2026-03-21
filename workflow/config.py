@@ -92,10 +92,21 @@ class WorkflowConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_script_references(self) -> WorkflowConfig:
-        """Fail fast if config references a non-existent script name.
+        """Fail fast if config references a script name not in the registry.
 
-        No-op until the registry (plan 004.1) is implemented.
+        Uses a lazy import to avoid a circular dependency between config.py and
+        registry.py (registry.py imports ScriptCommand from config.py).
+
+        All script command modules must be imported before load_config is called
+        so that the registry is fully populated when this validator runs.
         """
+        from workflow.registry import _SCRIPT_REGISTRY, ConfigError  # noqa: PLC0415
+
+        for state_config in self.states.values():
+            for cmd in state_config.commands:
+                if isinstance(cmd, ScriptCommand) and cmd.script not in _SCRIPT_REGISTRY:
+                    msg = f"Config references unknown script: {cmd.script!r}"
+                    raise ConfigError(msg)
         return self
 
     @model_validator(mode="after")

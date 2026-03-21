@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+import workflow.commands.info
+import workflow.commands.workflow  # noqa: F401  — populates script registry
 from workflow.config import (
     WORKFLOW_ROOT_MARKER,
     TmuxConfig,
