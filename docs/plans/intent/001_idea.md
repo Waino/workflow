@@ -64,8 +64,10 @@ then save and close; the modified text is sent to the reviewer.
 
 ## Terminology
 
-- **actor**: A participant that takes actions in the workflow and writes audit log entries.
-  Can be `"planner"`, `"builder"`, `"reviewer"`, or `"human"`. Includes the human operator; not tied to any repo.
+- **actor**: The participant on whose behalf a workflow action is recorded.
+  Can be `"planner"`, `"builder"`, `"reviewer"`, or `"human"`.
+  For script commands the actor is `"human"`; for prompt dispatch the actor is the agent the prompt was sent to.
+  The CLI always writes the log; no agent writes log entries directly.
 - **agent**: One of the three AI agents (planner, builder, reviewer) running in a sandbox.
   Does not include the human operator.
 - **repo**: A git clone of the project used by a participant.
@@ -424,7 +426,7 @@ Commit your changes. Do not modify the code.
 ### New: Create a new intent
 
 - script: workflow new {slug}
-- Finds the first free sequence number (checking all states and the planner's audit log for plans on branches).
+- Finds the first free sequence number (checking all states and the audit log for plans on branches).
 - Opens `docs/plans/intent/{num}_{slug}.md` using `${EDITOR}`.
 
 ### Status
@@ -433,13 +435,13 @@ Commit your changes. Do not modify the code.
 - Use the subdirectories that plans are in, together with the audit log, to show how far along plans are
 - Omit done and rejected plans from the listing
 - In addition to current state, show next step(s) for each plan
-- Print the lowest free number for plans (check existing plans across all states and planner's audit log)
+- Print the lowest free number for plans (check existing plans across all states and the audit log)
 
 ### Log
 
 - script: workflow log
-- Pretty-prints the JSONL audit logs in chronological order, merged across all agents, with rich formatting.
-- Filtering options: by agent, by plan, by time range, by command.
+- Pretty-prints the single JSONL audit log in chronological order, with rich formatting.
+- Filtering options: by actor, by plan, by time range, by command.
 
 ### Generate CLAUDE.md
 
@@ -453,18 +455,17 @@ Commit your changes. Do not modify the code.
 
 ## Audit log
 
-Both the script and the agent write logs (in jsonl format) of the executed workflow steps.
-There is one log file per agent (e.g. /home/auggie/projects/foo/planner/workflow.log.jsonl),
-plus one in master (/home/auggie/projects/foo/master/workflow.log.jsonl).
-The logs should not be under version control.
+The CLI writes a single JSONL audit log for all workflow actions.
+Location: `{project_dir}/workflow.log.jsonl` (alongside `.workflow_root`).
+Not under version control.
 Each entry includes:
 - `timestamp`: ISO 8601 timestamp
-- `actor`: agent identity (e.g. "planner", "builder", "reviewer", "human")
+- `actor`: participant this action was performed for (e.g. "planner", "builder", "reviewer", "human")
 - `command`: the command executed (e.g. "critique", "subdivide", "todo")
 - `input_plan`: the input plan (if applicable)
 - `output_plans`: list of output plans (if applicable, e.g. for subdivide)
 Example row:
-`{"timestamp": "2026-03-18T14:30:00Z", "actor": "planner", "command": "subdivide", "input_plan": "001_idea", "output_plans": ["002_pydantic_models", "003_core_algorithm"]}`
+`{"timestamp": "2026-03-18T14-30-00Z", "actor": "planner", "command": "subdivide", "input_plan": "001_idea", "output_plans": ["002_pydantic_models", "003_core_algorithm"]}`
 
 
 ## Dry-run mode

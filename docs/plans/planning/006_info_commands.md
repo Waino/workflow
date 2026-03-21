@@ -27,7 +27,7 @@ def new(ctx: click.Context, slug: str) -> None:
 ### Finding the next free sequence number
 
 - Scan all `docs/plans/` subdirectories across all states for existing sequence numbers.
-- Also check the planner's audit log for `output_plans` entries (to account for plans on branches
+- Also check the audit log for `output_plans` entries (to account for plans on branches
   not yet merged to main).
 - Find the lowest unused integer ≥ 2 (001 is reserved for the global idea).
 - Zero-pad to 3 digits.
@@ -74,7 +74,7 @@ def log(ctx: click.Context, agent: str | None, plan: str | None,
 
 - Use `rich.table.Table` or `rich.console.Console` for formatted output.
 - Columns: timestamp, actor, command, input plan, output plans.
-- Merge logs from all agents and master, sorted chronologically.
+- Read the single audit log file, sorted chronologically.
 - Apply filters before display.
 
 ## workflow cheat

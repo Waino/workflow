@@ -125,12 +125,15 @@ cannot be found, so the human can start the session with `workflow start` first.
 
 ## Audit logging
 
+A single log file is written by the CLI for all workflow actions.
+Location: `{project_dir}/workflow.log.jsonl` (alongside `.workflow_root`, never committed).
+
 ### Writing
 
 ```python
-def write_audit_log(log_dir: Path, entry: AuditLogEntry) -> None:
-    """Append an entry to the JSONL audit log."""
-    log_path = log_dir / "workflow.log.jsonl"
+def write_audit_log(project_dir: Path, entry: AuditLogEntry) -> None:
+    """Append an entry to the single JSONL audit log."""
+    log_path = project_dir / "workflow.log.jsonl"
     with open(log_path, "a") as f:
         f.write(entry.model_dump_json() + "\n")
 ```
@@ -138,11 +141,8 @@ def write_audit_log(log_dir: Path, entry: AuditLogEntry) -> None:
 ### Reading
 
 ```python
-def read_audit_log(log_path: Path) -> list[AuditLogEntry]:
-    """Read all entries from a JSONL audit log file."""
-
-def read_all_audit_logs(project_dir: Path, agents: list[str]) -> list[AuditLogEntry]:
-    """Read and merge audit logs from all agents and master, sorted by timestamp."""
+def read_audit_log(project_dir: Path) -> list[AuditLogEntry]:
+    """Read all entries from the audit log, sorted by timestamp."""
 ```
 
 ## File organization

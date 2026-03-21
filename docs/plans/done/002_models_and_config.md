@@ -111,9 +111,13 @@ class StateConfig(BaseModel):
 
 ```python
 class AuditLogEntry(BaseModel):
-    """A single entry in the JSONL audit log."""
+    """A single entry in the JSONL audit log.
+
+    The CLI always writes log entries; no agent writes log entries directly.
+    """
     timestamp: datetime
-    actor: str                    # agent identity: "planner", "builder", "reviewer", "human"
+    actor: str                    # participant this action was performed for:
+                                  # "human" for script commands, agent name for prompt dispatch
     command: str                  # the command executed
     input_plan: str | None = None
     output_plans: list[str] = []
