@@ -7,7 +7,10 @@ The log file lives at {project_dir}/workflow.log.jsonl and is never committed.
 from __future__ import annotations
 
 import json
-from pathlib import Path  # noqa: TC003 - used at runtime (path arithmetic)
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from pydantic import ValidationError
 from rich.console import Console
