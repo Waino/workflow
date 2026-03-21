@@ -62,6 +62,16 @@ class AgentConfig(BaseModel):
     model: str
 
 
+class TmuxConfig(BaseModel):
+    """Configuration for tmux integration (prompt dispatch via libtmux)."""
+
+    session_name: str = "workflow"
+    """Name of the tmux session created by `workflow start`."""
+
+    prompt_send_delay: float = 1.0
+    """Seconds to wait after window switch before send-keys."""
+
+
 # --- Top-level config ---
 
 
@@ -77,13 +87,14 @@ class WorkflowConfig(BaseModel):
     project_dir: Path | None = None
     project_name: str | None = None
     agents: list[AgentConfig]
+    tmux: TmuxConfig = Field(default_factory=TmuxConfig)
     states: dict[PlanState, StateConfig]
 
     @model_validator(mode="after")
     def validate_script_references(self) -> WorkflowConfig:
         """Fail fast if config references a non-existent script name.
 
-        No-op until the registry (plan 004) is implemented.
+        No-op until the registry (plan 004.1) is implemented.
         """
         return self
 

@@ -7,6 +7,7 @@ import yaml
 
 from workflow.config import (
     WORKFLOW_ROOT_MARKER,
+    TmuxConfig,
     find_project_root,
     load_config,
 )
@@ -154,6 +155,31 @@ class TestCommandModels:
         assert commands[1].command_type == "script"
         assert commands[1].script == "todo"
         assert commands[2].command_type == "manual"
+
+
+class TestTmuxConfig:
+    def test_defaults(self) -> None:
+        cfg = TmuxConfig()
+        assert cfg.session_name == "workflow"
+        assert cfg.prompt_send_delay == 1.0
+
+    def test_loaded_from_yaml(self, tmp_path: Path) -> None:
+        (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+        config = {
+            "agents": [{"name": "planner", "model": "test"}],
+            "tmux": {"session_name": "myproject", "prompt_send_delay": 0.5},
+            "states": {"intent": {"agent": "planner", "commands": []}},
+        }
+        (tmp_path / "config.yaml").write_text(yaml.dump(config))
+        loaded = load_config(project_dir=tmp_path)
+        assert loaded.tmux.session_name == "myproject"
+        assert loaded.tmux.prompt_send_delay == 0.5
+
+    def test_tmux_defaults_when_omitted(self, project_dir: Path) -> None:
+        """When no tmux section is in YAML, defaults are used."""
+        loaded = load_config(project_dir=project_dir)
+        assert loaded.tmux.session_name == "workflow"
+        assert loaded.tmux.prompt_send_delay == 1.0
 
 
 class TestDefaultConfig:
