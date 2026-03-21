@@ -17,14 +17,14 @@ states:
       - command_type: prompt
         name: ask
         prompt: |
-          Read the plan at {path_to_plan}.
+          Read the plan at {{ path_to_plan }}.
           Ask any questions until you have a clear understanding.
       - command_type: manual
         name: answer
       - command_type: prompt
         name: critique
         prompt: |
-          Read the plan at {path_to_plan}.
+          Read the plan at {{ path_to_plan }}.
           Critique the idea.
           Please be honest, even harsh if necessary.
           Point out any flaws or weak points in the design.
@@ -35,7 +35,7 @@ states:
       - command_type: prompt
         name: subdivide
         prompt: |
-          Read the plan at {path_to_plan}.
+          Read the plan at {{ path_to_plan }}.
           Break it down into several detailed implementation plans.
           Write each plan into docs/plans/planning/.
         transition: planning
@@ -46,14 +46,14 @@ states:
       - command_type: prompt
         name: ask
         prompt: |
-          Read the plan at {path_to_plan}.
+          Read the plan at {{ path_to_plan }}.
           Ask any questions until you have a clear understanding.
       - command_type: manual
         name: answer
       - command_type: prompt
         name: plan
         prompt: |
-          Read the intent at {path_to_plan}.
+          Read the intent at {{ path_to_plan }}.
           Write a detailed implementation plan into docs/plans/planning/.
         transition: planning
       - command_type: manual
@@ -61,7 +61,7 @@ states:
       - command_type: prompt
         name: critique
         prompt: |
-          Read the plan at {path_to_plan}.
+          Read the plan at {{ path_to_plan }}.
           Critique the plan.
           Please be honest, even harsh if necessary.
           Point out any flaws or weak points in the design.
@@ -94,14 +94,14 @@ states:
       - command_type: prompt
         name: ask
         prompt: |
-          Read the plan at {path_to_plan}.
+          Read the plan at {{ path_to_plan }}.
           Ask any questions until you have a clear understanding.
       - command_type: manual
         name: answer
       - command_type: prompt
         name: build
         prompt: |
-          Read the plan at {path_to_plan}.
+          Read the plan at {{ path_to_plan }}.
           Implement the plan. When done, transition the plan state to checking.
         transition: checking
       - command_type: script
@@ -116,11 +116,11 @@ states:
       - command_type: prompt
         name: pr
         prompt: |
-          Perform a thorough code review of the changes on the feat/{plan_name} branch.
-          (The plan is at {path_to_plan}; derive the branch name from the plan name.)
+          Perform a thorough code review of the changes on the feat/{{ plan_name }} branch.
+          (The plan is at {{ path_to_plan }}; derive the branch name from the plan name.)
           Focus on software architecture, logic errors, missing or partially implemented requirements,
           fit with existing architecture and conventions, unit test quality and coverage, and security.
-          Write a report into docs/plans/reviews/pr/{plan_name}_{commit}.md.
+          Write a report into docs/plans/reviews/pr/{{ plan_name }}_{{ commit }}.md.
           Commit your changes. Do not modify the code.
       - command_type: manual
         name: adjust

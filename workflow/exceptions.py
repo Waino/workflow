@@ -1,4 +1,4 @@
-"""Custom exceptions for the workflow plan resolver."""
+"""Custom exceptions for the workflow tool."""
 
 from __future__ import annotations
 
@@ -6,6 +6,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from workflow.models import Plan
+
+
+class WorkflowError(Exception):
+    """Raised for workflow operation errors (e.g. tmux session not found)."""
 
 
 class PlanNotFoundError(Exception):

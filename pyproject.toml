@@ -22,6 +22,8 @@ classifiers = [ "Development Status :: 4 - Beta",
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.3.1",
+    "jinja2>=3.1.6",
+    "libtmux>=0.55.0",
     "pydantic>=2.12.5",
     "pyyaml>=6.0.3",
     "rich>=14.3.3",
