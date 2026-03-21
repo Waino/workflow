@@ -104,15 +104,18 @@ def _setup_has_plan(
         return None
     cmd_obj = _find_prompt_command(config, cmd_name, plan.state)
     if cmd_obj is None:
+        console.print(f"Plan resolved to: {plan.path}")
         console.print(f"[red]No '{cmd_name}' command available in state '{plan.state.value}'.[/red]")
         return None
     agent_name = config.states[plan.state].agent
     if agent_name is None:
+        console.print(f"Plan resolved to: {plan.path}")
         console.print(f"[red]No agent configured for state '{plan.state.value}'.[/red]")
         return None
     try:
         rendered = _render_prompt(cmd_obj.prompt, path_to_plan=str(plan.path))
     except WorkflowError as exc:
+        console.print(f"Plan resolved to: {plan.path}")
         console.print(f"[red]{exc}[/red]")
         return None
     return _PromptContext(agent_name=agent_name, prompt=rendered, audit_input_plan=plan.name)
