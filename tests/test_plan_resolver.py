@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path  # noqa: TC003 - used at runtime in helper functions
+from pathlib import Path
 
 import pytest
 
@@ -206,10 +206,10 @@ class TestFindAllPlansInRepo:
         plans = find_all_plans_in_repo(tmp_path, "master")
         assert isinstance(plans[0], Plan)
 
-    def test_path_is_absolute(self, tmp_path: Path) -> None:
+    def test_path_is_relative_to_project_dir(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "master", PlanState.INTENT, "001_idea.md")
         plans = find_all_plans_in_repo(tmp_path, "master")
-        assert plans[0].path.is_absolute()
+        assert plans[0].path == Path("master/docs/plans/intent/001_idea.md")
 
 
 # ---------------------------------------------------------------------------
@@ -389,7 +389,7 @@ class TestResolvePlan:
         plan = resolve_plan(str(f), tmp_path)
         assert plan.slug == "pydantic_models"
         assert plan.state == PlanState.PLANNING
-        assert plan.path == f
+        assert plan.path == Path("master/docs/plans/planning/002_pydantic_models.md")
 
     def test_absolute_path_review(self, tmp_path: Path) -> None:
         f = _make_review(tmp_path, "master", ReviewSubState.PR, "002_plan_0e6baa9.md")

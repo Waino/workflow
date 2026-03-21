@@ -30,7 +30,12 @@ class TestReviewSubState:
 
 class TestPlan:
     def test_simple_sequence_number(self) -> None:
-        plan = Plan(sequence_number=[2], slug="pydantic_models", state=PlanState.PLANNING, path=Path("/tmp/test.md"))
+        plan = Plan(
+            sequence_number=[2],
+            slug="pydantic_models",
+            state=PlanState.PLANNING,
+            path=Path("master/docs/plans/planning/002_pydantic_models.md"),
+        )
         assert plan.sequence_number_str == "002"
         assert plan.name == "002_pydantic_models"
 
@@ -39,18 +44,37 @@ class TestPlan:
             sequence_number=[12, 1],
             slug="frobnicator_backend",
             state=PlanState.PLANNING,
-            path=Path("/tmp/t.md"),
+            path=Path("planner/docs/plans/planning/012.1_frobnicator_backend.md"),
         )
         assert plan.sequence_number_str == "012.1"
         assert plan.name == "012.1_frobnicator_backend"
 
+    def test_absolute_path_resolves_against_project_dir(self) -> None:
+        plan = Plan(
+            sequence_number=[2],
+            slug="foo",
+            state=PlanState.PLANNING,
+            path=Path("planner/docs/plans/planning/002_foo.md"),
+        )
+        assert plan.absolute_path(Path("/tmp/project")) == Path("/tmp/project/planner/docs/plans/planning/002_foo.md")
+
     def test_empty_sequence_number_rejected(self) -> None:
         with pytest.raises(ValidationError, match="List should have at least 1 item"):
-            Plan(sequence_number=[], slug="idea", state=PlanState.INTENT, path=Path("/tmp/i.md"))
+            Plan(
+                sequence_number=[],
+                slug="idea",
+                state=PlanState.INTENT,
+                path=Path("master/docs/plans/intent/001_idea.md"),
+            )
 
     def test_plan_rejects_review_state(self) -> None:
         with pytest.raises(ValidationError, match="Use Review, not Plan"):
-            Plan(sequence_number=[5], slug="r", state=PlanState.REVIEW, path=Path("/tmp/r.md"))
+            Plan(
+                sequence_number=[5],
+                slug="r",
+                state=PlanState.REVIEW,
+                path=Path("reviewer/docs/plans/reviews/pr/005_r.md"),
+            )
 
 
 class TestReview:
@@ -60,7 +84,7 @@ class TestReview:
         return Review(
             sequence_number=[2],
             slug="pydantic_models",
-            path=Path("/tmp/r.md"),
+            path=Path("reviewer/docs/plans/reviews/pr/002_pydantic_models_0e6baa9.md"),
             review_sub_state=ReviewSubState.PR,
             review_commit="0e6baa9",
             **kwargs,  # type: ignore[arg-type]
@@ -70,7 +94,7 @@ class TestReview:
         return Review(
             sequence_number=[2],
             slug="pydantic_models",
-            path=Path("/tmp/r.md"),
+            path=Path("reviewer/docs/plans/reviews/critique/002_pydantic_models_2026-03-18T14-30-00Z.md"),
             review_sub_state=ReviewSubState.CRITIQUE,
             review_timestamp=self._ts,
             **kwargs,  # type: ignore[arg-type]
@@ -100,7 +124,7 @@ class TestReview:
             Review(
                 sequence_number=[2],
                 slug="pydantic_models",
-                path=Path("/tmp/r.md"),
+                path=Path("reviewer/docs/plans/reviews/pr/002_pydantic_models.md"),
                 review_sub_state=ReviewSubState.PR,
             )
 
@@ -109,7 +133,7 @@ class TestReview:
             Review(
                 sequence_number=[2],
                 slug="pydantic_models",
-                path=Path("/tmp/r.md"),
+                path=Path("reviewer/docs/plans/reviews/critique/002_pydantic_models.md"),
                 review_sub_state=ReviewSubState.CRITIQUE,
             )
 
@@ -118,7 +142,7 @@ class TestReview:
             Review(
                 sequence_number=[2],
                 slug="pydantic_models",
-                path=Path("/tmp/r.md"),
+                path=Path("reviewer/docs/plans/reviews/pr/002_pydantic_models_0e6baa9.md"),
                 state=PlanState.CHECKING,
                 review_sub_state=ReviewSubState.PR,
                 review_commit="0e6baa9",
@@ -134,7 +158,7 @@ class TestReview:
         r = Review(
             sequence_number=[0],
             slug="",
-            path=Path("/tmp/r.md"),
+            path=Path("reviewer/docs/plans/reviews/full/2026-03-18T14-30-00Z_0e6baa9.md"),
             review_sub_state=ReviewSubState.FULL,
             review_timestamp=self._ts,
             review_commit="0e6baa9",
@@ -148,7 +172,7 @@ class TestReview:
         r = Review(
             sequence_number=[0],
             slug="",
-            path=Path("/tmp/r.md"),
+            path=Path("reviewer/docs/plans/reviews/full/2026-03-18T14-30-00Z_0e6baa9.md"),
             review_sub_state=ReviewSubState.FULL,
             review_timestamp=self._ts,
             review_commit="0e6baa9",
@@ -160,7 +184,7 @@ class TestReview:
             Review(
                 sequence_number=[0],
                 slug="",
-                path=Path("/tmp/r.md"),
+                path=Path("reviewer/docs/plans/reviews/full/2026-03-18T14-30-00Z_0e6baa9.md"),
                 review_sub_state=ReviewSubState.FULL,
                 review_commit="0e6baa9",
             )
@@ -170,7 +194,7 @@ class TestReview:
             Review(
                 sequence_number=[0],
                 slug="",
-                path=Path("/tmp/r.md"),
+                path=Path("reviewer/docs/plans/reviews/full/2026-03-18T14-30-00Z_0e6baa9.md"),
                 review_sub_state=ReviewSubState.FULL,
                 review_timestamp=self._ts,
             )

@@ -42,7 +42,7 @@ class Plan(BaseModel):
     state: PlanState
 
     path: Path
-    """Absolute path to the .md file."""
+    """Path to the .md file, relative to the project directory."""
 
     @model_validator(mode="after")
     def state_must_not_be_review(self) -> Plan:
@@ -66,6 +66,10 @@ class Plan(BaseModel):
     def name(self) -> str:
         """Full name, e.g. '002_pydantic_models'."""
         return f"{self.sequence_number_str}_{self.slug}"
+
+    def absolute_path(self, project_dir: Path) -> Path:
+        """Return the plan path resolved against *project_dir*."""
+        return (project_dir / self.path).resolve()
 
 
 class Review(Plan):

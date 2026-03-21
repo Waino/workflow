@@ -11,13 +11,13 @@ import os
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import click
 import libtmux
 from jinja2 import Environment, StrictUndefined, UndefinedError
-from pydantic import BaseModel
 
 from workflow.audit import write_audit_log
 from workflow.config import PromptCommand, WorkflowConfig
@@ -27,36 +27,74 @@ from workflow.exceptions import (
     PlanNotFoundError,
     WorkflowError,
 )
-from workflow.git_helpers import git_pull
-from workflow.models import AuditLogEntry, PlanState
+from workflow.git_helpers import git_commit_hash, git_current_branch, git_pull
+from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.plan_resolver import resolve_plan
 from workflow.shell import console
 
 
-class _PromptContext(BaseModel):
+def _command_cli_name(name: str) -> str:
+    """Convert a human-readable command name to the CLI form."""
+    return name.replace(" ", "-")
+
+
+def _repo_for_prompt_state(state: PlanState) -> str:
+    """Return the workflow repo that owns prompt dispatch for *state*."""
+    repo_by_state = {
+        PlanState.INTENT: "planner",
+        PlanState.PLANNING: "planner",
+        PlanState.IMPLEMENTING: "builder",
+        PlanState.CHECKING: "reviewer",
+        PlanState.REVIEW: "reviewer",
+    }
+    try:
+        return repo_by_state[state]
+    except KeyError as exc:
+        msg = f"Prompt dispatch is not supported for state '{state.value}'."
+        raise WorkflowError(msg) from exc
+
+
+@dataclass(frozen=True)
+class _PromptTarget:
+    """One concrete prompt command target in one workflow state."""
+
+    command: PromptCommand
+    state: PlanState
+    agent_name: str | None
+    repo_name: str
+    has_plan: bool
+
+
+@dataclass(frozen=True)
+class _PromptContext:
     """Resolved context shared between the setup helpers and _dispatch_prompt."""
 
     agent_name: str
+    repo_name: str
     prompt: str
     audit_input_plan: str | None = None
 
 
-def _find_prompt_command(
-    config: WorkflowConfig,
-    cmd_name: str,
-    state: PlanState,
-) -> PromptCommand | None:
-    """Return the PromptCommand named *cmd_name* in *state*, or ``None``."""
-    sc = config.states.get(state)
-    if sc is None:
-        return None
-    return next(
-        (cmd for cmd in sc.commands if isinstance(cmd, PromptCommand) and cmd.name == cmd_name),
-        None,
-    )
+def _collect_prompt_targets(config: WorkflowConfig) -> dict[str, list[_PromptTarget]]:
+    """Collect prompt commands from the config, grouped by human-readable name."""
+    targets: dict[str, list[_PromptTarget]] = {}
+    for state, state_config in config.states.items():
+        for cmd in state_config.commands:
+            if not isinstance(cmd, PromptCommand):
+                continue
+            targets.setdefault(cmd.name, []).append(
+                _PromptTarget(
+                    command=cmd,
+                    state=state,
+                    agent_name=state_config.agent,
+                    repo_name=_repo_for_prompt_state(state),
+                    has_plan=state != PlanState.REVIEW,
+                ),
+            )
+    return targets
 
 
-def _render_prompt(template_str: str, **variables: str) -> str:
+def _render_prompt(template_str: str, **variables: object) -> str:
     """Render a Jinja2 prompt template; raise :class:`WorkflowError` on missing variables."""
     env = Environment(undefined=StrictUndefined, autoescape=False)  # noqa: S701 — text prompts, not HTML
     try:
@@ -86,39 +124,91 @@ def _open_in_editor(content: str) -> str | None:
         tmp_path.unlink(missing_ok=True)
 
 
+def _resolve_plan_target(
+    config: WorkflowConfig,
+    cmd_name: str,
+    plan_path_str: str,
+) -> tuple[_PromptTarget, Plan]:
+    """Resolve the plan and prompt target for a plan-based prompt command."""
+    assert config.project_dir is not None
+    targets = [target for target in _collect_prompt_targets(config).get(cmd_name, []) if target.has_plan]
+    if not targets:
+        msg = f"No '{cmd_name}' command found."
+        raise WorkflowError(msg)
+    targets_by_repo: dict[str, dict[PlanState, _PromptTarget]] = {}
+    for target in targets:
+        targets_by_repo.setdefault(target.repo_name, {})[target.state] = target
+
+    resolved: list[tuple[_PromptTarget, Plan]] = []
+    repos_searched: list[str] = []
+    for repo_name, repo_targets in targets_by_repo.items():
+        repos_searched.append(repo_name)
+        try:
+            plan = resolve_plan(
+                plan_path_str,
+                config.project_dir,
+                expected_states=repo_targets.keys(),
+                repo=repo_name,
+            )
+        except PlanNotFoundError:
+            continue
+        resolved.append((repo_targets[plan.state], plan))
+
+    if not resolved:
+        raise PlanNotFoundError(plan_path_str, repos_searched)
+    if len(resolved) > 1:
+        raise AmbiguousPlanError(plan_path_str, [plan for _, plan in resolved])
+    return resolved[0]
+
+
+def _git_metadata(target: _PromptTarget, config: WorkflowConfig, *, dry_run: bool) -> tuple[str, str]:
+    """Return branch and commit metadata for the prompt target repo."""
+    if dry_run:
+        return "<dry-run-branch>", "<dry-run-commit>"
+
+    assert config.project_dir is not None
+    repo_path = config.project_dir / target.repo_name
+    try:
+        return git_current_branch(repo_path), git_commit_hash(repo_path)
+    except subprocess.CalledProcessError as exc:
+        msg = f"Git metadata lookup failed in {repo_path}: {exc}"
+        raise WorkflowError(msg) from exc
+
+
 def _setup_has_plan(
     config: WorkflowConfig,
     cmd_name: str,
     plan_path_str: str,
+    *,
+    dry_run: bool,
 ) -> _PromptContext | None:
     """Resolve plan and render prompt for commands that take a plan argument.
 
     Returns a :class:`_PromptContext` on success,
     or ``None`` after printing an error message.
     """
-    assert config.project_dir is not None  # caller guarantees this
     try:
-        plan = resolve_plan(plan_path_str, config.project_dir)
-    except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError) as exc:
+        target, plan = _resolve_plan_target(config, cmd_name, plan_path_str)
+    except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError, WorkflowError) as exc:
         console.print(f"[red]{exc}[/red]")
         return None
-    cmd_obj = _find_prompt_command(config, cmd_name, plan.state)
-    if cmd_obj is None:
-        console.print(f"Plan resolved to: {plan.path}")
-        console.print(f"[red]No '{cmd_name}' command available in state '{plan.state.value}'.[/red]")
-        return None
-    agent_name = config.states[plan.state].agent
-    if agent_name is None:
+    if target.agent_name is None:
         console.print(f"Plan resolved to: {plan.path}")
         console.print(f"[red]No agent configured for state '{plan.state.value}'.[/red]")
         return None
     try:
-        rendered = _render_prompt(cmd_obj.prompt, path_to_plan=str(plan.path))
+        branch, commit = _git_metadata(target, config, dry_run=dry_run)
+        rendered = _render_prompt(target.command.prompt, plan=plan, branch=branch, commit=commit)
     except WorkflowError as exc:
         console.print(f"Plan resolved to: {plan.path}")
         console.print(f"[red]{exc}[/red]")
         return None
-    return _PromptContext(agent_name=agent_name, prompt=rendered, audit_input_plan=plan.name)
+    return _PromptContext(
+        agent_name=target.agent_name,
+        repo_name=target.repo_name,
+        prompt=rendered,
+        audit_input_plan=plan.name,
+    )
 
 
 def _setup_stateless(
@@ -130,21 +220,20 @@ def _setup_stateless(
     Returns a :class:`_PromptContext` on success,
     or ``None`` after printing an error message.
     """
-    cmd_obj = _find_prompt_command(config, cmd_name, PlanState.REVIEW)
-    if cmd_obj is None:
+    targets = [target for target in _collect_prompt_targets(config).get(cmd_name, []) if not target.has_plan]
+    if not targets:
         console.print(f"[red]No '{cmd_name}' command found.[/red]")
         return None
-    review_cfg = config.states.get(PlanState.REVIEW)
-    agent_name = review_cfg.agent if review_cfg else None
-    if agent_name is None:
+    target = targets[0]
+    if target.agent_name is None:
         console.print("[red]No agent configured for review state.[/red]")
         return None
     try:
-        rendered = _render_prompt(cmd_obj.prompt)
+        rendered = _render_prompt(target.command.prompt)
     except WorkflowError as exc:
         console.print(f"[red]{exc}[/red]")
         return None
-    return _PromptContext(agent_name=agent_name, prompt=rendered)
+    return _PromptContext(agent_name=target.agent_name, repo_name=target.repo_name, prompt=rendered)
 
 
 def _dispatch_prompt(
@@ -165,7 +254,7 @@ def _dispatch_prompt(
 
     if has_plan:
         assert plan_path_str is not None  # Click enforces required=True when has_plan
-        result = _setup_has_plan(config, cmd_name, plan_path_str)
+        result = _setup_has_plan(config, cmd_name, plan_path_str, dry_run=dry_run)
     else:
         result = _setup_stateless(config, cmd_name)
 
@@ -173,10 +262,15 @@ def _dispatch_prompt(
         return 1
 
     agent_name = result.agent_name
+    repo_name = result.repo_name
     prompt = result.prompt
     audit_input_plan = result.audit_input_plan
 
-    git_pull(config.project_dir / agent_name, dry_run=dry_run)
+    try:
+        git_pull(config.project_dir / repo_name, dry_run=dry_run)
+    except subprocess.CalledProcessError as exc:
+        console.print(f"[red]git pull failed in {config.project_dir / repo_name}: {exc}[/red]")
+        return 1
 
     if edit_mode:
         edited = _open_in_editor(prompt)
@@ -223,24 +317,20 @@ def _build_prompt_command(cmd_name: str, kebab_name: str, *, has_plan: bool) -> 
     return click.command(kebab_name)(_cmd)
 
 
+def build_prompt_commands(config: WorkflowConfig) -> dict[str, click.Command]:
+    """Build Click commands for all distinct prompt commands in the config."""
+    prompt_commands: dict[str, click.Command] = {}
+    for cmd_name, targets in _collect_prompt_targets(config).items():
+        kebab_name = _command_cli_name(cmd_name)
+        has_plan = any(target.has_plan for target in targets)
+        prompt_commands[kebab_name] = _build_prompt_command(cmd_name, kebab_name, has_plan=has_plan)
+    return prompt_commands
+
+
 def register_prompt_commands(cli: click.Group, config: WorkflowConfig) -> None:
-    """Dynamically register one Click command per distinct :class:`PromptCommand` name.
-
-    Commands with the same name in multiple states share a single CLI entry point.
-    Multi-word names (e.g. ``'full review'``) are exposed as kebab-case
-    (``'full-review'``).  A command gets ``has_plan=False`` only when it appears
-    exclusively in the ``review`` state; all others require a plan path argument.
-    """
-    cmd_states: dict[str, set[PlanState]] = {}
-    for state, state_config in config.states.items():
-        for cmd in state_config.commands:
-            if isinstance(cmd, PromptCommand):
-                cmd_states.setdefault(cmd.name, set()).add(state)
-
-    for cmd_name, states in cmd_states.items():
-        has_plan = any(s != PlanState.REVIEW for s in states)
-        kebab_name = cmd_name.replace(" ", "-")
-        cli.add_command(_build_prompt_command(cmd_name, kebab_name, has_plan=has_plan))
+    """Register prompt commands onto an existing Click group."""
+    for cli_name, prompt_command in build_prompt_commands(config).items():
+        cli.add_command(prompt_command, name=cli_name)
 
 
 def send_prompt_to_agent(

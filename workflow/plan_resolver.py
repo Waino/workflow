@@ -134,7 +134,7 @@ def find_all_plans_in_repo(project_dir: Path, repo: str = "master") -> list[Plan
                         Review(
                             sequence_number=seq,
                             slug=slug,
-                            path=md_file.resolve(),
+                            path=md_file.relative_to(project_dir),
                             review_sub_state=sub_state,
                             review_timestamp=ts,
                             review_commit=commit,
@@ -149,7 +149,7 @@ def find_all_plans_in_repo(project_dir: Path, repo: str = "master") -> list[Plan
                     seq, slug = parse_plan_filename(md_file.stem)
                 except ValueError:
                     continue
-                plans.append(Plan(sequence_number=seq, slug=slug, state=state, path=md_file.resolve()))
+                plans.append(Plan(sequence_number=seq, slug=slug, state=state, path=md_file.relative_to(project_dir)))
 
     _check_collisions(plans)
     return plans
@@ -233,7 +233,7 @@ def _resolve_absolute(fuzzy_path: str, project_dir: Path) -> Plan:
         relative = path.relative_to(project_dir.resolve())
     except ValueError:
         raise PlanNotFoundError(fuzzy_path, []) from None
-    return _parse_absolute_parts(fuzzy_path, path, relative.parts)
+    return _parse_absolute_parts(fuzzy_path, relative, relative.parts)
 
 
 def _disambiguate(fuzzy_path: str, matches: list[Plan], repos_searched: list[str]) -> Plan:
