@@ -120,7 +120,11 @@ class Review(Plan):
             return f"{base}_{self.review_commit}"
         if self.review_sub_state == ReviewSubState.CRITIQUE and self.review_timestamp is not None:
             return f"{base}_{self.review_timestamp.strftime('%Y-%m-%dT%H-%M-%SZ')}"
-        if self.review_sub_state == ReviewSubState.FULL and self.review_timestamp is not None and self.review_commit is not None:
+        if (
+            self.review_sub_state == ReviewSubState.FULL
+            and self.review_timestamp is not None
+            and self.review_commit is not None
+        ):
             return f"{self.review_timestamp.strftime('%Y-%m-%dT%H-%M-%SZ')}_{self.review_commit}"
         return base
 
