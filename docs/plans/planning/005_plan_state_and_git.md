@@ -61,7 +61,7 @@ def git_commit_hash(repo_dir: Path, short: bool = True) -> str:
     """Return the current commit hash."""
 ```
 
-These all delegate to `run_command` from plan 004.
+These all delegate to `run_command` from plan 004.1.
 
 ## Push-pull-merge sequence
 
@@ -125,7 +125,7 @@ class CheckResult(BaseModel):
 ## Dependencies
 
 - Plan 002 (models): Plan, PlanState, WorkflowConfig
-- Plan 004 (CLI framework): run_command, dry-run support
+- Plan 004.1 (CLI and registry): run_command, dry-run support
 
 ## Risks
 

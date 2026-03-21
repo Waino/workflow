@@ -152,7 +152,7 @@ class WorkflowConfig(BaseModel):
     def validate_script_references(self) -> "WorkflowConfig":
         """Fail fast if config references a non-existent script name.
 
-        No-op until the registry (plan 004) is implemented.
+        No-op until the registry (plan 004.1) is implemented.
         """
         return self
 
@@ -217,7 +217,7 @@ None — this is the foundational plan.
 
 - The config schema will evolve as later plans are implemented. Design for extensibility
   (optional fields with defaults) to minimize breaking changes.
-- The `validate_script_references` validator depends on the registry (plan 004).
+- The `validate_script_references` validator depends on the registry (plan 004.1).
   Initially implement as a no-op; wire up once the registry exists.
 - `dict[PlanState, StateConfig]` as a Pydantic field: Pydantic v2 handles StrEnum keys
   well, but the YAML will have plain string keys. A validator or custom type may be needed

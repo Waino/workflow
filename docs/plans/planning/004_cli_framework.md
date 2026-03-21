@@ -1,5 +1,12 @@
 # 004: CLI Framework, Registry, and Audit Logging
 
+> **Superseded.** This plan was subdivided into:
+> - `planning/004.1_cli_and_registry` — CLI group, script registry, `run_command`
+> - `planning/004.2_prompt_dispatch` — prompt command dispatch, tmux integration
+> - `planning/004.3_audit_logging` — audit log write/read
+>
+> Kept here for context. Implement the children instead.
+
 Input: `intent/001_idea`
 
 ## Goal

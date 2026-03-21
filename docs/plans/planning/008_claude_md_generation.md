@@ -7,7 +7,7 @@ Input: `intent/001_idea`
 Generate the workflow orientation sections of CLAUDE.md from the configuration,
 so that agents have accurate awareness of the plan state machine and available commands.
 Full prompt texts are no longer in CLAUDE.md — they are rendered from config templates
-and sent directly to agents via libtmux dispatch (plan 004).
+and sent directly to agents via libtmux dispatch (plan 004.2).
 
 ## Scope
 
@@ -129,7 +129,7 @@ to detect agent tampering.
 ## Dependencies
 
 - Plan 002 (models): WorkflowConfig, PromptCommand, ScriptCommand, ManualStep
-- Plan 004 (CLI framework): cli group
+- Plan 004.1 (CLI and registry): cli group
 - jinja2 (added as dependency in plan 006)
 
 ## Risks

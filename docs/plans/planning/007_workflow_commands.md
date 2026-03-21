@@ -74,7 +74,7 @@ def implement(ctx: click.Context, plan_path: str) -> None:
     # 3. transition_plan(plan, PlanState.IMPLEMENTING)
     # 4. git_commit + git_push (master → bare)
     # 5. Print reminder, pause briefly
-    # 6. Switch to the builder's tmux window via send_prompt_to_agent (plan 004)
+    # 6. Switch to the builder's tmux window via send_prompt_to_agent (plan 004.2)
     #    No prompt is sent; only the window switch occurs so the human can see the builder.
 ```
 
@@ -139,7 +139,7 @@ def doublecheck_cmd(ctx: click.Context, plan_path: str) -> None:
 ## Prompt commands
 
 Prompt commands (`ask`, `critique`, `plan`, `subdivide`, `build`, `pr`, `fix`,
-`full-review`, `followthrough`) are dispatched generically by the framework in plan 004.
+`full-review`, `followthrough`) are dispatched generically by the framework in plan 004.2.
 They do not require individual implementations here.
 
 The `implement` script command switches to the builder window (step 6 above)
@@ -155,7 +155,9 @@ so the human can see the builder before running `workflow ask {plan}` to send th
 
 - Plan 002 (models): all models
 - Plan 003 (path resolution): resolve_plan
-- Plan 004 (CLI framework): cli group, run_command, audit logging
+- Plan 004.1 (CLI and registry): cli group, run_command
+- Plan 004.2 (prompt dispatch): send_prompt_to_agent, register_prompt_commands
+- Plan 004.3 (audit logging): write_audit_log
 - Plan 005 (state/git): transition_plan, git helpers, transfer_branch_to_main, doublecheck
 
 ## Risks

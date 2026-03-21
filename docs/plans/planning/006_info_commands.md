@@ -109,7 +109,8 @@ def cheat() -> None:
 
 - Plan 002 (models): Plan, PlanState, WorkflowConfig, AuditLogEntry, ManualStep
 - Plan 003 (path resolution): find_all_plans, parse_plan_filename
-- Plan 004 (CLI framework): cli group, audit log reading
+- Plan 004.1 (CLI and registry): cli group
+- Plan 004.3 (audit logging): read_audit_log
 
 ## Risks
 
