@@ -74,7 +74,8 @@ def implement(ctx: click.Context, plan_path: str) -> None:
     # 3. transition_plan(plan, PlanState.IMPLEMENTING)
     # 4. git_commit + git_push (master → bare)
     # 5. Print reminder, pause briefly
-    # 6. tmux attach to builder
+    # 6. Switch to the builder's tmux window via send_prompt_to_agent (plan 004)
+    #    No prompt is sent; only the window switch occurs so the human can see the builder.
 ```
 
 ## workflow push
@@ -135,10 +136,20 @@ def doublecheck_cmd(ctx: click.Context, plan_path: str) -> None:
     # 4. Print reminder based on state
 ```
 
+## Prompt commands
+
+Prompt commands (`ask`, `critique`, `plan`, `subdivide`, `build`, `pr`, `fix`,
+`full-review`, `followthrough`) are dispatched generically by the framework in plan 004.
+They do not require individual implementations here.
+
+The `implement` script command switches to the builder window (step 6 above)
+so the human can see the builder before running `workflow ask {plan}` to send the first prompt.
+
 ## File organization
 
-- `workflow/commands/workflow.py` — all workflow commands (or split into multiple files if large)
-- Each command is registered with `@cli.command()` and imported in `cli.py`
+- `workflow/commands/workflow.py` — all script workflow commands (or split into multiple files if large)
+- Each script command is registered with `@cli.command()` and imported in `cli.py`
+- Prompt commands are registered dynamically by `register_prompt_commands` in `workflow/tmux_dispatch.py`
 
 ## Dependencies
 

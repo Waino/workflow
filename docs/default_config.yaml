@@ -6,6 +6,10 @@ agents:
   - name: reviewer
     model: claude-sonnet-4-20250514
 
+tmux:
+  session_name: workflow
+  prompt_send_delay: 1.0  # seconds to wait after window switch before send-keys
+
 states:
   intent:
     agent: planner
@@ -112,8 +116,8 @@ states:
       - command_type: prompt
         name: pr
         prompt: |
-          Derive the plan name from the workflow command.
           Perform a thorough code review of the changes on the feat/{plan_name} branch.
+          (The plan is at {path_to_plan}; derive the branch name from the plan name.)
           Focus on software architecture, logic errors, missing or partially implemented requirements,
           fit with existing architecture and conventions, unit test quality and coverage, and security.
           Write a report into docs/plans/reviews/pr/{plan_name}_{commit}.md.

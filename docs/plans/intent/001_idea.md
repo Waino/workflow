@@ -14,24 +14,31 @@
 ## Components
 
 - Python helper script `workflow` for the human operator
-    - Steps marked "script: workflow <subcommand> [<args>]"
-    - Always run outside the sandboxes, but may docker exec commands inside the sandboxes
-- CLAUDE.md and/or skills: instructions for the agent, referenced by shorthand for convenience
-    - Steps marked "prompt: workflow <subcommand> [<args>]"
+    - Steps marked "script: workflow <subcommand> [<args>]" are pure script commands.
+    - Steps marked "prompt: workflow <subcommand> [<args>]" are also invoked through the CLI,
+      but instead of only running Python logic they dispatch a rendered prompt to the agent:
+      the CLI resolves the plan path, runs any mandatory pre-steps (e.g. `git pull`),
+      renders the prompt template from the config, and sends it to the appropriate agent's tmux window via libtmux.
+    - Always run outside the sandboxes, but may `docker exec` commands inside the sandboxes.
+- CLAUDE.md: static instructions for agents (git branch strategy, coding standards, workflow orientation).
+    - Auto-generated sections (plan state machine, command listing) are kept in sync by `workflow claude.md`.
+    - Does not contain prompt command text; full prompts are rendered from the config and sent directly by the CLI.
 - Changes to project cookiecutter
 
 ## Prompts modifying the shorthand
 
-Note that in addition to the shorthand, the complete prompt can contain other instructions,
-that modify the instructions in the shorthand definition.
+Adding `--edit` to any prompt command opens the rendered prompt in `$EDITOR`
+(similar to `git commit`), pre-populated with the default prompt text.
+The human can freely modify the text before saving and closing the editor.
+Clearing the file entirely cancels the command without sending anything.
+Without `--edit`, the default rendered prompt is sent as-is.
 For example:
 ```
-workflow pr 007_flux_capacitor 
-This is a greenfield development, ignore the deprecation checks.
-This is a security critical feature, pay extra attention to untrusted inputs.
+workflow pr 007_flux_capacitor --edit
 ```
-The above means that any instructions in the `pr` workflow concerning how to review deprecating functionality should be ignored (override to subtract from the workflow),
-and an extra instruction concerning security should be followed (override to add to the workflow).
+Opens the pre-rendered `pr` prompt in `$EDITOR`.
+The human can delete the deprecation-check instructions and add a security note,
+then save and close; the modified text is sent to the reviewer.
 
 ## Git branch strategy
 
@@ -85,7 +92,8 @@ and an extra instruction concerning security should be followed (override to add
 - Use click for the CLI
 - Use rich for color and tabular layouts
 - Use pydantic v2 for schemas and for validation of the yaml config
-- Use jinja2 for templating (intent file creation, CLAUDE.md generation)
+- Use jinja2 for templating (intent file creation, CLAUDE.md generation, prompt rendering)
+- Use libtmux for sending rendered prompts to agent tmux windows
 - Use pathlib for path handling and globs
 - Can call out to shell tools rather than implementing heavy custom components or adding complex dependencies
 
@@ -253,10 +261,11 @@ Directory structure after:
 ### Start
 
 - script: workflow start
-- Call out to tmux to open one window for each agent
-    - In the tmux session, start a sandbox container for the agent (run or start, depending on container existence)
+- Call out to libtmux to open one named window per agent in the configured tmux session
+    - Window name matches the agent name (e.g. `planner`, `builder`, `reviewer`)
+    - In each window, start the agent's sandbox container (run or start, depending on container existence)
     - Pass in the model that the agent should be using (configurable per agent)
-- Also open a tmux with a docker exec bash in the builder sandbox
+- Also open a window named `builder-shell` with a docker exec bash in the builder sandbox
 
 ### @ Ask
 
@@ -311,7 +320,7 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 - If plan is in `planning`, first perform the same push-pull-merge sequence as `todo`.
 - Transition the plan to `implementing`. Commit. Push.
 - Print workflow reminder: "next step is: workflow ask {new_path_to_plan}". Pause briefly so it can be seen.
-- tmux attach to the builder
+- Switch to the builder's tmux window via libtmux
 
 ### @ Build
 
@@ -435,7 +444,12 @@ Commit your changes. Do not modify the code.
 ### Generate CLAUDE.md
 
 - script: workflow claude.md
-- Generate (the shorthand section of) the CLAUDE.md file based on the current configuration.
+- Regenerate the auto-generated sections of CLAUDE.md from the current configuration:
+    - **Plan state machine**: which states exist, which agent works in each, available transitions.
+      Agent-friendly prose/table format. Not the tabular cheat-sheet diagram.
+    - **Command listing**: commands available in each state, with type markers (`-` script, `@` prompt, `( )` manual).
+- Static sections (git branch strategy, coding standards) are outside the auto-generated markers and are not touched.
+- Prompt command text is **not** included in CLAUDE.md; full prompts live in the config and are rendered at dispatch time.
 
 ## Audit log
 
@@ -466,7 +480,7 @@ Example row:
 - During development: config file in the project root (`config.yaml`).
 - Installed location: `~/.config/workflow/config.yaml`.
 - CLI flag to override: `workflow --config <path> <command> [<args>]`.
-- All settings (agent names, models, workflow graph, workflow contents) are in a single config file.
+- All settings (agent names, models, tmux session, workflow graph, prompt contents) are in a single config file.
 
 ### Configurability
 
@@ -474,28 +488,34 @@ Hardcoding the workflow steps in code and CLAUDE.md is too inflexible: making an
 The opposite extreme of making all steps fully defined in configuration is not optimal either,
 as the configuration would become quite complex due to needing to represent multi-step scripts.
 Let's aim for a sweet spot where
-- the transition graph and some easily represented data is in a yaml config,
+- the transition graph, prompt texts, and some easily represented data is in a yaml config,
 - scripts are hardcoded as python functions,
 - the two are linked by a registry.
 - Config validation: fail fast at startup if the config references a non-existent script name.
 
 ```yaml
-intent:
-    agent: planner
-    commands:
-        - name: ask
-          command_type: prompt
-          prompt: |
-            Ask any questions until you have a clear understanding.
-        - name: critique
-        ...
-todo:
-    agent: null
-    commands:
-        - name: implement
-          command_type: script
-          script: implement
-          transition: implementing
+tmux:
+    session_name: workflow
+    prompt_send_delay: 1.0   # seconds to wait after window switch before send-keys
+
+states:
+    intent:
+        agent: planner
+        commands:
+            - name: ask
+              command_type: prompt
+              prompt: |
+                Read the plan at {path_to_plan}.
+                Ask any questions until you have a clear understanding.
+            - name: critique
+            ...
+    todo:
+        agent: null
+        commands:
+            - name: implement
+              command_type: script
+              script: implement
+              transition: implementing
 ```
 
 ```python
@@ -517,3 +537,11 @@ def implement(command: ScriptCommand, canonical_path_to_plan: Plan, ...) -> int:
         - check that tests mock sleep, to avoid unnecessarily slow tests
     - maybe in the future: if doing TDD, check that test and build only touch appropriate files
 - MCP to allow agents to perform some selected git operations outside the sandbox, e.g. `workflow push`
+- **Stretch goal: advanced tmux layout management**
+    - Side-by-side split: the human's workflow shell always on the left;
+      the right pane rotates to show different agents on demand.
+    - Dispatching any workflow command (e.g. `workflow implement 002`, `workflow ask 002`) automatically brings up
+      the target agent in the right pane using `join-pane` / `break-pane`.
+    - This improves ergonomics but adds significant complexity and fragility
+      (pane IDs change on session restart; terminal dimensions matter).
+      Implement only after the core libtmux dispatch is stable and proven.

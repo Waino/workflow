@@ -67,6 +67,62 @@ def run_command(args: list[str], *, dry_run: bool = False, **kwargs: Any) -> sub
     return subprocess.run(args, check=True, **kwargs)
 ```
 
+## Prompt command dispatch
+
+Prompt commands defined in the YAML config are exposed as Click commands dynamically at CLI startup.
+After loading config, one Click command is registered for each distinct `PromptCommand` name
+found across all states (duplicates with the same name are registered once):
+
+```python
+def register_prompt_commands(cli: click.Group, config: WorkflowConfig) -> None:
+    """Dynamically register click commands for all prompt commands in config.
+
+    Commands with the same name appearing in multiple states share a single CLI entry point;
+    the correct prompt template is selected at dispatch time based on the resolved plan's state.
+    Multi-word command names (e.g. 'full review') are exposed as kebab-case ('full-review').
+    """
+```
+
+Each registered prompt command accepts:
+- An optional `plan_path` positional argument (omitted for state-less commands like `full-review`)
+- An `--edit` flag (no argument) to open the rendered prompt in `$EDITOR` before sending
+
+Dispatch sequence for a prompt command:
+1. Resolve `plan_path` to a canonical `Plan` via `resolve_plan` (plan 003)
+2. Look up the plan's current state in config; retrieve the matching `PromptCommand`
+3. Run mandatory pre-steps: `git pull` in the agent's host-side repo
+4. Render the Jinja2 prompt template with `{path_to_plan}` (canonical path string)
+5. If `--edit`: write the rendered prompt to a temporary file and open it with `$EDITOR`
+   (falling back to `vi` if `$EDITOR` is unset); wait for the editor to exit;
+   read back the file contents. If the file is empty, print a cancellation message and exit.
+   Otherwise use the edited contents as the final prompt.
+6. Call `send_prompt_to_agent` with the final prompt (see below)
+7. Write an audit log entry
+
+## Tmux dispatch
+
+```python
+def send_prompt_to_agent(
+    agent_name: str,
+    prompt: str,
+    config: WorkflowConfig,
+    *,
+    dry_run: bool = False,
+) -> None:
+    """Send a rendered prompt to the named agent's tmux window.
+
+    Uses config.tmux.session_name to locate the tmux session.
+    Finds the window whose name matches agent_name.
+    Waits config.tmux.prompt_send_delay seconds before calling send_keys,
+    giving the human a moment to abort if the wrong window is focused.
+
+    In dry-run mode, prints the session, window, and rendered prompt instead of sending.
+    """
+```
+
+Raises a clear error (not an unhandled exception) if the tmux session or the agent window
+cannot be found, so the human can start the session with `workflow start` first.
+
 ## Audit logging
 
 ### Writing
@@ -91,19 +147,31 @@ def read_all_audit_logs(project_dir: Path, agents: list[str]) -> list[AuditLogEn
 
 ## File organization
 
-- `workflow/cli.py` — Click CLI group, global options (replaces current stub)
+- `workflow/cli.py` — Click CLI group, global options, calls `register_prompt_commands` at startup (replaces current stub)
 - `workflow/registry.py` — script registry, validate_registry
 - `workflow/shell.py` — run_command helper
+- `workflow/tmux_dispatch.py` — `send_prompt_to_agent`, `register_prompt_commands`
 - `workflow/audit.py` — audit log read/write
+
+## New dependency
+
+- Add `libtmux` to project dependencies (used for tmux window discovery and send-keys).
 
 ## Dependencies
 
-- Plan 002 (models): uses WorkflowConfig, ScriptCommand, AuditLogEntry
+- Plan 002 (models): uses WorkflowConfig, ScriptCommand, PromptCommand, AuditLogEntry
 - Plan 002 (config): uses load_config
+- Plan 003 (path resolution): prompt dispatch calls resolve_plan
+- Plan 005 (git helpers): prompt dispatch calls git_pull as a pre-step
 
 ## Risks
 
 - The registry must be populated before validation runs. All script modules must be
   imported before `validate_registry` is called. Use a conventional import in `cli.py`
   that pulls in all command modules.
+- `prompt dispatch → git_pull (plan 005) → run_command (plan 004)`: this is a layered
+  dependency, not a circular one, as long as `tmux_dispatch.py` imports from `git_helpers.py`
+  and not vice versa. Keep dispatch and git helpers in separate modules.
+- libtmux raises exceptions if the tmux server is not running or the session/window does not exist.
+  Catch these and surface a clear error message directing the human to run `workflow start`.
 

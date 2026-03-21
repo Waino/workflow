@@ -127,6 +127,11 @@ class AgentConfig(BaseModel):
     name: str
     model: str                    # the LLM model to use
 
+class TmuxConfig(BaseModel):
+    """Configuration for tmux integration (prompt dispatch via libtmux)."""
+    session_name: str = "workflow"  # name of the tmux session created by `workflow start`
+    prompt_send_delay: float = 1.0  # seconds to wait after window switch before send-keys
+
 class WorkflowConfig(BaseModel):
     """Top-level configuration.
 
@@ -136,6 +141,7 @@ class WorkflowConfig(BaseModel):
     project_dir: Path             # discovered by walking up from cwd to find .workflow_root
     project_name: str             # derived: project_dir.name
     agents: list[AgentConfig]
+    tmux: TmuxConfig = Field(default_factory=TmuxConfig)
     states: dict[PlanState, StateConfig]
 
     @model_validator(mode="after")
@@ -190,8 +196,8 @@ def load_config(config_path: Path | None = None, project_dir: Path | None = None
 ## Default config
 
 A default config file is shipped at `docs/default_config.yaml`.
-It defines the standard three agents (planner, builder, reviewer) and all states
-with their commands as described in `intent/001_idea`.
+It defines the standard three agents (planner, builder, reviewer), the default tmux settings,
+and all states with their commands (including full prompt texts) as described in `intent/001_idea`.
 `workflow init` copies this file into the project root.
 
 ## File organization
