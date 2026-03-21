@@ -12,7 +12,7 @@ to canonical plan file paths. This is a core utility used by nearly every comman
 - Add a `Review` subclass of `Plan` carrying all review-specific fields as required fields;
   remove `review_sub_state` from `Plan` (it belongs only on `Review`)
 - Parse various shorthand forms into a canonical `Plan` object
-- Collision validation: loud error if two non-intent plans share a sequence number,
+- Collision validation: loud error if two non-intent, non-review plans share a sequence number,
   checked whenever a scan is performed (no dedicated separate pass)
 - Resolution context: when a command constrains the expected state, use that to disambiguate
 - Cross-repo disambiguation: most-progressed state wins; ambiguity within a single repo is an error
@@ -77,15 +77,24 @@ class Review(Plan):
         if self.review_sub_state == ReviewSubState.PR and self.review_commit is None:
             msg = "PR review requires review_commit"
             raise ValueError(msg)
+        if self.review_sub_state == ReviewSubState.FULL:
+            if self.review_timestamp is None:
+                msg = "FULL review requires review_timestamp"
+                raise ValueError(msg)
+            if self.review_commit is None:
+                msg = "FULL review requires review_commit"
+                raise ValueError(msg)
         return self
 
     @property
     def name(self) -> str:
         base = f"{self.sequence_number_str}_{self.slug}"
-        if self.review_sub_state == ReviewSubState.PR:
+        if self.review_sub_state == ReviewSubState.PR and self.review_commit is not None:
             return f"{base}_{self.review_commit}"
         if self.review_sub_state == ReviewSubState.CRITIQUE and self.review_timestamp is not None:
-            return f"{base}_{self.review_timestamp.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+            return f"{base}_{self.review_timestamp.strftime('%Y-%m-%dT%H-%M-%SZ')}"
+        if self.review_sub_state == ReviewSubState.FULL and self.review_timestamp is not None and self.review_commit is not None:
+            return f"{self.review_timestamp.strftime('%Y-%m-%dT%H-%M-%SZ')}_{self.review_commit}"
         return base
 ```
 
@@ -136,8 +145,8 @@ def resolve_plan(
         PlanNotFoundError: No matching plan found. Carries: fuzzy_path, repos searched.
         AmbiguousPlanError: Multiple matches found and cannot disambiguate.
             Carries: fuzzy_path, list of candidate Plan objects.
-        PlanCollisionError: Two non-intent plans share the same sequence number.
-            Carries: sequence number (int), list of colliding Plan objects.
+        PlanCollisionError: Two non-intent, non-review plans share the same sequence number.
+            Carries: sequence number as zero-padded string (str, e.g. "002"), list of colliding Plan objects.
     """
 ```
 
@@ -162,16 +171,18 @@ def resolve_plan(
 
 6. **Filter by expected_states**: if `expected_states` is provided, further filter to those states.
 
-7. **Disambiguate**:
+7. **Disambiguate** (within a single repo):
    - If one match remains: return it.
-   - If multiple matches remain within a single repo: raise `AmbiguousPlanError`.
+   - If multiple matches remain: raise `AmbiguousPlanError`.
      Exception: if ambiguous only between `intent` and one non-intent match, prefer the non-intent.
-   - If matches span multiple repos (only possible when the caller searches multiple repos,
-     e.g. `doublecheck`): pick the match with the most progressed state.
-     State ordering: `intent < planning < todo < implementing < checking < done`.
-     `rejected` and `review` are not compared against regular states.
-     If two matches have the same state in different repos, raise `AmbiguousPlanError`.
    - If no matches remain: raise `PlanNotFoundError`.
+
+   Cross-repo disambiguation applies only in `find_all_plans` (used for status/followthrough),
+   not in `resolve_plan` (which always searches exactly one repo):
+   State ordering: `intent < planning < todo < implementing < checking < done < rejected`.
+   `rejected` ranks highest — a rejected copy always wins. `review` is not ranked and is never
+   deduplicated (each review document has a unique name). When the same plan appears at the same
+   state in two repos, the first repo in scan order wins silently.
 
 ## Helper: find_all_plans_in_repo
 
@@ -196,7 +207,9 @@ def find_all_plans(project_dir: Path) -> list[Plan]:
 
     When the same plan appears in multiple repos (e.g. 'master' and 'builder'),
     the copy with the most progressed state is kept.
-    State ordering for deduplication: intent < planning < todo < implementing < checking < done.
+    State ordering: intent < planning < todo < implementing < checking < done < rejected.
+    REJECTED ranks highest, so a rejected copy always wins regardless of other repos.
+    REVIEW is not ranked and is never deduplicated (each review has a unique name).
     """
 ```
 
@@ -222,8 +235,8 @@ def parse_review_filename(
 ) -> tuple[list[int], str, datetime | None, str | None]:
     """Parse a review filename into (sequence_number, slug, review_timestamp, review_commit).
 
-    Critique ('002_pydantic_models_2026-03-18T14:30:00Z'):
-        Parse the ISO 8601 timestamp suffix from the right.
+    Critique ('002_pydantic_models_2026-03-18T14-30-00Z'):
+        Parse the timestamp suffix (dashes, no colons) from the right.
         The remainder is the base plan name, parsed by parse_plan_filename.
         Returns: ([2], 'pydantic_models', datetime(...), None)
 

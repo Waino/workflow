@@ -78,7 +78,7 @@ class TestParsePlanFilename:
 
 class TestParseReviewFilename:
     _ts = datetime(2026, 3, 18, 14, 30, tzinfo=UTC)
-    _ts_str = "2026-03-18T14:30:00Z"
+    _ts_str = "2026-03-18T14-30-00Z"
 
     def test_critique_simple(self) -> None:
         seq, slug, ts, commit = parse_review_filename(f"002_pydantic_models_{self._ts_str}", ReviewSubState.CRITIQUE)
@@ -116,7 +116,7 @@ class TestParseReviewFilename:
 
     def test_full_raises(self) -> None:
         with pytest.raises(ValueError, match="Full reviews"):
-            parse_review_filename("2026-03-18T14:30:00Z_0e6baa9", ReviewSubState.FULL)
+            parse_review_filename("2026-03-18T14-30-00Z_0e6baa9", ReviewSubState.FULL)
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +170,7 @@ class TestFindAllPlansInRepo:
         assert len(plans) == 2
 
     def test_critique_review_included(self, tmp_path: Path) -> None:
-        _make_review(tmp_path, "master", ReviewSubState.CRITIQUE, "002_plan_2026-03-18T14:30:00Z.md")
+        _make_review(tmp_path, "master", ReviewSubState.CRITIQUE, "002_plan_2026-03-18T14-30-00Z.md")
         plans = find_all_plans_in_repo(tmp_path, "master")
         assert len(plans) == 1
         assert isinstance(plans[0], Review)
@@ -184,9 +184,16 @@ class TestFindAllPlansInRepo:
         assert plans[0].review_commit == "0e6baa9"
 
     def test_full_review_skipped(self, tmp_path: Path) -> None:
-        _make_review(tmp_path, "master", ReviewSubState.FULL, "2026-03-18T14:30:00Z_0e6baa9.md")
+        _make_review(tmp_path, "master", ReviewSubState.FULL, "2026-03-18T14-30-00Z_0e6baa9.md")
         plans = find_all_plans_in_repo(tmp_path, "master")
         assert plans == []
+
+    def test_malformed_filename_skipped(self, tmp_path: Path) -> None:
+        # Files that don't match the NNN_slug pattern are silently ignored
+        d = tmp_path / "master" / "docs" / "plans" / "planning"
+        d.mkdir(parents=True)
+        (d / "README.md").write_text("# readme\n")
+        assert find_all_plans_in_repo(tmp_path, "master") == []
 
     def test_plan_is_not_review(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "master", PlanState.PLANNING, "002_pydantic_models.md")
@@ -239,8 +246,8 @@ class TestFindAllPlans:
 
     def test_reviews_not_deduplicated(self, tmp_path: Path) -> None:
         # Different timestamps → different names → both included
-        _make_review(tmp_path, "planner", ReviewSubState.CRITIQUE, "002_plan_2026-03-18T14:30:00Z.md")
-        _make_review(tmp_path, "reviewer", ReviewSubState.CRITIQUE, "002_plan_2026-03-19T10:00:00Z.md")
+        _make_review(tmp_path, "planner", ReviewSubState.CRITIQUE, "002_plan_2026-03-18T14-30-00Z.md")
+        _make_review(tmp_path, "reviewer", ReviewSubState.CRITIQUE, "002_plan_2026-03-19T10-00-00Z.md")
         plans = find_all_plans(tmp_path)
         assert len(plans) == 2
 
@@ -252,6 +259,15 @@ class TestFindAllPlans:
         _make_plan(tmp_path, "reviewer", PlanState.CHECKING, "002_foo.md")
         plans = find_all_plans(tmp_path)
         assert len(plans) == 1
+
+    def test_dedup_rejected_beats_all(self, tmp_path: Path) -> None:
+        # REJECTED has the highest rank and wins over any other state copy,
+        # even if that copy is at a later pipeline stage in another repo.
+        _make_plan(tmp_path, "master", PlanState.REJECTED, "002_foo.md")
+        _make_plan(tmp_path, "builder", PlanState.IMPLEMENTING, "002_foo.md")
+        plans = find_all_plans(tmp_path)
+        assert len(plans) == 1
+        assert plans[0].state == PlanState.REJECTED
 
     def test_all_four_repos_combined(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "master", PlanState.INTENT, "001_idea.md")
@@ -393,6 +409,6 @@ class TestResolvePlan:
             resolve_plan(str(missing), tmp_path)
 
     def test_absolute_path_full_review_raises(self, tmp_path: Path) -> None:
-        f = _make_review(tmp_path, "master", ReviewSubState.FULL, "2026-03-18T14:30:00Z_0e6baa9.md")
+        f = _make_review(tmp_path, "master", ReviewSubState.FULL, "2026-03-18T14-30-00Z_0e6baa9.md")
         with pytest.raises(PlanNotFoundError):
             resolve_plan(str(f), tmp_path)

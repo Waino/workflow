@@ -98,16 +98,30 @@ class Review(Plan):
         if self.review_sub_state == ReviewSubState.PR and self.review_commit is None:
             msg = "PR review requires review_commit"
             raise ValueError(msg)
+        if self.review_sub_state == ReviewSubState.FULL:
+            if self.review_timestamp is None:
+                msg = "FULL review requires review_timestamp"
+                raise ValueError(msg)
+            if self.review_commit is None:
+                msg = "FULL review requires review_commit"
+                raise ValueError(msg)
         return self
 
     @property
     def name(self) -> str:
-        """Review document name, e.g. '002_pydantic_models_0e6baa9' or '002_plan_2026-03-18T14:30:00Z'."""
+        """Review document name.
+
+        CRITIQUE: '002_pydantic_models_2026-03-18T14-30-00Z'
+        PR:       '002_pydantic_models_0e6baa9'
+        FULL:     '2026-03-18T14-30-00Z_0e6baa9'  (no plan identifier; full-codebase review)
+        """
         base = f"{self.sequence_number_str}_{self.slug}"
-        if self.review_sub_state == ReviewSubState.PR:
+        if self.review_sub_state == ReviewSubState.PR and self.review_commit is not None:
             return f"{base}_{self.review_commit}"
         if self.review_sub_state == ReviewSubState.CRITIQUE and self.review_timestamp is not None:
-            return f"{base}_{self.review_timestamp.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+            return f"{base}_{self.review_timestamp.strftime('%Y-%m-%dT%H-%M-%SZ')}"
+        if self.review_sub_state == ReviewSubState.FULL and self.review_timestamp is not None and self.review_commit is not None:
+            return f"{self.review_timestamp.strftime('%Y-%m-%dT%H-%M-%SZ')}_{self.review_commit}"
         return base
 
 

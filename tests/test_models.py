@@ -93,7 +93,7 @@ class TestReview:
         assert self._pr().name == "002_pydantic_models_0e6baa9"
 
     def test_critique_review_name(self) -> None:
-        assert self._critique().name == "002_pydantic_models_2026-03-18T14:30:00Z"
+        assert self._critique().name == "002_pydantic_models_2026-03-18T14-30-00Z"
 
     def test_pr_review_requires_commit(self) -> None:
         with pytest.raises(ValidationError, match="PR review requires review_commit"):
@@ -129,6 +129,51 @@ class TestReview:
 
     def test_review_state_defaults_to_review(self) -> None:
         assert self._pr().state == PlanState.REVIEW
+
+    def test_full_review_valid(self) -> None:
+        r = Review(
+            sequence_number=[0],
+            slug="",
+            path=Path("/tmp/r.md"),
+            review_sub_state=ReviewSubState.FULL,
+            review_timestamp=self._ts,
+            review_commit="0e6baa9",
+        )
+        assert r.state == PlanState.REVIEW
+        assert r.review_sub_state == ReviewSubState.FULL
+        assert r.review_timestamp == self._ts
+        assert r.review_commit == "0e6baa9"
+
+    def test_full_review_name(self) -> None:
+        r = Review(
+            sequence_number=[0],
+            slug="",
+            path=Path("/tmp/r.md"),
+            review_sub_state=ReviewSubState.FULL,
+            review_timestamp=self._ts,
+            review_commit="0e6baa9",
+        )
+        assert r.name == "2026-03-18T14-30-00Z_0e6baa9"
+
+    def test_full_review_requires_timestamp(self) -> None:
+        with pytest.raises(ValidationError, match="FULL review requires review_timestamp"):
+            Review(
+                sequence_number=[0],
+                slug="",
+                path=Path("/tmp/r.md"),
+                review_sub_state=ReviewSubState.FULL,
+                review_commit="0e6baa9",
+            )
+
+    def test_full_review_requires_commit(self) -> None:
+        with pytest.raises(ValidationError, match="FULL review requires review_commit"):
+            Review(
+                sequence_number=[0],
+                slug="",
+                path=Path("/tmp/r.md"),
+                review_sub_state=ReviewSubState.FULL,
+                review_timestamp=self._ts,
+            )
 
 
 class TestAuditLogEntry:

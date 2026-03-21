@@ -15,13 +15,13 @@ if TYPE_CHECKING:
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError
 from workflow.models import Plan, PlanState, Review, ReviewSubState
 
-# ISO 8601 timestamp as used in critique review filenames: 2026-03-18T14:30:00Z
-_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+# Timestamp as used in critique review filenames: 2026-03-18T14-30-00Z (dashes, no colons)
+_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z$")
 
 # Abbreviated git commit hash: 4-40 lowercase hex chars
 _COMMIT_RE = re.compile(r"^[0-9a-f]{4,40}$")
 
-# State progression for disambiguation/deduplication (review and rejected are excluded)
+# State progression for disambiguation/deduplication (REVIEW is excluded; REJECTED ranks highest)
 _STATE_PROGRESSION: tuple[PlanState, ...] = (
     PlanState.INTENT,
     PlanState.PLANNING,
@@ -29,6 +29,7 @@ _STATE_PROGRESSION: tuple[PlanState, ...] = (
     PlanState.IMPLEMENTING,
     PlanState.CHECKING,
     PlanState.DONE,
+    PlanState.REJECTED,
 )
 
 _REPOS = ("master", "planner", "builder", "reviewer")
@@ -64,8 +65,8 @@ def parse_review_filename(
 ) -> tuple[list[int], str, datetime | None, str | None]:
     """Parse a review filename into (sequence_number, slug, review_timestamp, review_commit).
 
-    Critique ('002_pydantic_models_2026-03-18T14:30:00Z'):
-        Parse the ISO 8601 timestamp suffix from the right.
+    Critique ('002_pydantic_models_2026-03-18T14-30-00Z'):
+        Parse the timestamp suffix (dashes, no colons) from the right.
         Returns: ([2], 'pydantic_models', datetime(...), None)
 
     PR ('002_pydantic_models_0e6baa9'):
@@ -85,7 +86,7 @@ def parse_review_filename(
         if not _TIMESTAMP_RE.match(suffix):
             msg = f"Invalid critique timestamp suffix: {suffix!r}"
             raise ValueError(msg)
-        ts = datetime.strptime(suffix, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        ts = datetime.strptime(suffix, "%Y-%m-%dT%H-%M-%SZ").replace(tzinfo=UTC)
         seq, slug = parse_plan_filename(base)
         return seq, slug, ts, None
 
@@ -159,7 +160,9 @@ def find_all_plans(project_dir: Path) -> list[Plan]:
 
     When the same plan (same sequence_number_str + slug) appears in multiple repos,
     the copy with the most progressed state is kept.
-    Reviews are always included without deduplication (each has a unique name).
+    State ordering: intent < planning < todo < implementing < checking < done < rejected.
+    REJECTED ranks highest, so a rejected copy always wins regardless of other repos.
+    REVIEW is not ranked and is never deduplicated (each review has a unique name).
     """
     merged: dict[str, Plan] = {}
 
