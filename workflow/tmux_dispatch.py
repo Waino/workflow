@@ -301,8 +301,9 @@ def _build_prompt_command(cmd_name: str, kebab_name: str, *, has_plan: bool) -> 
     """Return a Click command that dispatches the named prompt command."""
 
     @click.pass_context
-    def _cmd(ctx: click.Context, plan_path: str | None = None, *, edit_mode: bool = False) -> int:
-        return _dispatch_prompt(ctx, cmd_name, plan_path, has_plan=has_plan, edit_mode=edit_mode)
+    def _cmd(ctx: click.Context, plan_path: str | None = None, *, edit_mode: bool = False) -> None:
+        rc = _dispatch_prompt(ctx, cmd_name, plan_path, has_plan=has_plan, edit_mode=edit_mode)
+        ctx.exit(rc)
 
     _cmd.__name__ = kebab_name
     _cmd.__doc__ = f"Send the '{cmd_name}' prompt to the responsible agent."
