@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
-from workflow.models import PlanState  # noqa: TC001 - used at runtime by Pydantic
+from workflow.models import PlanState
 
 WORKFLOW_ROOT_MARKER = ".workflow_root"
 CONFIG_FILENAME = "config.yaml"

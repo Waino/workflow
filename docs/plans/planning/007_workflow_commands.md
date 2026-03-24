@@ -160,6 +160,12 @@ so the human can see the builder before running `workflow ask {plan}` to send th
 - Plan 004.3 (audit logging): write_audit_log
 - Plan 005 (state/git): transition_plan, git helpers, transfer_branch_to_main, doublecheck
 
+## Note on git_commit and no_verify
+
+All `git_commit` calls that follow a `transition_plan` (i.e. in `todo`, `implement`, `accept`,
+and `reject`) must pass `no_verify=True`. This skips the pre-commit hook, ensuring that state
+transitions succeed even when tests are failing in the working tree.
+
 ## Risks
 
 - The git sequences in `todo`, `implement`, and `accept` are multi-step and can fail partway.
