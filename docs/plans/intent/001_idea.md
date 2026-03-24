@@ -48,7 +48,8 @@ then save and close; the modified text is sent to the reviewer.
   Only the human operator pushes, enforcing a quality gate at each handoff.
 
 ### Planner
-- Branches from `main`, named `plan/{command}/{input_plan}` (e.g. `plan/subdivide/001_idea`, `plan/plan/003_foo`).
+- Branches from `main`, named `plan/{input_plan}`
+  (e.g. `plan/003_foo` could be either for `plan 003_foo` or `subdivide 003_foo`).
 - For `critique`: if already on a branch for the plan being critiqued, commit there.
   Otherwise, create `plan/critique/{plan_name}`.
 - Plan branches are merged to `main` via the `todo` or `implement` scripts.
