@@ -1,10 +1,10 @@
 agents:
   - name: planner
-    model: claude-sonnet-4-20250514
+    model: opus4.6
   - name: builder
-    model: claude-sonnet-4-20250514
+    model: sonnet4.6
   - name: reviewer
-    model: claude-sonnet-4-20250514
+    model: gpt5.4
 
 tmux:
   session_name: workflow
