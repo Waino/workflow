@@ -8,6 +8,11 @@ from workflow.git_helpers import git_mv
 from workflow.models import Plan, PlanState
 
 
+def _replace_repo_prefix(path: Path, repo_name: str) -> Path:
+    """Return *path* with its leading repo component replaced by *repo_name*."""
+    return Path(repo_name, *path.parts[1:])
+
+
 def transition_plan(
     plan: Plan,
     target_state: PlanState,
@@ -27,9 +32,10 @@ def transition_plan(
     component when the transition must be performed in a different repo — in practice
     always ``"master"``, because plans are pushed and pulled there before transitioning.
     """
-    repo_name = repo_override if repo_override is not None else plan.path.parts[0]
+    source_rel = plan.path if repo_override is None else _replace_repo_prefix(plan.path, repo_override)
+    repo_name = source_rel.parts[0]
     repo_path = project_dir / repo_name
-    source = project_dir / plan.path
+    source = project_dir / source_rel
     target_dir = repo_path / "docs" / "plans" / target_state.value
     if not dry_run:
         target_dir.mkdir(parents=True, exist_ok=True)

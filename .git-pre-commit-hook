@@ -11,4 +11,4 @@ ruff check --fix
 python -m pytest -m "not slow"
 
 # Type checking
-mypy workflow
+mypy workflow tests

@@ -16,10 +16,11 @@ Commands by workflow stage:
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import click
 
+from workflow.config import ScriptCommand, WorkflowConfig
 from workflow.doublecheck import CHECK_NAMES, CheckResult, infer_target_repo
 from workflow.doublecheck import doublecheck as run_doublecheck
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
@@ -27,6 +28,11 @@ from workflow.models import PlanState
 from workflow.plan_resolver import resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from workflow.models import Plan
 
 
 @register_script("init")
@@ -83,7 +89,7 @@ def doublecheck(
         return
 
     try:
-        plan = resolve_plan(plan_path, config.project_dir)
+        plan = _resolve_doublecheck_plan(config, plan_path)
     except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError) as exc:
         console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
@@ -98,7 +104,7 @@ def doublecheck(
         return
 
     try:
-        results = run_doublecheck(plan, config.project_dir, config, target_repo_override=target_repo)
+        results = run_doublecheck(plan, config.project_dir, config, target_repo_override=target)
     except WorkflowError as exc:
         console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
@@ -110,6 +116,43 @@ def doublecheck(
     if not has_failures:
         _print_next_step(plan)
     ctx.exit(1 if has_failures else 0)
+
+
+def _resolve_doublecheck_plan(config: WorkflowConfig, plan_path: str) -> Plan:
+    """Resolve *plan_path* across the repos/states where `doublecheck` is configured."""
+    assert config.project_dir is not None
+    targets_by_repo: dict[str, set[PlanState]] = {}
+
+    for state, state_config in config.states.items():
+        if not _state_has_doublecheck(state_config.commands):
+            continue
+        repo_name = state_config.agent or "master"
+        targets_by_repo.setdefault(repo_name, set()).add(state)
+
+    if not targets_by_repo:
+        msg = "No 'doublecheck' command found."
+        raise WorkflowError(msg)
+
+    resolved: list[Plan] = []
+    repos_searched: list[str] = []
+    for repo_name, expected_states in targets_by_repo.items():
+        repos_searched.append(repo_name)
+        try:
+            plan = resolve_plan(plan_path, config.project_dir, expected_states=expected_states, repo=repo_name)
+        except PlanNotFoundError:
+            continue
+        resolved.append(plan)
+
+    if not resolved:
+        raise PlanNotFoundError(plan_path, repos_searched)
+    if len(resolved) > 1:
+        raise AmbiguousPlanError(plan_path, resolved)
+    return resolved[0]
+
+
+def _state_has_doublecheck(commands: Sequence[object]) -> bool:
+    """Return True if *commands* includes the registered `doublecheck` script command."""
+    return any(isinstance(cmd, ScriptCommand) and cmd.script == "doublecheck" for cmd in commands)
 
 
 def _print_results(results: list[CheckResult]) -> None:

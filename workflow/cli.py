@@ -19,6 +19,8 @@ from workflow.config import ScriptCommand, WorkflowConfig, load_config
 from workflow.registry import _SCRIPT_REGISTRY, ConfigError
 from workflow.tmux_dispatch import build_prompt_commands
 
+_SCRIPT_COMMAND_CACHE: dict[tuple[str, str], click.Command] = {}
+
 
 def _command_cli_name(name: str) -> str:
     """Convert config command names to CLI command names."""
@@ -33,8 +35,13 @@ def _build_script_command(script_name: str, cli_name: str) -> click.Command:
     ``click.command()`` reads ``__click_params__`` from the function directly.
     Plain no-argument stub functions also work: Click treats them as argument-free commands.
     """
+    cached = _SCRIPT_COMMAND_CACHE.get((script_name, cli_name))
+    if cached is not None:
+        return cached
     script_func = _SCRIPT_REGISTRY[script_name]
-    return click.command(cli_name)(script_func)
+    command = click.command(cli_name)(script_func)
+    _SCRIPT_COMMAND_CACHE[(script_name, cli_name)] = command
+    return command
 
 
 def _build_script_commands(config: WorkflowConfig) -> dict[str, click.Command]:

@@ -11,7 +11,7 @@ import hashlib
 import os
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel
 
@@ -21,6 +21,8 @@ from workflow.git_helpers import git_diff_branch, git_fetch
 if TYPE_CHECKING:
     from workflow.config import WorkflowConfig
     from workflow.models import Plan
+
+TargetRepo = Literal["planner", "builder", "reviewer", "master"]
 
 CHECK_NAMES: list[str] = ["file-scope", "noqa-nosec", "git-hooks", "claude-md"]
 
@@ -46,8 +48,8 @@ class CheckResult(BaseModel):
 def infer_target_repo(
     plan: Plan,
     config: WorkflowConfig,
-    target_repo_override: Literal["planner", "builder", "reviewer", "master"] | None = None,
-) -> str:
+    target_repo_override: TargetRepo | None = None,
+) -> TargetRepo:
     """Return the repo name to inspect for *plan*, honouring any override.
 
     Falls back to the agent configured for the plan's state in *config*.
@@ -58,7 +60,7 @@ def infer_target_repo(
     state_cfg = config.states.get(plan.state)
     if state_cfg is None or state_cfg.agent is None:
         return "master"
-    return state_cfg.agent
+    return cast("TargetRepo", state_cfg.agent)
 
 
 def doublecheck(
@@ -66,7 +68,7 @@ def doublecheck(
     project_dir: Path,
     config: WorkflowConfig,
     *,
-    target_repo_override: Literal["planner", "builder", "reviewer", "master"] | None = None,
+    target_repo_override: TargetRepo | None = None,
     dry_run: bool = False,
 ) -> list[CheckResult]:
     """Run all verification checks.  Returns a list of results (pass/warn/fail).
@@ -87,11 +89,14 @@ def doublecheck(
         msg = f"git fetch failed in {repo_path}: {exc}"
         raise WorkflowError(msg) from exc
 
+    full_diff = _read_branch_diff(repo_path)
+    changed_files = [line for line in _read_branch_diff(repo_path, "--name-only").splitlines() if line]
+
     return [
-        _check_file_scope(repo_path, target_repo),
-        _check_noqa_nosec(repo_path),
+        _check_file_scope(changed_files, target_repo),
+        _check_noqa_nosec(full_diff),
         _check_git_hooks(repo_path, config),
-        _check_claude_md(repo_path, project_dir),
+        _check_claude_md(repo_path, project_dir, changed_files),
     ]
 
 
@@ -100,9 +105,17 @@ def doublecheck(
 # ---------------------------------------------------------------------------
 
 
-def _check_file_scope(repo_path: Path, target_repo: str) -> CheckResult:
-    changed = [f for f in git_diff_branch(repo_path, "--name-only").splitlines() if f]
-    violations = [f for f in changed if not _is_allowed(f, target_repo)]
+def _read_branch_diff(repo_path: Path, *extra_args: str) -> str:
+    """Return branch diff text, wrapping git failures in :class:`WorkflowError`."""
+    try:
+        return git_diff_branch(repo_path, *extra_args)
+    except subprocess.CalledProcessError as exc:
+        msg = f"git diff failed in {repo_path}: {exc}"
+        raise WorkflowError(msg) from exc
+
+
+def _check_file_scope(changed_files: list[str], target_repo: str) -> CheckResult:
+    violations = [f for f in changed_files if not _is_allowed(f, target_repo)]
     if violations:
         return CheckResult(
             check_name="file-scope",
@@ -131,9 +144,9 @@ def _is_allowed(file_path: str, target_repo: str) -> bool:
     return True  # unknown repo: allow
 
 
-def _check_noqa_nosec(repo_path: Path) -> CheckResult:
+def _check_noqa_nosec(diff_text: str) -> CheckResult:
     found = []
-    for line in git_diff_branch(repo_path).splitlines():
+    for line in diff_text.splitlines():
         if line.startswith("+") and not line.startswith("+++"):
             stripped = line[1:]
             if "noqa" in stripped or "nosec" in stripped:
@@ -179,7 +192,7 @@ def _check_git_hooks(repo_path: Path, config: WorkflowConfig) -> CheckResult:
     return CheckResult(check_name="git-hooks", status="pass", message="Git hooks correctly configured")
 
 
-def _check_claude_md(repo_path: Path, project_dir: Path) -> CheckResult:
+def _check_claude_md(repo_path: Path, project_dir: Path, changed_files: list[str]) -> CheckResult:
     hash_file = project_dir / ".claude_md_hash"
     if not hash_file.exists():
         msg = f"Trusted hash file not found: {hash_file}"
@@ -192,7 +205,6 @@ def _check_claude_md(repo_path: Path, project_dir: Path) -> CheckResult:
     trusted_hash = hash_file.read_text(encoding="utf-8").strip().split()[0]
     actual_hash = hashlib.sha256(claude_md.read_bytes()).hexdigest()
 
-    changed_files = git_diff_branch(repo_path, "--name-only").splitlines()
     claude_modified = "CLAUDE.md" in changed_files
 
     if actual_hash != trusted_hash:
