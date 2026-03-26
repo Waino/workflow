@@ -37,6 +37,7 @@ def new(ctx: click.Context, slug: str) -> None:
 - Render `docs/plans/intent/{num}_{slug}.md` from a jinja2 template (no string concatenation or long literals).
 - The template lives in the package as a resource (e.g. `workflow/templates/intent.md.j2`).
 - Open the created file using `$EDITOR` (fall back to `vi` if unset).
+- Stage the created file. Don't commit.
 
 ## workflow status
 

@@ -84,7 +84,7 @@ def implement(ctx: click.Context, plan_path: str) -> None:
 @cli.command()
 @click.argument("plan_path")
 @click.pass_context
-def push(ctx: click.Context, plan_path: str) -> None:
+def push(ctx: click.Context, plan_path: str, target_repo_override: str) -> None:
     """Push builder's branch after verification."""
     # 1. Resolve plan (must be in state: checking, repo: builder)
     # 2. Rerun pre-commit hook inside sandbox (docker exec)

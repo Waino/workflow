@@ -26,16 +26,15 @@ def _command_cli_name(name: str) -> str:
 
 
 def _build_script_command(script_name: str, cli_name: str) -> click.Command:
-    """Build a Click wrapper around a registered script function."""
+    """Build a Click command from a registered script function.
+
+    Click decorators applied to the registered function (e.g. ``@click.argument``,
+    ``@click.option``, ``@click.pass_context``) are preserved because
+    ``click.command()`` reads ``__click_params__`` from the function directly.
+    Plain no-argument stub functions also work: Click treats them as argument-free commands.
+    """
     script_func = _SCRIPT_REGISTRY[script_name]
-
-    @click.pass_context
-    def _cmd(_ctx: click.Context) -> int:
-        return script_func()
-
-    _cmd.__name__ = cli_name.replace("-", "_").replace(".", "_")
-    _cmd.__doc__ = script_func.__doc__
-    return click.command(cli_name)(_cmd)
+    return click.command(cli_name)(script_func)
 
 
 def _build_script_commands(config: WorkflowConfig) -> dict[str, click.Command]:

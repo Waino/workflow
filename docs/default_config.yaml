@@ -6,6 +6,9 @@ agents:
   - name: reviewer
     model: gpt5.4
 
+managed_hooks:
+  pre-commit: .git-pre-commit-hook
+
 tmux:
   session_name: workflow
   prompt_send_delay: 1.0  # seconds to wait after window switch before send-keys

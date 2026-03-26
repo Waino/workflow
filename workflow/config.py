@@ -89,6 +89,8 @@ class WorkflowConfig(BaseModel):
     agents: list[AgentConfig]
     tmux: TmuxConfig = Field(default_factory=TmuxConfig)
     states: dict[PlanState, StateConfig]
+    managed_hooks: dict[str, str] = Field(default_factory=lambda: {"pre-commit": ".git-pre-commit-hook"})
+    """Maps hook filename (in .git/hooks/) to version-controlled source path (relative to repo root)."""
 
     @model_validator(mode="after")
     def validate_script_references(self) -> WorkflowConfig:

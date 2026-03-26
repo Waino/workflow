@@ -15,8 +15,13 @@ class ConfigError(Exception):
     """Raised when the config is invalid (e.g. references an unknown script name)."""
 
 
-ScriptFunc = Callable[..., int]
-"""Type alias for registered script functions.  Return value is an exit code."""
+ScriptFunc = Callable[..., int | None]
+"""Type alias for registered script functions.
+
+The return value is an optional exit code.  Simple stub functions return ``int``
+directly; richer commands that use ``@click.pass_context`` call ``ctx.exit()``
+and return ``None``.
+"""
 
 _SCRIPT_REGISTRY: dict[str, ScriptFunc] = {}
 
