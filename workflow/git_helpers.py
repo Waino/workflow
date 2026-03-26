@@ -93,6 +93,21 @@ def git_mv(repo_path: Path, source: Path, target: Path, *, dry_run: bool = False
     run_command(["git", "mv", str(source), str(target)], cwd=repo_path, dry_run=dry_run)
 
 
+def git_diff_branch(repo_path: Path, *extra_args: str) -> str:
+    """Return ``git diff origin/main...HEAD`` output as a decoded string.
+
+    Optionally passes *extra_args* to git (e.g. ``"--name-only"``).
+    Raises :class:`subprocess.CalledProcessError` on non-zero exit.
+    """
+    result = run_command(
+        ["git", "diff", "origin/main...HEAD", *extra_args],
+        cwd=repo_path,
+        capture_output=True,
+    )
+    assert result is not None
+    return result.stdout.decode()
+
+
 def transfer_branch_to_main(
     source_repo: Path,
     master_repo: Path,

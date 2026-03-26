@@ -16,28 +16,11 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel
 
 from workflow.exceptions import WorkflowError
-from workflow.git_helpers import git_fetch
-from workflow.models import PlanState
-from workflow.shell import run_command
+from workflow.git_helpers import git_diff_branch, git_fetch
 
 if TYPE_CHECKING:
     from workflow.config import WorkflowConfig
     from workflow.models import Plan
-
-# ---------------------------------------------------------------------------
-# State → repo mapping
-# ---------------------------------------------------------------------------
-
-_STATE_TO_REPO: dict[PlanState, str] = {
-    PlanState.INTENT: "planner",
-    PlanState.PLANNING: "planner",
-    PlanState.TODO: "master",
-    PlanState.IMPLEMENTING: "builder",
-    PlanState.CHECKING: "reviewer",
-    PlanState.DONE: "master",
-    PlanState.REJECTED: "master",
-    PlanState.REVIEW: "reviewer",
-}
 
 CHECK_NAMES: list[str] = ["file-scope", "noqa-nosec", "git-hooks", "claude-md"]
 
@@ -62,12 +45,20 @@ class CheckResult(BaseModel):
 
 def infer_target_repo(
     plan: Plan,
+    config: WorkflowConfig,
     target_repo_override: Literal["planner", "builder", "reviewer", "master"] | None = None,
 ) -> str:
-    """Return the repo name to inspect for *plan*, honouring any override."""
+    """Return the repo name to inspect for *plan*, honouring any override.
+
+    Falls back to the agent configured for the plan's state in *config*.
+    States with no agent (e.g. ``todo``, ``done``, ``rejected``) map to ``"master"``.
+    """
     if target_repo_override is not None:
         return target_repo_override
-    return _STATE_TO_REPO[plan.state]
+    state_cfg = config.states.get(plan.state)
+    if state_cfg is None or state_cfg.agent is None:
+        return "master"
+    return state_cfg.agent
 
 
 def doublecheck(
@@ -84,7 +75,7 @@ def doublecheck(
     Missing prerequisites (missing hash file, fetch failure) raise
     :class:`~workflow.exceptions.WorkflowError`.
     """
-    target_repo = infer_target_repo(plan, target_repo_override)
+    target_repo = infer_target_repo(plan, config, target_repo_override)
     repo_path = project_dir / target_repo
 
     if dry_run:
@@ -109,19 +100,8 @@ def doublecheck(
 # ---------------------------------------------------------------------------
 
 
-def _git_diff(repo_path: Path, *extra_args: str) -> str:
-    """Run ``git diff origin/main...HEAD`` and return stdout as a string."""
-    result = run_command(
-        ["git", "diff", "origin/main...HEAD", *extra_args],
-        cwd=repo_path,
-        capture_output=True,
-    )
-    assert result is not None
-    return result.stdout.decode()
-
-
 def _check_file_scope(repo_path: Path, target_repo: str) -> CheckResult:
-    changed = [f for f in _git_diff(repo_path, "--name-only").splitlines() if f]
+    changed = [f for f in git_diff_branch(repo_path, "--name-only").splitlines() if f]
     violations = [f for f in changed if not _is_allowed(f, target_repo)]
     if violations:
         return CheckResult(
@@ -153,7 +133,7 @@ def _is_allowed(file_path: str, target_repo: str) -> bool:
 
 def _check_noqa_nosec(repo_path: Path) -> CheckResult:
     found = []
-    for line in _git_diff(repo_path).splitlines():
+    for line in git_diff_branch(repo_path).splitlines():
         if line.startswith("+") and not line.startswith("+++"):
             stripped = line[1:]
             if "noqa" in stripped or "nosec" in stripped:
@@ -212,7 +192,7 @@ def _check_claude_md(repo_path: Path, project_dir: Path) -> CheckResult:
     trusted_hash = hash_file.read_text(encoding="utf-8").strip().split()[0]
     actual_hash = hashlib.sha256(claude_md.read_bytes()).hexdigest()
 
-    changed_files = _git_diff(repo_path, "--name-only").splitlines()
+    changed_files = git_diff_branch(repo_path, "--name-only").splitlines()
     claude_modified = "CLAUDE.md" in changed_files
 
     if actual_hash != trusted_hash:

@@ -89,7 +89,7 @@ def doublecheck(
         ctx.exit(1)
         return
 
-    target = infer_target_repo(plan, target_repo)
+    target = infer_target_repo(plan, config, target_repo)
     console.print(f"Target repo: [bold]{target}[/bold]")
 
     if dry_run:
