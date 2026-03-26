@@ -1,6 +1,6 @@
 """Doublecheck verification suite.
 
-Implements the four pre-merge checks and exposes them via the reusable
+Implements the pre-merge checks and exposes them via the reusable
 ``doublecheck`` function.  The CLI command is registered in
 ``workflow/commands/workflow.py``.
 """
