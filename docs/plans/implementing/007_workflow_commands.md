@@ -32,6 +32,7 @@ def init(ctx: click.Context) -> None:
 
 - Open tmux windows for each agent, starting sandbox containers.
 - Also open a tmux window with a docker exec bash in the builder sandbox.
+  See intent/011_tmux_pane_rotation.md for a proof-of-concept.
 - Model is passed from config.
 
 ```python
@@ -40,7 +41,7 @@ def init(ctx: click.Context) -> None:
 def start(ctx: click.Context) -> None:
     """Start tmux sessions for all agents."""
     # tmux new-session / new-window for each agent
-    # docker run/start for each agent's sandbox
+    # docker run/start for each agent's sandbox (in the correct tmux pane)
 ```
 
 Note: docker and tmux commands will be written but cannot be tested in the sandbox.
@@ -58,7 +59,8 @@ def todo(ctx: click.Context, plan_path: str) -> None:
     # 2. transfer_branch_to_main(planner → bare → master, merge to main)
     # 3. transition_plan(plan, PlanState.TODO)
     # 4. git_commit + git_push (master → bare)
-    # 5. Print reminder: "next step is: workflow implement {plan_name}"
+    # 5. Print reminder: "next step is: workflow implement {plan_name}".
+    #    Note that the reminder should be dynamic using the steps defined in the config.
 ```
 
 ## workflow implement
@@ -142,7 +144,7 @@ Prompt commands (`ask`, `critique`, `plan`, `subdivide`, `build`, `pr`, `fix`,
 `full-review`, `followthrough`) are dispatched generically by the framework in plan 004.2.
 They do not require individual implementations here.
 
-The `implement` script command switches to the builder window (step 6 above)
+The `implement` script command will in the future rotate panes to the builder window (step 6 above)
 so the human can see the builder before running `workflow ask {plan}` to send the first prompt.
 
 ## File organization
