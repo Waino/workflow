@@ -547,3 +547,4 @@ def implement(command: ScriptCommand, canonical_path_to_plan: Plan, ...) -> int:
     - This improves ergonomics but adds significant complexity and fragility
       (pane IDs change on session restart; terminal dimensions matter).
       Implement only after the core libtmux dispatch is stable and proven.
+    - See docs/plans/intent/011_tmux_pane_rotation.md

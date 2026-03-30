@@ -141,6 +141,7 @@ class TestCommandModels:
                             "name": "ask",
                             "prompt": "Ask questions.",
                             "transition": "planning",
+                            "reminder": "review",
                         },
                         {"command_type": "script", "name": "todo", "script": "todo", "transition": "todo"},
                         {"command_type": "manual", "name": "answer"},
@@ -154,6 +155,7 @@ class TestCommandModels:
         assert len(commands) == 3
         assert commands[0].command_type == "prompt"
         assert commands[0].transition == PlanState.PLANNING
+        assert commands[0].reminder == "review"
         assert commands[1].command_type == "script"
         assert commands[1].script == "todo"
         assert commands[2].command_type == "manual"

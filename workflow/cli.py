@@ -19,7 +19,7 @@ from workflow.config import ScriptCommand, WorkflowConfig, load_config
 from workflow.registry import _SCRIPT_REGISTRY, ConfigError
 from workflow.tmux_dispatch import build_prompt_commands
 
-_SCRIPT_COMMAND_CACHE: dict[tuple[str, str], click.Command] = {}
+_SCRIPT_COMMAND_CACHE: dict[tuple[str, str, int], click.Command] = {}
 
 
 def _command_cli_name(name: str) -> str:
@@ -35,17 +35,18 @@ def _build_script_command(script_name: str, cli_name: str) -> click.Command:
     ``click.command()`` reads ``__click_params__`` from the function directly.
     Plain no-argument stub functions also work: Click treats them as argument-free commands.
     """
-    cached = _SCRIPT_COMMAND_CACHE.get((script_name, cli_name))
+    script_func = _SCRIPT_REGISTRY[script_name]
+    cache_key = (script_name, cli_name, id(script_func))
+    cached = _SCRIPT_COMMAND_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    script_func = _SCRIPT_REGISTRY[script_name]
     command = click.command(cli_name)(script_func)
-    _SCRIPT_COMMAND_CACHE[(script_name, cli_name)] = command
+    _SCRIPT_COMMAND_CACHE[cache_key] = command
     return command
 
 
 def _build_script_commands(config: WorkflowConfig) -> dict[str, click.Command]:
-    """Build Click commands for all distinct script commands referenced by the config."""
+    """Build Click commands for configured and standalone registered script commands."""
     script_targets: dict[str, str] = {}
     for state_config in config.states.values():
         for cmd in state_config.commands:
@@ -57,6 +58,9 @@ def _build_script_commands(config: WorkflowConfig) -> dict[str, click.Command]:
                 msg = f"CLI command {cli_name!r} is mapped to multiple scripts: {existing_script!r}, {cmd.script!r}"
                 raise ConfigError(msg)
             script_targets[cli_name] = cmd.script
+    for script_name in _SCRIPT_REGISTRY:
+        cli_name = _command_cli_name(script_name)
+        script_targets.setdefault(cli_name, script_name)
     return {cli_name: _build_script_command(script_name, cli_name) for cli_name, script_name in script_targets.items()}
 
 

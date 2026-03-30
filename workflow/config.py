@@ -24,6 +24,7 @@ class PromptCommand(BaseModel):
     name: str
     prompt: str
     transition: PlanState | None = None
+    reminder: str | None = None
 
 
 class ScriptCommand(BaseModel):
@@ -33,6 +34,7 @@ class ScriptCommand(BaseModel):
     name: str
     script: str
     transition: PlanState | None = None
+    reminder: str | None = None
 
 
 class ManualStep(BaseModel):

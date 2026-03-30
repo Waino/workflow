@@ -5,12 +5,37 @@ Input: `intent/001_idea`
 ## Goal
 
 Implement the script commands that perform workflow state transitions and git operations:
-`init`, `start`, `todo`, `implement`, `push`, `accept`, `reject`, and `doublecheck` (as CLI command).
+`init`, `start`, `new`, `todo`, `implement`, `push`, `accept`, `reject`, and `doublecheck` (as CLI command).
 
 ## Scope
 
 - All script-type commands that involve git operations or state transitions
 - Docker/tmux commands for `init` and `start`
+- Unit tests for command orchestration and dry-run behavior
+
+## Command signatures
+
+- Use the same Click-based approach as `doublecheck` for workflow script commands.
+- `todo`, `implement`, `push`, `accept`, and `reject` take a `plan_path` argument.
+- Add `--target-repo` where it is safe and useful.
+  At minimum this applies to `push` and `reject`.
+  Prefer consistency across plan-based script commands when it does not create ambiguity.
+
+## Audit logging and reminders
+
+- Script commands write audit log entries with actor `human`.
+- Reminders are looked up dynamically from the configured workflow graph.
+- Reminder lookup rules:
+    1. If the current command is not last in its state, use the next command in that state.
+    2. Otherwise, if the current command transitions to another state, use the first command in that state.
+    3. If there is no transition, or the target state has no commands, print no reminder.
+- Expected reminders:
+    - `todo` -> `implement`
+    - `implement` -> `ask`
+    - `build` -> `push`
+    - `push` -> `review`
+    - `accept` -> none
+    - `reject` -> none
 
 ## workflow init
 
@@ -18,6 +43,9 @@ Implement the script commands that perform workflow state transitions and git op
 - Create one clone per agent (from config: default planner, builder, reviewer).
 - Directory structure:
   `{project_dir}/bare/`, `{project_dir}/planner/`, `{project_dir}/builder/`, `{project_dir}/reviewer/`
+- Also create the `.workflow_root` marker in the project directory.
+- Implement now.
+- Cover with unit tests that verify the intended shell commands are issued in the right order.
 
 ```python
 @cli.command()
@@ -34,6 +62,9 @@ def init(ctx: click.Context) -> None:
 - Also open a tmux window with a docker exec bash in the builder sandbox.
   See intent/011_tmux_pane_rotation.md for a proof-of-concept.
 - Model is passed from config.
+- Pane rotation is not implemented yet, but window naming/layout should stay compatible with future rotation work.
+- Implement now.
+- Cover with unit tests that verify the intended tmux/docker commands are issued, without asserting that the commands themselves are correct.
 
 ```python
 @cli.command()
@@ -46,6 +77,14 @@ def start(ctx: click.Context) -> None:
 
 Note: docker and tmux commands will be written but cannot be tested in the sandbox.
 Dry-run mode is essential for development.
+
+## workflow new
+
+- Find the first free top-level sequence number.
+- Check all plan states and the audit log for reserved numbers on branches.
+- Open `docs/plans/intent/{num}_{slug}.md` in `${EDITOR}`.
+- Start with a bare-bones placeholder template.
+- Implement now.
 
 ## workflow todo
 
@@ -76,8 +115,8 @@ def implement(ctx: click.Context, plan_path: str) -> None:
     # 3. transition_plan(plan, PlanState.IMPLEMENTING)
     # 4. git_commit + git_push (master → bare)
     # 5. Print reminder, pause briefly
-    # 6. Switch to the builder's tmux window via send_prompt_to_agent (plan 004.2)
-    #    No prompt is sent; only the window switch occurs so the human can see the builder.
+    # 6. TODO: switch to the builder's tmux window.
+    #    Do not implement the window switch in this plan.
 ```
 
 ## workflow push
@@ -94,6 +133,9 @@ def push(ctx: click.Context, plan_path: str, target_repo_override: str) -> None:
     # 4. git_push(builder → bare)
     # 5. git_fetch(reviewer)
 ```
+
+- Implement the pre-commit rerun now.
+- Human will test correctness manually; unit tests only need to verify that the expected command execution is attempted.
 
 ## workflow accept
 
@@ -119,7 +161,7 @@ def accept(ctx: click.Context, plan_path: str) -> None:
 @click.pass_context
 def reject(ctx: click.Context, plan_path: str) -> None:
     """Reject a plan."""
-    # 1. Resolve plan (any state)
+    # 1. Resolve plan (default repo: master; allow override via --target-repo)
     # 2. transition_plan(plan, PlanState.REJECTED)
     # 3. git_commit
 ```
@@ -144,8 +186,8 @@ Prompt commands (`ask`, `critique`, `plan`, `subdivide`, `build`, `pr`, `fix`,
 `full-review`, `followthrough`) are dispatched generically by the framework in plan 004.2.
 They do not require individual implementations here.
 
-The `implement` script command will in the future rotate panes to the builder window (step 6 above)
-so the human can see the builder before running `workflow ask {plan}` to send the first prompt.
+The `implement` script command will in the future rotate panes to the builder window,
+but that step is explicitly deferred for now.
 
 ## File organization
 
@@ -167,6 +209,15 @@ so the human can see the builder before running `workflow ask {plan}` to send th
 All `git_commit` calls that follow a `transition_plan` (i.e. in `todo`, `implement`, `accept`,
 and `reject`) must pass `no_verify=True`. This skips the pre-commit hook, ensuring that state
 transitions succeed even when tests are failing in the working tree.
+
+`push` should not use `no_verify=True`; it explicitly reruns the hook inside the sandbox before push.
+
+## Testing strategy
+
+- Write unit tests for the new command implementations.
+- For `init`, `start`, and the `push` pre-commit execution, test that the tool attempts to run the planned commands.
+- Do not try to prove docker/tmux command correctness in automated tests.
+- The human operator will verify exact docker/tmux behavior manually.
 
 ## Risks
 

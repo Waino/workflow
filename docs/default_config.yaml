@@ -86,6 +86,7 @@ states:
         name: implement
         script: implement
         transition: implementing
+        reminder: ask
 
   implementing:
     agent: builder
@@ -107,9 +108,11 @@ states:
           Read the plan at {{ plan.path }}.
           Implement the plan. When done, transition the plan state to checking.
         transition: checking
+        reminder: push
       - command_type: script
         name: push
         script: push
+        reminder: review
 
   checking:
     agent: reviewer

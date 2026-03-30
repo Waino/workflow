@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 from click.testing import CliRunner
 
-import workflow.cli as workflow_cli
 import workflow.commands.workflow as workflow_commands
 from workflow import main, registry, tmux_dispatch
 from workflow.config import WORKFLOW_ROOT_MARKER
@@ -59,6 +58,10 @@ def test_help_lists_dynamic_prompt_and_script_commands(tmp_path: Path, monkeypat
     assert "ask" in result.output
     assert "todo" in result.output
     assert "full-review" in result.output
+    assert "init" in result.output
+    assert "start" in result.output
+    assert "new" in result.output
+    assert "reject" in result.output
 
 
 def test_script_commands_are_invokable_once_registered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -71,7 +74,6 @@ def test_script_commands_are_invokable_once_registered(tmp_path: Path, monkeypat
         return 0
 
     monkeypatch.setitem(registry._SCRIPT_REGISTRY, "todo", fake_todo)
-    workflow_cli._SCRIPT_COMMAND_CACHE.pop(("todo", "todo"), None)
     result = CliRunner().invoke(main, ["--config", str(config_path), "todo"])
 
     assert result.exit_code == 0
