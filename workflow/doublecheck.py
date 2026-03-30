@@ -11,18 +11,17 @@ import hashlib
 import os
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel
 
 from workflow.exceptions import WorkflowError
 from workflow.git_helpers import git_diff_branch, git_fetch
+from workflow.names import RepoName
 
 if TYPE_CHECKING:
     from workflow.config import WorkflowConfig
     from workflow.models import Plan
-
-TargetRepo = Literal["planner", "builder", "reviewer", "master"]
 
 CHECK_NAMES: list[str] = ["file-scope", "noqa-nosec", "git-hooks", "claude-md"]
 
@@ -48,8 +47,8 @@ class CheckResult(BaseModel):
 def infer_target_repo(
     plan: Plan,
     config: WorkflowConfig,
-    target_repo_override: TargetRepo | None = None,
-) -> TargetRepo:
+    target_repo_override: RepoName | str | None = None,
+) -> RepoName | str:
     """Return the repo name to inspect for *plan*, honouring any override.
 
     Falls back to the agent configured for the plan's state in *config*.
@@ -59,8 +58,8 @@ def infer_target_repo(
         return target_repo_override
     state_cfg = config.states.get(plan.state)
     if state_cfg is None or state_cfg.agent is None:
-        return "master"
-    return cast("TargetRepo", state_cfg.agent)
+        return RepoName.master
+    return state_cfg.agent
 
 
 def doublecheck(
@@ -68,7 +67,7 @@ def doublecheck(
     project_dir: Path,
     config: WorkflowConfig,
     *,
-    target_repo_override: TargetRepo | None = None,
+    target_repo_override: RepoName | str | None = None,
     dry_run: bool = False,
 ) -> list[CheckResult]:
     """Run all verification checks.  Returns a list of results (pass/warn/fail).
@@ -114,7 +113,7 @@ def _read_branch_diff(repo_path: Path, *extra_args: str) -> str:
         raise WorkflowError(msg) from exc
 
 
-def _check_file_scope(changed_files: list[str], target_repo: str) -> CheckResult:
+def _check_file_scope(changed_files: list[str], target_repo: RepoName | str) -> CheckResult:
     violations = [f for f in changed_files if not _is_allowed(f, target_repo)]
     if violations:
         return CheckResult(
@@ -126,20 +125,20 @@ def _check_file_scope(changed_files: list[str], target_repo: str) -> CheckResult
     return CheckResult(check_name="file-scope", status="pass", message="All changed files within scope")
 
 
-def _is_allowed(file_path: str, target_repo: str) -> bool:
+def _is_allowed(file_path: str, target_repo: RepoName | str) -> bool:
     """Return True if *file_path* (relative to repo root) may be changed by *target_repo*."""
     parts = Path(file_path).parts
     under_plans = parts[:2] == ("docs", "plans")
     is_intent = under_plans and parts[2:3] == ("intent",)
     is_review = under_plans and parts[2:3] == ("reviews",)
 
-    if target_repo == "master":
+    if target_repo == RepoName.master:
         return True
-    if target_repo == "planner":
+    if target_repo == RepoName.planner:
         return under_plans and not is_review
-    if target_repo == "builder":
+    if target_repo == RepoName.builder:
         return not is_intent and not is_review
-    if target_repo == "reviewer":
+    if target_repo == RepoName.reviewer:
         return not is_intent
     return True  # unknown repo: allow
 

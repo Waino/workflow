@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError
 from workflow.models import Plan, PlanState, Review, ReviewSubState
+from workflow.names import RepoName
 
 # Timestamp as used in critique review filenames: 2026-03-18T14-30-00Z (dashes, no colons)
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z$")
@@ -31,8 +32,6 @@ _STATE_PROGRESSION: tuple[PlanState, ...] = (
     PlanState.DONE,
     PlanState.REJECTED,
 )
-
-_REPOS = ("master", "planner", "builder", "reviewer")
 
 # Minimum path depths for absolute-path parsing
 _MIN_PLAN_PARTS = 5  # (repo, docs, plans, state, filename)
@@ -109,7 +108,7 @@ def _check_collisions(plans: list[Plan]) -> None:
             raise PlanCollisionError(seq_str, group)
 
 
-def find_all_plans_in_repo(project_dir: Path, repo: str = "master") -> list[Plan]:
+def find_all_plans_in_repo(project_dir: Path, repo: str = RepoName.master) -> list[Plan]:
     """Scan docs/plans/ in a single repo and return all plans found.
 
     Raises PlanCollisionError if two non-intent plans with the same sequence number
@@ -166,7 +165,7 @@ def find_all_plans(project_dir: Path) -> list[Plan]:
     """
     merged: dict[str, Plan] = {}
 
-    for repo in _REPOS:
+    for repo in RepoName:
         if not (project_dir / repo).is_dir():
             continue
         for plan in find_all_plans_in_repo(project_dir, repo):
@@ -254,18 +253,19 @@ def _disambiguate(fuzzy_path: str, matches: list[Plan], repos_searched: list[str
 
 def _extract_components(
     parts: list[str],
-) -> tuple[str | None, PlanState | None, list[int] | None, str | None]:
+) -> tuple[RepoName | None, PlanState | None, list[int] | None, str | None]:
     """Parse normalized path parts into (repo_hint, state_hint, seq_hint, slug_hint)."""
     state_values = {s.value: s for s in PlanState}
-    repo_hint: str | None = None
+    repo_hint: RepoName | None = None
     state_hint: PlanState | None = None
     seq_hint: list[int] | None = None
     slug_hint: str | None = None
 
     idx = 0
-    if idx < len(parts) and parts[idx] in _REPOS:
-        repo_hint = parts[idx]
-        idx += 1
+    if idx < len(parts):
+        with suppress(ValueError):
+            repo_hint = RepoName(parts[idx])
+            idx += 1
 
     if idx + 1 < len(parts) and parts[idx] == "docs" and parts[idx + 1] == "plans":
         idx += 2
@@ -323,7 +323,7 @@ def resolve_plan(
     repo_hint, state_hint, seq_hint, slug_hint = _extract_components(parts)
 
     # Step 4: Search one repo
-    target_repo = repo_hint or repo or "master"
+    target_repo = repo_hint or repo or RepoName.master
     plans = find_all_plans_in_repo(project_dir, target_repo)
 
     # Step 5: Filter by extracted components

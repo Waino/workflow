@@ -16,15 +16,11 @@ import click
 import workflow.commands.info
 import workflow.commands.workflow  # noqa: F401  — registers workflow commands
 from workflow.config import ScriptCommand, WorkflowConfig, load_config
+from workflow.names import command_cli_name
 from workflow.registry import _SCRIPT_REGISTRY, ConfigError
 from workflow.tmux_dispatch import build_prompt_commands
 
 _SCRIPT_COMMAND_CACHE: dict[tuple[str, str, int], click.Command] = {}
-
-
-def _command_cli_name(name: str) -> str:
-    """Convert config command names to CLI command names."""
-    return name.replace(" ", "-")
 
 
 def _build_script_command(script_name: str, cli_name: str) -> click.Command:
@@ -52,14 +48,14 @@ def _build_script_commands(config: WorkflowConfig) -> dict[str, click.Command]:
         for cmd in state_config.commands:
             if not isinstance(cmd, ScriptCommand):
                 continue
-            cli_name = _command_cli_name(cmd.name)
+            cli_name = command_cli_name(cmd.name)
             existing_script = script_targets.get(cli_name)
             if existing_script is not None and existing_script != cmd.script:
                 msg = f"CLI command {cli_name!r} is mapped to multiple scripts: {existing_script!r}, {cmd.script!r}"
                 raise ConfigError(msg)
             script_targets[cli_name] = cmd.script
     for script_name in _SCRIPT_REGISTRY:
-        cli_name = _command_cli_name(script_name)
+        cli_name = command_cli_name(script_name)
         script_targets.setdefault(cli_name, script_name)
     return {cli_name: _build_script_command(script_name, cli_name) for cli_name, script_name in script_targets.items()}
 

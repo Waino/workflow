@@ -29,23 +29,19 @@ from workflow.exceptions import (
 )
 from workflow.git_helpers import git_commit_hash, git_current_branch, git_pull
 from workflow.models import AuditLogEntry, Plan, PlanState
+from workflow.names import RepoName, command_cli_name
 from workflow.plan_resolver import resolve_plan
 from workflow.shell import console
 
 
-def _command_cli_name(name: str) -> str:
-    """Convert a human-readable command name to the CLI form."""
-    return name.replace(" ", "-")
-
-
-def _repo_for_prompt_state(state: PlanState) -> str:
+def _repo_for_prompt_state(state: PlanState) -> RepoName:
     """Return the workflow repo that owns prompt dispatch for *state*."""
     repo_by_state = {
-        PlanState.INTENT: "planner",
-        PlanState.PLANNING: "planner",
-        PlanState.IMPLEMENTING: "builder",
-        PlanState.CHECKING: "reviewer",
-        PlanState.REVIEW: "reviewer",
+        PlanState.INTENT: RepoName.planner,
+        PlanState.PLANNING: RepoName.planner,
+        PlanState.IMPLEMENTING: RepoName.builder,
+        PlanState.CHECKING: RepoName.reviewer,
+        PlanState.REVIEW: RepoName.reviewer,
     }
     try:
         return repo_by_state[state]
@@ -61,7 +57,7 @@ class _PromptTarget:
     command: PromptCommand
     state: PlanState
     agent_name: str | None
-    repo_name: str
+    repo_name: RepoName
     has_plan: bool
 
 
@@ -70,7 +66,7 @@ class _PromptContext:
     """Resolved context shared between the setup helpers and _dispatch_prompt."""
 
     agent_name: str
-    repo_name: str
+    repo_name: RepoName
     prompt: str
     audit_input_plan: str | None = None
 
@@ -322,7 +318,7 @@ def build_prompt_commands(config: WorkflowConfig) -> dict[str, click.Command]:
     """Build Click commands for all distinct prompt commands in the config."""
     prompt_commands: dict[str, click.Command] = {}
     for cmd_name, targets in _collect_prompt_targets(config).items():
-        kebab_name = _command_cli_name(cmd_name)
+        kebab_name = command_cli_name(cmd_name)
         has_plan = any(target.has_plan for target in targets)
         prompt_commands[kebab_name] = _build_prompt_command(cmd_name, kebab_name, has_plan=has_plan)
     return prompt_commands
