@@ -1,4 +1,4 @@
-"""Informational script commands: status, log, cheat, claude.md.
+"""Informational script commands: status, log, claude.md.
 
 These are placeholder implementations — full logic will be added in later plans.
 Each function is registered in the script registry on module import.
@@ -18,12 +18,6 @@ def status() -> int:
 @register_script("log")
 def log() -> int:
     """Pretty-print the audit log."""
-    return 0
-
-
-@register_script("cheat")
-def cheat() -> int:
-    """Print the workflow cheat sheet."""
     return 0
 
 

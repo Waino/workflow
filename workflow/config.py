@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
+from rich.text import Text
 
 from workflow.models import PlanState
 
@@ -17,31 +19,56 @@ CONFIG_FILENAME = "config.yaml"
 # --- Command models (discriminated union) ---
 
 
-class PromptCommand(BaseModel):
+class WorkflowStep(BaseModel, ABC):
+    """Base class for commands and manual steps."""
+
+    name: str
+
+    @abstractmethod
+    def render(self) -> Text:
+        """Render the cheatsheet representation of the workflow step."""
+
+
+class PromptCommand(WorkflowStep):
     """A command that is executed by typing it into an agent chat session."""
 
     command_type: Literal["prompt"]
-    name: str
     prompt: str
     transition: PlanState | None = None
     reminder: str | None = None
 
+    def render(self) -> Text:
+        """Render the cheatsheet representation of the workflow step."""
+        result = Text.from_markup(f"[bold]@[/bold] [light_salmon3]{self.name}[/light_salmon3]")
+        if self.transition:
+            result.append_text(Text.from_markup(" [bold]>[/bold]"))
+        return result
 
-class ScriptCommand(BaseModel):
+
+class ScriptCommand(WorkflowStep):
     """A command that is executed by the human operator via the CLI."""
 
     command_type: Literal["script"]
-    name: str
     script: str
     transition: PlanState | None = None
     reminder: str | None = None
 
+    def render(self) -> Text:
+        """Render the cheatsheet representation of the workflow step."""
+        result = Text.from_markup(f"[bold]-[/bold] [turquoise4]{self.name}[/turquoise4]")
+        if self.transition:
+            result.append_text(Text.from_markup(" [bold]>[/bold]"))
+        return result
 
-class ManualStep(BaseModel):
+
+class ManualStep(WorkflowStep):
     """An informative step in the workflow, not an actual command."""
 
     command_type: Literal["manual"]
-    name: str
+
+    def render(self) -> Text:
+        """Render the cheatsheet representation of the workflow step."""
+        return Text.from_markup(f"[steel_blue3][bold]([/bold] {self.name} [bold])[/bold][/steel_blue3]")
 
 
 Command = Annotated[PromptCommand | ScriptCommand | ManualStep, Field(discriminator="command_type")]

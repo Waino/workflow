@@ -13,6 +13,7 @@ from pathlib import Path
 
 import click
 
+import workflow.commands.cheat
 import workflow.commands.info
 import workflow.commands.workflow  # noqa: F401  — registers workflow commands
 from workflow.config import ScriptCommand, WorkflowConfig, load_config
