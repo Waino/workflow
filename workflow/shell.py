@@ -9,7 +9,9 @@ from typing import Any
 from rich.console import Console
 
 console = Console()
-"""Shared Rich console used for all CLI output."""
+"""Shared Rich console used for all CLI stdout output."""
+error_console = Console(stderr=True)
+"""Shared Rich console used for all CLI stderr output."""
 
 
 def run_command(

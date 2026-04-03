@@ -46,6 +46,12 @@ then save and close; the modified text is sent to the reviewer.
 - All agents pull before starting any command.
 - Agents have read access to the bare repo (can pull), but cannot push.
   Only the human operator pushes, enforcing a quality gate at each handoff.
+- Transitions that don't need a handoff between agents can be done by the agent itself:
+  e.g. prompts `subdivide` and `plan` transition the state but stay with `planner`.
+- Transitions that do require a handoff are placed in script commands,
+  because these can perform cross-repo git operations.
+- For example, the `push` command was specifically introduced to avoid a handoff in `build`,
+  which is a long-running prompt command.
 
 ### Planner
 - Branches from `main`, named `plan/{input_plan}`
@@ -230,19 +236,20 @@ Directory structure:
     - Use color: distinguish by markers, fade out table delimiters to gray.
 - Markers, `-` for script, `@` for prompt shorthand, `( ... )` for other, `>` for transition
 ```
-- init
-- start
-
-<------------------ planner -------------> |               | <- builder -> | <----------- reviewer --------------->
-intent                     | planning      | todo          | implementing  | checking      | done | reviews
--------------------------- | ------------- | ------------- | ------------- | ------------- | ---- | ---------------
-                           |               |               |               |               |      |                
-@ ask         | @ ask      | ( adjust )    | - implement > | ( pull )      | ( review )    |      | @ full review
-( answer )    | ( answer ) | @ critique    |               | ( branch )    | @ pr          |      | @ followthrough
-@ critique    | @ plan >   | ( revise )    |               | @ ask         | ( adjust )    |      |
-( revise )    |            | - doublecheck |               | ( answer )    | @ fix         |      |
-@ subdivide > |            | - todo >      |               | @ build >     | - doublecheck |      |
-                                                           | - push        | - accept >    |      |
+                                              Command cheatsheet
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┓
+┃ planner                   ┃               ┃ builder      ┃ reviewer      ┃                ┃ reviewer        ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━┩
+│ intent         planning   │ todo          │ implementing │ checking      │ done  rejected │ review          │
+│ ─────────────  ────────── │ ───────────── │ ──────────── │ ───────────── │ ────  ──────── │ ─────────────── │
+│ @ ask          ( adjust ) │ - implement > │ @ ask        │ ( review )    │                │ @ full review   │
+│ ( answer )     @ critique │               │ ( answer )   │ @ pr          │                │ @ followthrough │
+│ @ critique     ( revise ) │               │ @ build      │ ( adjust )    │                │ @ refresh       │
+│ ( revise )     - todo >   │               │ - push >     │ @ fix         │                │                 │
+│ @ plan >                  │               │              │ - doublecheck │                │                 │
+│ @ subdivide >             │               │              │ - accept >    │                │                 │
+│                           │               │              │ - reject >    │                │                 │
+└───────────────────────────┴───────────────┴──────────────┴───────────────┴────────────────┴─────────────────┘
 ```
 
 
@@ -290,13 +297,6 @@ Point out any decisions that have a high risk of becoming technical debt.
 Propose additional features, to improve the effectiveness, robustness, and usability of the system.
 """
 
-### @ Subdivide
-
-- prompt: workflow subdivide {path_to_plan}
-- agent: planner
-- input plan can be in any state, but typically intent or planning
-- Agent creates several new plans in state `planning`
-
 ### @ Plan
 
 - prompt: workflow plan {path_to_plan}
@@ -305,10 +305,18 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 - Agent creates a new plan in state `planning` in its own repo.
 - Planning (plan & subdivide) may benefit from being a skill
 
+### @ Subdivide
+
+- prompt: workflow subdivide {path_to_plan}
+- agent: planner
+- input plan can be in any state, but typically intent or planning
+- Agent creates several new plans in state `planning`
+
 ### Todo: Approve a plan
 
 - script: workflow todo {path_to_plan}
 - Plan must be in state `planning` in a branch on the `planner` repo.
+- Run doublecheck.
 - Push from `planner` to `bare`.
 - Pull to `master`.
 - Transition the plan to `todo`. Commit.
@@ -322,6 +330,8 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 - Plan must be in state `planning` or `todo` on the `main` branch of the `master` repo.
 - If plan is in `planning`, first perform the same push-pull-merge sequence as `todo`.
 - Transition the plan to `implementing`. Commit. Push.
+- Fetch in builder.
+- Create a new branch `feat/{plan_name}` from main in builder.
 - Print workflow reminder: "next step is: workflow ask {new_path_to_plan}". Pause briefly so it can be seen.
 - Switch to the builder's tmux window via libtmux
 
@@ -329,10 +339,7 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 
 - prompt: workflow build
 - `workflow ask {path_to_plan}` should be visible in the session history. If not: start by asking.
-- Pull.
 - Plan must be in state `implementing`.
-- Create a new branch `feat/{plan_name}`.
-- When done, transition the state to `checking`.
 - Make one or more commits (depending on the feature complexity). Do not push.
 
 ### Push
@@ -341,6 +348,7 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 - Plan must be in state `checking` on a branch in the `builder` repo.
 - Rerun the pre-commit-hook inside the sandbox.
 - Run doublecheck
+- Transition the plan to `checking`. Commit.
 - Push the branch
 - Fetch in `reviewer`.
 
@@ -349,7 +357,6 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 - prompt: workflow pr {path_to_plan}
 - May benefit from being a skill
 """
-Derive `{plan_name}` from the workflow command.
 Perform a thorough code review of the changes on the `feat/{plan_name}` branch.
 Focus on aspects such as
 software architecture,
@@ -383,7 +390,7 @@ Commit your changes. Do not modify the code.
 
 - script: workflow doublecheck {path_to_plan}
 - The checks are implemented as a reusable function (`doublecheck-func`),
-  also called as part of `push` and potentially other commands.
+  also called as part of `todo`, `push` and potentially other commands.
 - checks
     - verify that planner only touches plans, and that builder does not touch intents
     - list all added noqa and nosec comments
@@ -399,14 +406,18 @@ Commit your changes. Do not modify the code.
 - script: workflow accept {path_to_plan}
 - Push the branch from `reviewer`
 - Pull to `master`
-- Transitions plan into `done`
+- Transitions plan into `done`. Commit.
 - Merge to main
 - Push
 
 ### Reject
 
 - script: workflow reject {path_to_plan}
-- Transitions plan into `reject`
+- Push the branch from `reviewer`
+- Pull to `master`
+- Transitions plan into `reject`. Commit.
+- Merge to main
+- Push
 
 ### Full review
 
@@ -423,6 +434,18 @@ Commit your changes. Do not modify the code.
 - Go through all plans in the states `intent`, `checking`, and `done`.
 - Compare features against the codebase. List unimplemented and only partially implemented features.
 
+### Plan refresh
+
+- prompt: workflow refresh
+- Go through all plans in the states `planning` and `todo`.
+- For each target plan, check against any plans in the `done` state that have been modified after the target plan.
+- When needed, check against the implementation of the features in the codebase.
+- List all specifications that need updating due to decisions made after the target plan was written.
+    - Decisions that have since been contradicted.
+    - Decisions that were initially left open, but have since been made. Remove obsolete branches.
+    - Features that can be specified in more detail as dependencies have taken shape.
+    - Specifications that seem suboptimal in the new context.
+    - Any other necessary updates.
 
 ### New: Create a new intent
 

@@ -29,7 +29,7 @@ from workflow.models import AuditLogEntry, PlanState
 from workflow.names import AgentName, RepoName, command_cli_name
 from workflow.plan_resolver import find_all_plans, parse_plan_filename, resolve_plan
 from workflow.registry import register_script
-from workflow.shell import console, run_command
+from workflow.shell import console, error_console, run_command
 from workflow.state import transition_plan
 
 if TYPE_CHECKING:
@@ -177,7 +177,7 @@ def init(ctx: click.Context) -> None:
             (project_dir / WORKFLOW_ROOT_MARKER).touch()
         _write_script_audit_log(config.model_copy(update={"project_dir": project_dir}), "init", dry_run=dry_run)
     except (subprocess.CalledProcessError, WorkflowError) as exc:
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -229,7 +229,7 @@ def start(ctx: click.Context) -> None:
         )
         _write_script_audit_log(config, "start", dry_run=dry_run)
     except (subprocess.CalledProcessError, WorkflowError) as exc:
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -257,7 +257,7 @@ def new(ctx: click.Context, slug: str) -> None:
             _open_in_editor(intent_path)
         _write_script_audit_log(config, "new", dry_run=dry_run, output_plans=[intent_path.stem])
     except (subprocess.CalledProcessError, WorkflowError) as exc:
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -292,7 +292,7 @@ def todo(ctx: click.Context, plan_path: str) -> None:
         PlanCollisionError,
         WorkflowError,
     ) as exc:
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -342,7 +342,7 @@ def implement(ctx: click.Context, plan_path: str) -> None:
         PlanCollisionError,
         WorkflowError,
     ) as exc:
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -367,14 +367,14 @@ def doublecheck(
     dry_run: bool = ctx.obj["dry_run"]
 
     if config.project_dir is None:
-        console.print("[red]Error: not inside a workflow project directory.[/red]")
+        error_console.print("[red]Error: not inside a workflow project directory.[/red]")
         ctx.exit(1)
         return
 
     try:
         plan = _resolve_doublecheck_plan(config, plan_path)
     except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError) as exc:
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
         return
 
@@ -389,7 +389,7 @@ def doublecheck(
     try:
         results = run_doublecheck(plan, config.project_dir, config, target_repo_override=target)
     except WorkflowError as exc:
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
         return
 
@@ -501,7 +501,7 @@ def push(ctx: click.Context, plan_path: str, target_repo: AgentName) -> None:
         PlanCollisionError,
         WorkflowError,
     ) as exc:
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -539,7 +539,7 @@ def accept(ctx: click.Context, plan_path: str) -> None:
         PlanCollisionError,
         WorkflowError,
     ) as exc:
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -586,7 +586,7 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
         PlanCollisionError,
         WorkflowError,
     ) as exc:
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
         return
     ctx.exit(0)

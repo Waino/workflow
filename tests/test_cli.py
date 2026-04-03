@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from shutil import copyfile
 from typing import TYPE_CHECKING
@@ -54,6 +55,8 @@ def test_help_lists_dynamic_prompt_and_script_commands(tmp_path: Path, monkeypat
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "--help"])
 
+    if result.exit_code != 0:
+        print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
     assert "ask" in result.output
     assert "todo" in result.output
@@ -76,6 +79,8 @@ def test_script_commands_are_invokable_once_registered(tmp_path: Path, monkeypat
     monkeypatch.setitem(registry._SCRIPT_REGISTRY, "todo", fake_todo)
     result = CliRunner().invoke(main, ["--config", str(config_path), "todo"])
 
+    if result.exit_code != 0:
+        print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
     assert called == ["todo"]
 
@@ -106,6 +111,8 @@ def test_ask_resolves_planner_plan_and_dispatches_prompt(tmp_path: Path, monkeyp
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "ask", "004"])
 
+    if result.exit_code != 0:
+        print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
     assert pulls == [(tmp_path / "planner", False)]
     assert sends == [("planner", expected_prompt, False)]
@@ -137,6 +144,8 @@ def test_pr_uses_reviewer_repo_and_renders_branch_commit_and_plan(
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "pr", "004"])
 
+    if result.exit_code != 0:
+        print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
     assert pulls == [(tmp_path / "reviewer", False)]
     assert "feat/004_cli_framework" in prompts[0]
@@ -165,6 +174,8 @@ def test_full_review_works_without_plan_argument(tmp_path: Path, monkeypatch: py
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "full-review"])
 
+    if result.exit_code != 0:
+        print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
     assert prompts == [expected_prompt]
 
@@ -192,6 +203,8 @@ def test_edit_cancellation_skips_dispatch_and_audit(tmp_path: Path, monkeypatch:
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "ask", "004", "--edit"])
 
+    if result.exit_code != 0:
+        print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
     assert "Cancelled (empty prompt)." in result.output
     assert sends == []
@@ -227,6 +240,8 @@ def test_doublecheck_dry_run_resolves_planner_plan(tmp_path: Path, monkeypatch: 
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "doublecheck", "005"])
 
+    if result.exit_code != 0:
+        print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
     assert "Target repo: planner" in result.output
     assert "[-] file-scope: skipped in dry-run" in result.output
@@ -239,6 +254,8 @@ def test_doublecheck_dry_run_resolves_reviewer_plan(tmp_path: Path, monkeypatch:
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "doublecheck", "005"])
 
+    if result.exit_code != 0:
+        print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
     assert "Target repo: reviewer" in result.output
     assert "[-] git-hooks: skipped in dry-run" in result.output
@@ -253,6 +270,8 @@ def test_doublecheck_keeps_click_arguments_across_invocations(tmp_path: Path, mo
     help_result = runner.invoke(main, ["--config", str(config_path), "--help"])
     result = runner.invoke(main, ["--config", str(config_path), "--dry-run", "doublecheck", "005"])
 
+    if result.exit_code != 0:
+        print(result.stderr, file=sys.stderr)
     assert help_result.exit_code == 0
     assert result.exit_code == 0
     assert "Target repo: planner" in result.output
@@ -275,6 +294,8 @@ def test_doublecheck_prints_results_and_next_step(tmp_path: Path, monkeypatch: p
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "doublecheck", "005"])
 
+    if result.exit_code != 0:
+        print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
     assert "[✓] file-scope: ok" in result.output
     assert "[!] noqa-nosec: 1 found" in result.output

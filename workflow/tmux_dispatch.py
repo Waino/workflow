@@ -31,7 +31,7 @@ from workflow.git_helpers import git_commit_hash, git_current_branch, git_pull
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import RepoName, command_cli_name
 from workflow.plan_resolver import resolve_plan
-from workflow.shell import console
+from workflow.shell import console, error_console
 
 
 def _repo_for_prompt_state(state: PlanState) -> RepoName:
@@ -186,18 +186,18 @@ def _setup_has_plan(
     try:
         target, plan = _resolve_plan_target(config, cmd_name, plan_path_str)
     except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError, WorkflowError) as exc:
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"[red]{exc}[/red]")
         return None
     if target.agent_name is None:
-        console.print(f"Plan resolved to: {plan.path}")
-        console.print(f"[red]No agent configured for state '{plan.state.value}'.[/red]")
+        error_console.print(f"Plan resolved to: {plan.path}")
+        error_console.print(f"[red]No agent configured for state '{plan.state.value}'.[/red]")
         return None
     try:
         branch, commit = _git_metadata(target, config, dry_run=dry_run)
         rendered = _render_prompt(target.command.prompt, plan=plan, branch=branch, commit=commit)
     except WorkflowError as exc:
-        console.print(f"Plan resolved to: {plan.path}")
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"Plan resolved to: {plan.path}")
+        error_console.print(f"[red]{exc}[/red]")
         return None
     return _PromptContext(
         agent_name=target.agent_name,
@@ -218,16 +218,16 @@ def _setup_stateless(
     """
     targets = [target for target in _collect_prompt_targets(config).get(cmd_name, []) if not target.has_plan]
     if not targets:
-        console.print(f"[red]No '{cmd_name}' command found.[/red]")
+        error_console.print(f"[red]No '{cmd_name}' command found.[/red]")
         return None
     target = targets[0]
     if target.agent_name is None:
-        console.print("[red]No agent configured for review state.[/red]")
+        error_console.print("[red]No agent configured for review state.[/red]")
         return None
     try:
         rendered = _render_prompt(target.command.prompt)
     except WorkflowError as exc:
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"[red]{exc}[/red]")
         return None
     return _PromptContext(agent_name=target.agent_name, repo_name=target.repo_name, prompt=rendered)
 
@@ -245,7 +245,7 @@ def _dispatch_prompt(
     dry_run: bool = ctx.obj["dry_run"]
 
     if config.project_dir is None:
-        console.print("[red]Error: not inside a workflow project directory.[/red]")
+        error_console.print("[red]Error: not inside a workflow project directory.[/red]")
         return 1
 
     if has_plan:
@@ -265,7 +265,7 @@ def _dispatch_prompt(
     try:
         git_pull(config.project_dir / repo_name, dry_run=dry_run)
     except subprocess.CalledProcessError as exc:
-        console.print(f"[red]git pull failed in {config.project_dir / repo_name}: {exc}[/red]")
+        error_console.print(f"[red]git pull failed in {config.project_dir / repo_name}: {exc}[/red]")
         return 1
 
     if edit_mode:
@@ -278,7 +278,7 @@ def _dispatch_prompt(
     try:
         send_prompt_to_agent(agent_name, prompt, config, dry_run=dry_run)
     except WorkflowError as exc:
-        console.print(f"[red]{exc}[/red]")
+        error_console.print(f"[red]{exc}[/red]")
         return 1
 
     write_audit_log(

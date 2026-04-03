@@ -83,6 +83,12 @@ class CheatsheetTable(BaseModel):
         return outer_table
 
 
+def _format_state(state: str) -> Text:
+    if state in {"intent", "review"}:
+        return Text(state, style=Style(color="steel_blue3"))
+    return Text(state)
+
+
 @register_script("cheat")
 @click.pass_context
 def cheat(ctx: click.Context) -> int:
@@ -95,7 +101,7 @@ def cheat(ctx: click.Context) -> int:
                 header=agent or "",
                 subcolumns=[
                     SubColumn(
-                        header=state,
+                        header=_format_state(state),
                         cells=[command.render() for command in state_config.commands],
                     )
                     for state, state_config in group

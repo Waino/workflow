@@ -36,6 +36,13 @@ states:
       - command_type: manual
         name: revise
       - command_type: prompt
+        name: plan
+        prompt: |
+          Read the intent at {{ plan.path }}.
+          Write a detailed implementation plan into docs/plans/planning/.
+        transition: planning
+        reminder: critique
+      - command_type: prompt
         name: subdivide
         prompt: |
           Read the plan at {{ plan.path }}.
@@ -46,19 +53,6 @@ states:
   planning:
     agent: planner
     commands:
-      - command_type: prompt
-        name: ask
-        prompt: |
-          Read the plan at {{ plan.path }}.
-          Ask any questions until you have a clear understanding.
-      - command_type: manual
-        name: answer
-      - command_type: prompt
-        name: plan
-        prompt: |
-          Read the intent at {{ plan.path }}.
-          Write a detailed implementation plan into docs/plans/planning/.
-        transition: planning
       - command_type: manual
         name: adjust
       - command_type: prompt
@@ -71,9 +65,6 @@ states:
           Point out any decisions that have a high risk of becoming technical debt.
       - command_type: manual
         name: revise
-      - command_type: script
-        name: doublecheck
-        script: doublecheck
       - command_type: script
         name: todo
         script: todo
@@ -91,10 +82,6 @@ states:
   implementing:
     agent: builder
     commands:
-      - command_type: manual
-        name: pull
-      - command_type: manual
-        name: branch
       - command_type: prompt
         name: ask
         prompt: |
@@ -107,11 +94,11 @@ states:
         prompt: |
           Read the plan at {{ plan.path }}.
           Implement the plan. When done, transition the plan state to checking.
-        transition: checking
         reminder: push
       - command_type: script
         name: push
         script: push
+        transition: checking
         reminder: review
 
   checking:
@@ -141,6 +128,10 @@ states:
         name: accept
         script: accept
         transition: done
+      - command_type: script
+        name: reject
+        script: reject
+        transition: done
 
   done:
     agent: null
@@ -165,4 +156,15 @@ states:
           Go through all plans in the states intent, checking, and done.
           Compare features against the codebase.
           List unimplemented and only partially implemented features.
-
+      - command_type: prompt
+        name: refresh
+        prompt: |
+          Go through all plans in the states `planning` and `todo` (target plans).
+          For each target plan, check against any plans in the `done` state that have been modified after the target plan.
+          When needed, check against the implementation of the features in the codebase.
+          List all specifications that need updating due to decisions made after the target plan was written.
+            - Decisions that have since been contradicted.
+            - Decisions that were initially left open, but have since been made. Remove obsolete branches.
+            - Features that can be specified in more detail as dependencies have taken shape.
+            - Specifications that seem suboptimal in the new context.
+            - Any other necessary updates.
