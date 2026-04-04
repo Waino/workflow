@@ -33,7 +33,7 @@ from workflow.shell import console, error_console, run_command
 from workflow.state import transition_plan
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from workflow.config import Command
     from workflow.models import Plan
@@ -407,6 +407,21 @@ def doublecheck(
     ctx.exit(1 if has_failures else 0)
 
 
+def _resolve_across_repos(
+    plan_path: str,
+    project_dir: Path,
+    targets_by_repo: Mapping[str, set[PlanState] | None],
+) -> list[Plan]:
+    resolved: list[Plan] = []
+    for repo_name, expected_states in targets_by_repo.items():
+        try:
+            plan = resolve_plan(plan_path, project_dir, expected_states=expected_states, repo=repo_name)
+        except PlanNotFoundError:
+            continue
+        resolved.append(plan)
+    return resolved
+
+
 def _resolve_doublecheck_plan(config: WorkflowConfig, plan_path: str) -> Plan:
     """Resolve *plan_path* across the repos/states where `doublecheck` is configured."""
     project_dir = _require_project_dir(config)
@@ -425,22 +440,12 @@ def _resolve_doublecheck_plan(config: WorkflowConfig, plan_path: str) -> Plan:
     resolved: list[Plan] = []
     repos_searched: list[str] = []
     # Prefer states with a doublecheck command defined
-    for repo_name, expected_states in targets_by_repo.items():
-        repos_searched.append(repo_name)
-        try:
-            plan = resolve_plan(plan_path, project_dir, expected_states=expected_states, repo=repo_name)
-        except PlanNotFoundError:
-            continue
-        resolved.append(plan)
+    repos_searched.extend(targets_by_repo.keys())
+    resolved = _resolve_across_repos(plan_path, project_dir, targets_by_repo)
     # Fall back to any repo
     if not resolved:
-        for repo in RepoName:
-            repos_searched.append(repo.name)
-            try:
-                plan = resolve_plan(plan_path, project_dir, repo=repo.name)
-            except PlanNotFoundError:
-                continue
-            resolved.append(plan)
+        all_repos = {repo.name: None for repo in RepoName}
+        resolved = _resolve_across_repos(plan_path, project_dir, all_repos)
 
     if not resolved:
         raise PlanNotFoundError(plan_path, repos_searched)
