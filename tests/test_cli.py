@@ -238,7 +238,7 @@ def test_doublecheck_dry_run_resolves_planner_plan(tmp_path: Path, monkeypatch: 
     _make_plan(tmp_path, "planner", "planning", "005_plan_state_and_git.md")
     monkeypatch.chdir(tmp_path)
 
-    result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "doublecheck", "005"])
+    result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "doublecheck", "planning/005"])
 
     if result.exit_code != 0:
         print(result.stderr, file=sys.stderr)

@@ -78,15 +78,17 @@ def _collect_prompt_targets(config: WorkflowConfig) -> dict[str, list[_PromptTar
         for cmd in state_config.commands:
             if not isinstance(cmd, PromptCommand):
                 continue
-            targets.setdefault(cmd.name, []).append(
-                _PromptTarget(
-                    command=cmd,
-                    state=state,
-                    agent_name=state_config.agent,
-                    repo_name=_repo_for_prompt_state(state),
-                    has_plan=state != PlanState.REVIEW,
-                ),
-            )
+            targets.setdefault(cmd.name, [])
+            for valid_state in (state, *cmd.also_valid_in_states):
+                targets[cmd.name].append(
+                    _PromptTarget(
+                        command=cmd,
+                        state=valid_state,
+                        agent_name=state_config.agent,
+                        repo_name=_repo_for_prompt_state(valid_state),
+                        has_plan=valid_state != PlanState.REVIEW,
+                    ),
+                )
     return targets
 
 

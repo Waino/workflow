@@ -22,6 +22,8 @@ states:
         prompt: |
           Read the plan at {{ plan.path }}.
           Ask any questions until you have a clear understanding.
+        also_valid_in_states:
+          - planning
       - command_type: manual
         name: answer
       - command_type: prompt

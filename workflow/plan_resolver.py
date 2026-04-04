@@ -335,8 +335,8 @@ def resolve_plan(
     if state_hint is not None:
         matches = [p for p in matches if p.state == state_hint]
 
-    # Step 6: Filter by expected_states
-    if expected_states:
+    # Step 6: Filter by expected_states (unless state explicitly given)
+    if expected_states and state_hint is None:
         matches = [p for p in matches if p.state in expected_states]
 
     # Step 7: Disambiguate

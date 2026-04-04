@@ -145,6 +145,7 @@ def test_todo_transitions_and_prints_implement_reminder(tmp_path: Path, monkeypa
     _make_plan(tmp_path, "planner", "planning", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     calls: list[tuple[str, tuple[object, ...]]] = []
+    monkeypatch.setattr(wc, "run_doublecheck", _return([CheckResult(check_name="x", status="pass", message="ok")]))
     monkeypatch.setattr(wc, "transfer_branch_to_main", _record_args(calls, "transfer"))
     monkeypatch.setattr(wc, "transition_plan", _return(_plan("master", PlanState.TODO)))
     monkeypatch.setattr(wc, "git_commit", _record_args(calls, "commit"))

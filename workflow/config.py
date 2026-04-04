@@ -34,6 +34,9 @@ class PromptCommand(WorkflowStep):
 
     command_type: Literal["prompt"]
     prompt: str
+    also_valid_in_states: list[PlanState] = Field(default_factory=list)
+    """Allow the prompt to be used in other states, altering the typical workflow.
+    Not shown in the cheatsheet."""
     transition: PlanState | None = None
     reminder: str | None = None
 

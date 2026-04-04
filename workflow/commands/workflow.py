@@ -274,6 +274,13 @@ def todo(ctx: click.Context, plan_path: str) -> None:
     try:
         project_dir = _require_project_dir(config)
         plan = resolve_plan(plan_path, project_dir, repo=RepoName.planner, expected_states={PlanState.PLANNING})
+        results = run_doublecheck(plan, project_dir, config, target_repo_override="planner", dry_run=dry_run)
+        if not dry_run:
+            _print_results(results)
+            if any(result.status == "fail" for result in results):
+                ctx.exit(1)
+                return
+
         transfer_branch_to_main(project_dir / RepoName.planner, project_dir / RepoName.master, dry_run=dry_run)
         new_plan = transition_plan(plan, PlanState.TODO, project_dir, repo_override=RepoName.master, dry_run=dry_run)
         git_commit(
@@ -417,6 +424,7 @@ def _resolve_doublecheck_plan(config: WorkflowConfig, plan_path: str) -> Plan:
 
     resolved: list[Plan] = []
     repos_searched: list[str] = []
+    # Prefer states with a doublecheck command defined
     for repo_name, expected_states in targets_by_repo.items():
         repos_searched.append(repo_name)
         try:
@@ -424,6 +432,15 @@ def _resolve_doublecheck_plan(config: WorkflowConfig, plan_path: str) -> Plan:
         except PlanNotFoundError:
             continue
         resolved.append(plan)
+    # Fall back to any repo
+    if not resolved:
+        for repo in RepoName:
+            repos_searched.append(repo.name)
+            try:
+                plan = resolve_plan(plan_path, project_dir, repo=repo.name)
+            except PlanNotFoundError:
+                continue
+            resolved.append(plan)
 
     if not resolved:
         raise PlanNotFoundError(plan_path, repos_searched)
