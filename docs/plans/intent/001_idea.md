@@ -57,7 +57,7 @@ then save and close; the modified text is sent to the reviewer.
 - Branches from `main`, named `plan/{input_plan}`
   (e.g. `plan/003_foo` could be either for `plan 003_foo` or `subdivide 003_foo`).
 - For `critique`: if already on a branch for the plan being critiqued, commit there.
-  Otherwise, create `plan/critique/{plan_name}`.
+  Otherwise, check out or create `plan/{plan_name}`.
 - Plan branches are merged to `main` via the `todo` or `implement` scripts.
 
 ### Builder
@@ -158,29 +158,29 @@ then save and close; the modified text is sent to the reviewer.
 - The agent is only allowed to change intent files if explicitly commanded, and changes should be minimal.
 - May be loosely structured or incomplete.
 - Special transition: intent files are never moved outside of the intent subdirectory.
-  Instead, the agent writes one or more detailed plans based on the intent file and answers to questions.
+  Instead, the agent writes one or more detailed tickets based on the intent file and answers to questions.
 - Id: sequence number + slug, e.g. 001_idea or 012_frobnicator
 
 ### planning
 
 - Written by the agent.
-- Plans being drafted, before approval.
+- Tickets being drafted, before approval.
 - Id: sequence number + slug
     - The sequence number is based on the intent file used as input.
-    - If the intent to plan mapping is 1:1, use the same number and slug: intent/012_frobnicator -> planning/012_frobnicator
-    - If the intent spawns multiple plans, use a number hierarchy and a new slug, e.g.:
+    - If the intent to ticket mapping is 1:1, use the same number and slug: intent/012_frobnicator -> planning/012_frobnicator
+    - If the intent spawns multiple tickets, use a number hierarchy and a new slug, e.g.:
         intent/012_frobnicator -> planning/012.1_frobnicator_backend, planning/012.2_frobnicator_frontend
     - Exception from the above: intent/001_idea is global for the whole project.
-      Instead of making everything children of 001, the initial subdividing of 001_idea results in other top-level plans
+      Instead of making everything children of 001, the initial subdividing of 001_idea results in other top-level tickets
         intent/001_idea -> planning/002_pydantic_models, planning/003_core_algorithm, ...
 
 ### todo
 
-- Plans accepted for implementation, before implementation starts.
+- Tickets accepted for implementation, before implementation starts.
 
 ### implementing
 
-- Plans with ongoing implementation.
+- Tickets with ongoing implementation.
 
 ### checking
 
@@ -188,7 +188,7 @@ then save and close; the modified text is sent to the reviewer.
 
 ### done
 
-- Completed plans, with an accepted and merged implementation.
+- Completed tickets, with an accepted and merged implementation.
 
 ### rejected
 
@@ -203,7 +203,7 @@ then save and close; the modified text is sent to the reviewer.
 
 #### reviews/critique
 
-- Critique for intents and plans
+- Critique for intents and tickets
 - Should always reference the plan being critiqued
 - id: name of critiqued plan + timestamp
 
@@ -302,7 +302,7 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 - prompt: workflow plan {path_to_plan}
 - agent: planner
 - Input plan should be `intent`
-- Agent creates a new plan in state `planning` in its own repo.
+- Agent creates a new ticket in state `planning` in its own repo.
 - Planning (plan & subdivide) may benefit from being a skill
 
 ### @ Subdivide
@@ -310,12 +310,12 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 - prompt: workflow subdivide {path_to_plan}
 - agent: planner
 - input plan can be in any state, but typically intent or planning
-- Agent creates several new plans in state `planning`
+- Agent creates several new tickets in state `planning`
 
 ### Todo: Approve a plan
 
 - script: workflow todo {path_to_plan}
-- Plan must be in state `planning` in a branch on the `planner` repo.
+- Ticket must be in state `planning` in a branch on the `planner` repo.
 - Run doublecheck.
 - Push from `planner` to `bare`.
 - Pull to `master`.
@@ -327,7 +327,7 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 ### Implement: Schedule a plan for implementation
 
 - script: workflow implement {path_to_plan}
-- Plan must be in state `planning` or `todo` on the `main` branch of the `master` repo.
+- Ticket must be in state `planning` or `todo` on the `main` branch of the `master` repo.
 - If plan is in `planning`, first perform the same push-pull-merge sequence as `todo`.
 - Transition the plan to `implementing`. Commit. Push.
 - Fetch in builder.
@@ -339,13 +339,13 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 
 - prompt: workflow build
 - `workflow ask {path_to_plan}` should be visible in the session history. If not: start by asking.
-- Plan must be in state `implementing`.
+- Ticket must be in state `implementing`.
 - Make one or more commits (depending on the feature complexity). Do not push.
 
 ### Push
 
 - script: workflow push {path_to_plan}
-- Plan must be in state `checking` on a branch in the `builder` repo.
+- Ticket must be in state `checking` on a branch in the `builder` repo.
 - Rerun the pre-commit-hook inside the sandbox.
 - Run doublecheck
 - Transition the plan to `checking`. Commit.
@@ -406,7 +406,7 @@ Commit your changes. Do not modify the code.
 - script: workflow accept {path_to_plan}
 - Push the branch from `reviewer`
 - Pull to `master`
-- Transitions plan into `done`. Commit.
+- Transitions ticket into `done`. Commit.
 - Merge to main
 - Push
 
@@ -437,10 +437,10 @@ Commit your changes. Do not modify the code.
 ### Plan refresh
 
 - prompt: workflow refresh
-- Go through all plans in the states `planning` and `todo`.
-- For each target plan, check against any plans in the `done` state that have been modified after the target plan.
+- Go through all tickets in the states `planning` and `todo`.
+- For each target ticket, check against any tickets in the `done` state that have been modified after the target ticket.
 - When needed, check against the implementation of the features in the codebase.
-- List all specifications that need updating due to decisions made after the target plan was written.
+- List all specifications that need updating due to decisions made after the target ticket was written.
     - Decisions that have since been contradicted.
     - Decisions that were initially left open, but have since been made. Remove obsolete branches.
     - Features that can be specified in more detail as dependencies have taken shape.

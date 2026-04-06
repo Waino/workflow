@@ -473,7 +473,7 @@ def _print_results(results: list[CheckResult]) -> None:
 
 
 def _print_next_step(plan: object) -> None:
-    from workflow.models import Plan  # noqa: PLC0415
+    from workflow.models import Plan
 
     if not isinstance(plan, Plan):
         return
