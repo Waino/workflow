@@ -19,7 +19,6 @@ i1 @ plan >         --                  --
 pH ( adjust )       --                  --
 p1 @ critique       --                  --
 pH ( revise )       --                  --
-pH - doublecheck    --                  --
 pH - todo >         --                  --
 tH - implement >    --                  --
 b2 @ ask            i1 @ ask            --
@@ -27,7 +26,6 @@ bH ( answer )       i1 --               --
 b2 @ build >        iH ( answer )       --
 b2 &&               i1 @ critique       --
 b2 &&               iH ( revise )       --
-b2 --               pH - doublecheck    --
 b2 --               pH - todo >         --
 b2 --               tH - implement >    --
 cH ( review )       b2 @ ask            i1 @ ask
@@ -37,7 +35,6 @@ c3 @ fix            b2 --               iH ( answer )
 cH - doublecheck    b2 --               i1 @ critique
 cH - accept >       b2 @ build >        i1 &&
 --                  b2 &&               iH ( revise )
---                  b2 &&               pH - doublecheck
 --                  b2 &&               pH - todo >
 --                  b2 &&               tH - implement >
 --                  b2 --               b2 @ ask

@@ -17,6 +17,14 @@ states:
   intent:
     agent: planner
     commands:
+      - command_type: script
+        name: new
+        script: new
+        reminder: push
+      - command_type: script
+        name: push
+        script: push
+        reminder: ask
       - command_type: prompt
         name: ask
         prompt: |

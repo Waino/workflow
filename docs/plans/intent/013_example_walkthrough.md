@@ -1,0 +1,113 @@
+# A step-by-step walkthrough of the beginning of an example project
+
+- `workflow init`
+    - All 4 repos now have 001_idea (from initial repo) on the main branch.
+- `vim master/docs/plans/intent/001_idea.md`
+    - Last minute change to idea
+    - Manually commit to main in master
+- `workflow push 001`
+    - 001 is resolved to `master/docs/plans/intent/001_idea.md`
+        - Normally it would resolve to `planner/docs/plans/intent/001_idea.md`: need to detect that master is ahead.
+    - Push main from master to bare. Pull to planner.
+    - master, bare, and planner now have the updated idea on main
+- `workflow start`
+    - Planner is visible in the tmux split window.
+- `workflow ask 001`
+    - 001 is resolved to `planner/docs/plans/intent/001_idea.md`
+- `workflow critique 001`
+    - As a consequence, the user asks planner to update the intent, or edits it directly in the planner repo.
+    - Planner branches `plan/001_idea` and commits.
+- `workflow subdivide 001`
+    - Planner stays on `plan/001_idea`, because it is the correct branch for this command.
+    - Planner creates `planner/docs/plans/planning/002_foo.md` and `planner/docs/plans/planning/003_bar.md`.
+- `workflow subdivide 002`
+    - Planner stays on `plan/001_idea`, because it is the current branch and ahead of main.
+      There's no gain from creating multiple stacked branches for related plans.
+    - Planner creates `planner/docs/plans/planning/002.1_some_foo.md` and `planner/docs/plans/planning/002.2_more_foo.md`.
+- `workflow critique 002.1`
+- `workflow implement 002.1`
+    - 002.1 is resolved to `planner/docs/plans/planning/002.1_some_foo.md`.
+    - Push `plan/001_idea` from planner to bare. Pull to master.
+    - Transition moves `master/docs/plans/planning/002.1_some_foo.md` -> `master/docs/plans/implementing/002.1_some_foo.md`.
+    - Rotate the tmux panes so that builder is visible. Paus for a moment.
+    - Commit, merge `plan/001_idea` into main.
+    - Push main, pull to planner and builder.
+        - It is ok for `implement` to check out builder to main and pull: no work should be ongoing.
+    - master, planner, and builder now have:
+        - 002, 002.2 and 003 in state planning on main
+        - 002.1 in state implementing on main
+- `workflow ask 002.1`
+    - 002.1 is resolved to `builder/docs/plans/implementing/002.1_some_foo.md`.
+        - Problem: if we only fetch but don't modify the working tree, the file doesn't exist.
+        - Typically `master/docs/plans/implementing/002.1_some_foo.md` would exist and is most progressed,
+          and its state gives us the agent.
+        - However, master might already be checked out to something else instead, let's avoid relying on it.
+        - One solution is to check out main in builder and pull, instead of fetch.
+        - Another solution is to use git history instead of the file system.
+- `workflow build 002.1`
+    - 002.1 is resolved to `builder/docs/plans/implementing/002.1_some_foo.md`.
+    - Builder branches `feat/002.1_some_foo` from main.
+    - Builder starts working. This step takes a long time, so we'll not wait for it.
+- `workflow go planner`
+    - The human rotates the tmux panes to make planner visible.
+- `workflow critique 002.2`
+    - 002.2 is resolved to `planner/docs/plans/planning/002.2_more_foo.md`.
+    - Planner branches `plan/002.2_more_foo` and commits updates.
+- `workflow todo 002.2`
+    - Push `plan/002.2_more_foo` from planner to bare. Pull to master.
+    - Transition moves `master/docs/plans/planning/002.1_some_foo.md` -> `master/docs/plans/todo/002.1_some_foo.md`.
+    - Commit, merge `plan/002.2_more_foo` into main.
+    - Push main, pull to planner and builder.
+    - master, planner, and builder now have:
+        - 002 and 003 in state planning on main
+        - 002.2 in state todo on main
+        - 002.1 in state implementing on main
+- `workflow new baz`
+    - Branch `plan/004_baz` off main in master.
+    - Create `master/docs/plans/intent/004_baz.md`.
+    - Manually commit
+- `workflow push 004`
+    - Push branch `plan/004_baz` from master to bare. Pull to planner.
+- `workflow ask 004`
+    - 004 is resolved to `planner/docs/plans/intent/004_baz.md`.
+    - Planner checks out `plan/004_baz`
+- `workflow critique 004`
+- `workflow plan 004`
+    - Planner creates `planner/docs/plans/planning/004_baz.md`.
+- `workflow critique 004`
+    - 004 is resolved to `planner/docs/plans/planning/004_baz.md`.
+        - To critique the intent again, it would be necessary to specify `workflow critique intent/004`.
+    - Planner is on `plan/004_baz`: any changes needed can be committed there.
+- `workflow todo 004`
+    - Push from planner to bare. Pull to master.
+    - Transition to todo.
+    - Commit, merge `plan/004_baz` into main.
+    - Push main, pull to planner and fetch to builder.
+        - Builder is on a feature branch, and may not be done. Todo should fetch, not pull.
+- `workflow go builder`
+    - The build of 002.1 is done, and the agent is idle. The branch is `feat/002.1_some_foo`.
+    - The `go` command should not just rotate the tmux, but also print the git status of the target repo.
+- `workflow push 002.1`
+    - 002.1 is resolved to `builder/docs/plans/implementing/002.1_some_foo.md`
+    - Push `feat/002.1_some_foo` from builder to bare. Pull to master.
+    - Transition moves `master/docs/plans/implementing/002.1_some_foo.md` -> `master/docs/plans/checking/002.1_some_foo.md`.
+    - Rotate the tmux panes so that reviewer is visible.
+    - Commit, push, pull to builder and reviewer.
+        - Avoids leaving stale state `implementing` in builder.
+    - Still on branch `feat/002.1_some_foo`, not merged to main yet.
+- `workflow go reviewer`
+- `workflow pr 002.1`
+    - 002.1 is resolved to `reviewer/docs/plans/checking/002.1_some_foo.md`
+    - On branch `feat/002.1_some_foo`
+    - Reviewer creates `docs/plans/reviews/pr/002.1_some_foo_{commit}.md`, commits
+- `workflow fix 002.1`
+    - 002.1 is resolved to `reviewer/docs/plans/checking/002.1_some_foo.md`
+    - Reviewer fixes issues on branch `feat/002.1_some_foo`, commits
+- `workflow doublecheck 002.1`
+    - 002.1 is resolved to `reviewer/docs/plans/checking/002.1_some_foo.md`
+- `workflow accept 002.1`
+    - 002.1 is resolved to `reviewer/docs/plans/checking/002.1_some_foo.md`
+    - Push `feat/002.1_some_foo` from reviewer to bare. Pull to master.
+    - Transition moves `master/docs/plans/checking/002.1_some_foo.md` -> `master/docs/plans/done/002.1_some_foo.md`.
+    - Commit, merge `feat/002.1_some_foo` into main.
+    - Commit, push, pull to reviewer.
