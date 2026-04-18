@@ -74,6 +74,7 @@ Only when hints are missing do we need to infer the correct values.
 
 Some subcommands unambiguously resolve to a particular agent/state, e.g. `build` implies `builder`/`implementing`.
 Other subcommands leave abiguity, e.g. `ask` could be directed at either planner or builder.
+The states in which the subcommands are defined comes from the config, and is reflected on the cheatsheet.
 
 - Pros
     - Never omitted.

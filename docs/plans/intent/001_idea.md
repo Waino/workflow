@@ -453,6 +453,13 @@ Commit your changes. Do not modify the code.
 - Finds the first free sequence number (checking all states and the audit log for plans on branches).
 - Opens `docs/plans/intent/{num}_{slug}.md` using `${EDITOR}`.
 
+### Go: Modify the tmux layout
+
+- script: `workflow go [planner|builder|reviewer|manual]`
+- The argument is a tmux window name. Manual is the manual shell into builder.
+- "Rotates" the tmux layout: uses join-pane to move the control pane next to the specified target pane.
+- See 011_tmux_pane_rotation.md
+
 ### Status
 
 - script: workflow status
