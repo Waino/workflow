@@ -87,7 +87,7 @@
 - `workflow go builder`
     - The build of 002.1 is done, and the agent is idle. The branch is `feat/002.1_some_foo`.
     - The `go` command should not just rotate the tmux, but also print the git status of the target repo.
-- `workflow push 002.1`
+- `workflow check 002.1`
     - 002.1 is resolved to `builder/docs/plans/implementing/002.1_some_foo.md`
     - Push `feat/002.1_some_foo` from builder to bare. Pull to master.
     - Transition moves `master/docs/plans/implementing/002.1_some_foo.md` -> `master/docs/plans/checking/002.1_some_foo.md`.
@@ -103,7 +103,7 @@
 - `workflow fix 002.1`
     - 002.1 is resolved to `reviewer/docs/plans/checking/002.1_some_foo.md`
     - Reviewer fixes issues on branch `feat/002.1_some_foo`, commits
-- `workflow doublecheck 002.1`
+- `workflow validate 002.1`
     - 002.1 is resolved to `reviewer/docs/plans/checking/002.1_some_foo.md`
 - `workflow accept 002.1`
     - 002.1 is resolved to `reviewer/docs/plans/checking/002.1_some_foo.md`

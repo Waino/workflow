@@ -50,14 +50,22 @@ then save and close; the modified text is sent to the reviewer.
   e.g. prompts `subdivide` and `plan` transition the state but stay with `planner`.
 - Transitions that do require a handoff are placed in script commands,
   because these can perform cross-repo git operations.
-- For example, the `push` command was specifically introduced to avoid a handoff in `build`,
+- For example, the `check` command was specifically introduced to avoid a handoff in `build`,
   which is a long-running prompt command.
 
 ### Planner
-- Branches from `main`, named `plan/{input_plan}`
-  (e.g. `plan/003_foo` could be either for `plan 003_foo` or `subdivide 003_foo`).
-- For `critique`: if already on a branch for the plan being critiqued, commit there.
-  Otherwise, check out or create `plan/{plan_name}`.
+- Branch naming: `plan/{input_plan}` (e.g. `plan/003_foo` could be either for `plan 003_foo` or
+  `subdivide 003_foo`).
+- Branch selection rule: if already on a `plan/*` branch, stay on it. Otherwise, create a new
+  `plan/{input_plan}` branch from `main`.
+    - This keeps related plans created in one session (e.g. several `subdivide` outputs) on a single
+      branch, avoids nested branching, and prevents accidentally committing onto a stranded feature
+      branch the planner happens to be left on.
+    - Consequence: a branch may carry plans whose sequence numbers don't match its name (e.g.
+      `subdivide 001` produces `002`, `003`, ... on `plan/001_idea`). The plan-to-branch mapping is
+      therefore not derivable from names alone — see "Resolving the branch for a plan" in 012.
+- For `critique`: same rule applies — if already on a `plan/*` branch, commit there; otherwise create
+  `plan/{plan_name}` from main.
 - Plan branches are merged to `main` via the `todo` or `implement` scripts.
 
 ### Builder
@@ -65,7 +73,7 @@ then save and close; the modified text is sent to the reviewer.
 - Works on a single plan at a time.
 
 ### Reviewer
-- For `pr` and `fix`: works on the `feat/{plan_name}` branch (fetched from bare after `push`).
+- For `pr` and `fix`: works on the `feat/{plan_name}` branch (fetched from bare after `check`).
   Review documents and fixes are committed on the same branch. `accept` merges the whole branch to `main`.
 - For `full review` and `followthrough`: branches from `main`, named `review/{output_name}`.
 
@@ -243,12 +251,12 @@ Directory structure:
 │ intent         planning   │ todo          │ implementing │ checking      │ done  rejected │ review          │
 │ ─────────────  ────────── │ ───────────── │ ──────────── │ ───────────── │ ────  ──────── │ ─────────────── │
 │ @ ask          ( adjust ) │ - implement > │ @ ask        │ ( review )    │                │ @ full review   │
-│ ( answer )     @ critique │               │ ( answer )   │ @ pr          │                │ @ followthrough │
+│ ( answer )     @ critique │ - push        │ ( answer )   │ @ pr          │                │ @ followthrough │
 │ @ critique     ( revise ) │               │ @ build      │ ( adjust )    │                │ @ refresh       │
-│ ( revise )     - todo >   │               │ - push >     │ @ fix         │                │                 │
-│ @ plan >                  │               │              │ - doublecheck │                │                 │
+│ ( revise )     - todo >   │               │ - check >    │ @ fix         │                │                 │
+│ @ plan >                  │               │              │ - validate    │                │                 │
 │ @ subdivide >             │               │              │ - accept >    │                │                 │
-│                           │               │              │ - reject >    │                │                 │
+│ - push                    │               │              │ - reject >    │                │                 │
 └───────────────────────────┴───────────────┴──────────────┴───────────────┴────────────────┴─────────────────┘
 ```
 
@@ -316,7 +324,7 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 
 - script: workflow todo {path_to_plan}
 - Ticket must be in state `planning` in a branch on the `planner` repo.
-- Run doublecheck.
+- Run validate.
 - Push from `planner` to `bare`.
 - Pull to `master`.
 - Transition the plan to `todo`. Commit.
@@ -342,15 +350,25 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 - Ticket must be in state `implementing`.
 - Make one or more commits (depending on the feature complexity). Do not push.
 
+### Check
+
+- script: workflow check {path_to_plan}
+- Ticket must be in state `implementing` on a branch in the `builder` repo.
+- Rerun the pre-commit-hook inside the sandbox.
+- Run validate.
+- Transition the plan to `checking`. Commit.
+- Push the branch.
+- Fetch in `reviewer`.
+
 ### Push
 
 - script: workflow push {path_to_plan}
-- Ticket must be in state `checking` on a branch in the `builder` repo.
-- Rerun the pre-commit-hook inside the sandbox.
-- Run doublecheck
-- Transition the plan to `checking`. Commit.
-- Push the branch
-- Fetch in `reviewer`.
+- Generic content-push command. No state transition; used to publish manual edits.
+- Two typical uses:
+    - Push new or modified intents from master to bare, pull to planner.
+    - Push a manually modified plan in the `todo` state. No pull (no agent owns the todo state).
+- Source repo is usually `master`, but not a hard constraint (see `repo_override` in configuration).
+- Git history is authoritative for locating the latest change to push.
 
 ### @ PR Review
 
@@ -382,15 +400,17 @@ Commit your changes. Do not modify the code.
 - Path to plan may be omitted, if the review is in the session history. In that case, fix what was most recently reviewed.
 - Reviewer implements the fixes on the `feat/{plan_name}` branch.
 - Outcomes after fix:
-    1. Human runs `doublecheck` + `accept` if satisfied.
+    1. Human runs `validate` + `accept` if satisfied.
     2. Human runs `reject` if the branch is unrecoverably off-track, re-specs with lessons learned.
     3. Human continues iterating in chat, potentially with another `pr` + `fix` cycle.
 
-### Doublecheck
+### Validate
 
-- script: workflow doublecheck {path_to_plan}
-- The checks are implemented as a reusable function (`doublecheck-func`),
-  also called as part of `todo`, `push` and potentially other commands.
+- script: workflow validate {path_to_plan}
+- The checks are implemented as a reusable function (`validate-func`),
+  also called as part of `todo`, `check`, `accept` and potentially other commands.
+  Strict-state commands resolve the plan and validate its state before calling `validate-func`;
+  `validate-func` itself then operates on an already-resolved plan without re-resolving.
 - checks
     - verify that planner only touches plans, and that builder does not touch intents
     - list all added noqa and nosec comments
@@ -540,6 +560,10 @@ states:
                 Read the plan at {path_to_plan}.
                 Ask any questions until you have a clear understanding.
             - name: critique
+            - name: push
+              command_type: script
+              script: push
+              repo_override: master   # source repo differs from the agent that owns the state
             ...
     todo:
         agent: null
@@ -549,6 +573,10 @@ states:
               script: implement
               transition: implementing
 ```
+
+- `repo_override` overrides the normal agent-ownership derivation of the source repo for a command.
+  Used when a command's source repo differs from the agent that owns the state
+  (e.g. `push` acts on intents from `master`, even though planner owns the intent state).
 
 ```python
 @register_script("implement")
@@ -562,13 +590,13 @@ def implement(command: ScriptCommand, canonical_path_to_plan: Plan, ...) -> int:
 
 
 ## TODO: future work
-- additional doublecheck actions
+- additional validate actions
     - in the future: custom bandit rules
         - check that tests only read from project dir or /tmp, and only write to /tmp
         - check that tests properly mock requests and other common networking
         - check that tests mock sleep, to avoid unnecessarily slow tests
     - maybe in the future: if doing TDD, check that test and build only touch appropriate files
-- MCP to allow agents to perform some selected git operations outside the sandbox, e.g. `workflow push`
+- MCP to allow agents to perform some selected git operations outside the sandbox, e.g. `workflow check`
 - **Stretch goal: advanced tmux layout management**
     - Side-by-side split: the human's workflow shell always on the left;
       the right pane rotates to show different agents on demand.
