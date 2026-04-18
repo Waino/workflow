@@ -25,7 +25,7 @@ from workflow.git_helpers import (
     git_push,
     transfer_branch_to_main,
 )
-from workflow.models import AuditLogEntry, PlanState
+from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import AgentName, RepoName, command_cli_name
 from workflow.plan_resolver import find_all_plans, parse_plan_filename, resolve_plan
 from workflow.registry import register_script
@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from workflow.config import Command
-    from workflow.models import Plan
 
 
 def _require_project_dir(config: WorkflowConfig) -> Path:
@@ -473,8 +472,6 @@ def _print_results(results: list[CheckResult]) -> None:
 
 
 def _print_next_step(plan: object) -> None:
-    from workflow.models import Plan
-
     if not isinstance(plan, Plan):
         return
     if plan.state == PlanState.PLANNING:
