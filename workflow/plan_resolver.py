@@ -98,7 +98,7 @@ def parse_review_filename(
 
 
 def _check_collisions(plans: list[Plan]) -> None:
-    """Raise PlanCollisionError if two non-intent, non-review plans share a sequence number."""
+    """Raise PlanCollisionError if two tickets share a sequence number."""
     groups: dict[str, list[Plan]] = defaultdict(list)
     for plan in plans:
         if plan.state not in (PlanState.INTENT, PlanState.REVIEW):
@@ -310,7 +310,7 @@ def resolve_plan(
     Raises:
         PlanNotFoundError: No matching plan found.
         AmbiguousPlanError: Multiple matches and no clear winner.
-        PlanCollisionError: Two non-intent plans share the same sequence number.
+        PlanCollisionError: Two tickets share the same sequence number.
     """
     # Step 1: Absolute path fast-path
     if Path(fuzzy_path).is_absolute():

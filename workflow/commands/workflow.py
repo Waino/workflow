@@ -266,7 +266,7 @@ def new(ctx: click.Context, slug: str) -> None:
 @click.argument("plan_path")
 @click.pass_context
 def todo(ctx: click.Context, plan_path: str) -> None:
-    """Approve a plan: push from planner, pull to master, transition to todo."""
+    """Approve a ticket: push from planner, pull to master, transition to todo."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
 
@@ -308,7 +308,7 @@ def todo(ctx: click.Context, plan_path: str) -> None:
 @click.argument("plan_path")
 @click.pass_context
 def implement(ctx: click.Context, plan_path: str) -> None:
-    """Schedule a plan for implementation: transition to implementing and push."""
+    """Schedule a ticket for implementation: transition to implementing and push."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
 
@@ -530,7 +530,7 @@ def push(ctx: click.Context, plan_path: str, target_repo: AgentName) -> None:
 @click.argument("plan_path")
 @click.pass_context
 def accept(ctx: click.Context, plan_path: str) -> None:
-    """Accept a reviewed branch: push from reviewer, merge to main, transition to done."""
+    """Accept a reviewed ticket: push from reviewer, merge to main, transition to done."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
 
@@ -575,7 +575,7 @@ def accept(ctx: click.Context, plan_path: str) -> None:
 @click.argument("plan_path")
 @click.pass_context
 def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
-    """Transition a plan to the rejected state."""
+    """Transition a ticket to the rejected state."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
 

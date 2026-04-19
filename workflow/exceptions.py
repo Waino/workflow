@@ -33,10 +33,10 @@ class AmbiguousPlanError(Exception):
 
 
 class PlanCollisionError(Exception):
-    """Raised when two non-intent plans share the same sequence number with different slugs."""
+    """Raised when two tickets share the same sequence number with different slugs."""
 
     def __init__(self, sequence_number: str, colliding: list[Plan]) -> None:
-        """Store the colliding sequence number and the plans that share it."""
+        """Store the colliding sequence number and the tickets that share it."""
         self.sequence_number = sequence_number
         self.colliding = colliding
         super().__init__(f"Sequence number collision on {sequence_number!r}: {[p.slug for p in colliding]}")

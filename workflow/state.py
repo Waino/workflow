@@ -30,7 +30,7 @@ def transition_plan(
     *plan.path* is relative to *project_dir* and its first component is the repo name
     (e.g. ``planner/docs/plans/planning/005_foo.md``).  *repo_override* replaces that
     component when the transition must be performed in a different repo — in practice
-    always ``"master"``, because plans are pushed and pulled there before transitioning.
+    always ``"master"``, because tickets are pushed and pulled there before transitioning.
     """
     source_rel = plan.path if repo_override is None else _replace_repo_prefix(plan.path, repo_override)
     repo_name = source_rel.parts[0]
