@@ -134,7 +134,7 @@ class WorkflowConfig(BaseModel):
         All script command modules must be imported before load_config is called
         so that the registry is fully populated when this validator runs.
         """
-        from workflow.registry import _SCRIPT_REGISTRY, ConfigError  # noqa: PLC0415  (circular import: see docstring)
+        from workflow.registry import _SCRIPT_REGISTRY, ConfigError
 
         for state_config in self.states.values():
             for cmd in state_config.commands:
