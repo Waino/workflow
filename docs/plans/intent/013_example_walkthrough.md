@@ -22,7 +22,7 @@
     - Planner creates `planner/docs/plans/planning/002_foo.md` and `planner/docs/plans/planning/003_bar.md`.
 - `workflow subdivide 002`
     - Planner stays on `plan/001_idea`, because it is the current branch and ahead of main.
-      There's no gain from creating multiple stacked branches for related plans.
+      There's no gain from creating multiple stacked branches for related tickets.
     - Planner creates `planner/docs/plans/planning/002.1_some_foo.md` and `planner/docs/plans/planning/002.2_more_foo.md`.
 - `workflow critique 002.1`
 - `workflow implement 002.1`

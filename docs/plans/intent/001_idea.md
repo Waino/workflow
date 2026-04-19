@@ -58,19 +58,19 @@ then save and close; the modified text is sent to the reviewer.
   `subdivide 003_foo`).
 - Branch selection rule: if already on a `plan/*` branch, stay on it. Otherwise, create a new
   `plan/{input_plan}` branch from `main`.
-    - This keeps related plans created in one session (e.g. several `subdivide` outputs) on a single
+    - This keeps related tickets created in one session (e.g. several `subdivide` outputs) on a single
       branch, avoids nested branching, and prevents accidentally committing onto a stranded feature
       branch the planner happens to be left on.
-    - Consequence: a branch may carry plans whose sequence numbers don't match its name (e.g.
-      `subdivide 001` produces `002`, `003`, ... on `plan/001_idea`). The plan-to-branch mapping is
-      therefore not derivable from names alone — see "Resolving the branch for a plan" in 012.
+    - Consequence: a branch may carry tickets whose sequence numbers don't match its name (e.g.
+      `subdivide 001` produces `002`, `003`, ... on `plan/001_idea`). The ticket-to-branch mapping is
+      therefore not derivable from names alone — see "Resolving the branch for a ticket" in 012.
 - For `critique`: same rule applies — if already on a `plan/*` branch, commit there; otherwise create
   `plan/{plan_name}` from main.
 - Plan branches are merged to `main` via the `todo` or `implement` scripts.
 
 ### Builder
 - Branches from `main`, named `feat/{plan_name}`.
-- Works on a single plan at a time.
+- Works on a single ticket at a time.
 
 ### Reviewer
 - For `pr` and `fix`: works on the `feat/{plan_name}` branch (fetched from bare after `check`).
@@ -101,7 +101,7 @@ then save and close; the modified text is sent to the reviewer.
     - intent/012_frobnicator                                    # distinguish state when necessary
     - 002                                                       # sequence number is enough, when clear from context
     - intent/012                                                # state and sequence number
-- Collision validation: if two non-intent plans share the same sequence number, log a loud error.
+- Collision validation: if two tickets share the same sequence number, log a loud error.
   To refer to an intent when an agent-generated plan with the same number exists, use `intent/{number}` explicitly.
 
 ## Libraries
@@ -114,9 +114,9 @@ then save and close; the modified text is sent to the reviewer.
 - Use pathlib for path handling and globs
 - Can call out to shell tools rather than implementing heavy custom components or adding complex dependencies
 
-## Plan contents
+## Ticket contents
 
-- Plans derived from another plan should start by a reference to the input plan
+- Tickets derived from another plan should start by a reference to the input plan
     - From intent through plan or subdivide
     - From another plan through subdivide
     - From a review
@@ -200,8 +200,8 @@ then save and close; the modified text is sent to the reviewer.
 
 ### rejected
 
-- Rejected plans.
-- Plans can transition to rejected from any other state.
+- Rejected tickets.
+- Tickets can transition to rejected from any other state.
 
 ### reviews
 
@@ -217,8 +217,8 @@ then save and close; the modified text is sent to the reviewer.
 
 #### reviews/pr
 
-- Review of the implementation of a plan
-- Should always reference the plan being implemented
+- Review of the implementation of a ticket
+- Should always reference the ticket being implemented
 - id: `{plan_name}_{commit_hash}` — the commit hash allows multiple review rounds on the same branch
 
 #### reviews/full
@@ -320,24 +320,24 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 - input plan can be in any state, but typically intent or planning
 - Agent creates several new tickets in state `planning`
 
-### Todo: Approve a plan
+### Todo: Approve a ticket
 
 - script: workflow todo {path_to_plan}
 - Ticket must be in state `planning` in a branch on the `planner` repo.
 - Run validate.
 - Push from `planner` to `bare`.
 - Pull to `master`.
-- Transition the plan to `todo`. Commit.
+- Transition the ticket to `todo`. Commit.
 - Merge to `main` branch.
 - Push from `master` to `bare`.
 - Print workflow reminder: "next step is: workflow implement {new_path_to_plan}"
 
-### Implement: Schedule a plan for implementation
+### Implement: Schedule a ticket for implementation
 
 - script: workflow implement {path_to_plan}
 - Ticket must be in state `planning` or `todo` on the `main` branch of the `master` repo.
-- If plan is in `planning`, first perform the same push-pull-merge sequence as `todo`.
-- Transition the plan to `implementing`. Commit. Push.
+- If ticket is in `planning`, first perform the same push-pull-merge sequence as `todo`.
+- Transition the ticket to `implementing`. Commit. Push.
 - Fetch in builder.
 - Create a new branch `feat/{plan_name}` from main in builder.
 - Print workflow reminder: "next step is: workflow ask {new_path_to_plan}". Pause briefly so it can be seen.
@@ -356,7 +356,7 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 - Ticket must be in state `implementing` on a branch in the `builder` repo.
 - Rerun the pre-commit-hook inside the sandbox.
 - Run validate.
-- Transition the plan to `checking`. Commit.
+- Transition the ticket to `checking`. Commit.
 - Push the branch.
 - Fetch in `reviewer`.
 
@@ -435,7 +435,7 @@ Commit your changes. Do not modify the code.
 - script: workflow reject {path_to_plan}
 - Push the branch from `reviewer`
 - Pull to `master`
-- Transitions plan into `reject`. Commit.
+- Transitions ticket into `reject`. Commit.
 - Merge to main
 - Push
 
@@ -454,7 +454,7 @@ Commit your changes. Do not modify the code.
 - Go through all plans in the states `intent`, `checking`, and `done`.
 - Compare features against the codebase. List unimplemented and only partially implemented features.
 
-### Plan refresh
+### Ticket refresh
 
 - prompt: workflow refresh
 - Go through all tickets in the states `planning` and `todo`.

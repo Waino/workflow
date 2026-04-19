@@ -135,13 +135,13 @@ Caveats to cover in the implementation plan:
 3. `--all` includes stale tag refs. Normal operation is fine; if it becomes noisy, restrict to
    `refs/heads/*` and `refs/remotes/*`.
 
-## Resolving the branch for a plan
+## Resolving the branch for a ticket
 
 Some script commands (e.g. `todo`, `implement`) need to push a planner branch to bare for merging.
-The planner's branch-selection rule (see 001 §Planner) keeps related plans on a single `plan/*` branch
-and does not nest, so a plan's sequence number does not in general match the name of the branch that
+The planner's branch-selection rule (see 001 §Planner) keeps related tickets on a single `plan/*` branch
+and does not nest, so a ticket's sequence number does not in general match the name of the branch that
 holds it (e.g. `subdivide 001` puts `002`, `003`, ... on `plan/001_idea`). The branch is therefore
-resolved from git rather than from the plan name.
+resolved from git rather than from the ticket name.
 
 Two-step lookup in the planner clone:
 
