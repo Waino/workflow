@@ -24,6 +24,10 @@ def new(ctx: click.Context, slug: str) -> None:
     """Create a new intent file with the next free sequence number."""
 ```
 
+Status: a working implementation already exists in `workflow/commands/workflow.py`
+(numbering, audit-log scan, `$EDITOR` invocation). The remaining work is the
+template extraction and the `git add` step described below.
+
 ### Finding the next free sequence number
 
 - Scan all `docs/plans/` subdirectories across all states for existing sequence numbers.
@@ -34,10 +38,15 @@ def new(ctx: click.Context, slug: str) -> None:
 
 ### Opening the file
 
-- Render `docs/plans/intent/{num}_{slug}.md` from a jinja2 template (no string concatenation or long literals).
-- The template lives in the package as a resource (e.g. `workflow/templates/intent.md.j2`).
+- Render `docs/plans/intent/{num}_{slug}.md` from a jinja2 template at
+  `workflow/templates/intent.md.j2`, packaged as a resource and loaded via
+  `importlib.resources`. Replace the existing inline f-string body.
+- The starter template is intentionally bare-bones (title + Goal placeholder),
+  matching what the inline string currently produces. It will be fleshed out
+  in a future iteration as conventions for new intents settle.
 - Open the created file using `$EDITOR` (fall back to `vi` if unset).
-- Stage the created file. Don't commit.
+- Run `git add` on the created file in the `master` repo so it shows up in
+  `git status` for the human. Do not commit.
 
 ## workflow status
 
@@ -53,8 +62,12 @@ def status(ctx: click.Context) -> None:
 - Use `rich.table.Table` for formatted output.
 - Columns: sequence number, name, current state, next step(s).
 - Omit plans in `done` and `rejected` states (unless a `--all` flag is passed).
-- Next step(s) are derived from the state config: list available commands for the plan's current state.
-- Footer: print the lowest free sequence number for plans.
+- Next step(s) are derived from the state config: list available commands for the plan's
+  current state. Render each step via `WorkflowStep.render()` (the same path the cheat
+  sheet uses) so markers and colors stay consistent with `workflow cheat`.
+- Footer: print the lowest free sequence number for plans by calling
+  `_next_intent_number` (already extracted in `workflow/commands/workflow.py`); do not
+  reimplement the scan.
 
 ## workflow log
 
@@ -77,34 +90,26 @@ def log(ctx: click.Context, agent: str | None, plan: str | None,
 - Columns: timestamp, actor, command, input plan, output plans.
 - Read the single audit log file, sorted chronologically.
 - Apply filters before display.
+- For `--plan`, route the value through `resolve_plan` (added in plan 012) so fuzzy
+  paths and partial names match the same way they do for every other command. If
+  `resolve_plan` cannot uniquely identify a plan, fall back to a case-insensitive
+  substring match against `input_plan` and `output_plans` rather than erroring — the
+  command is read-only and a wider match is more useful than a hard failure.
 
 ## workflow cheat
 
-```python
-@cli.command()
-def cheat() -> None:
-    """Print the workflow cheat sheet."""
-```
-
-### Output
-
-- Construct the cheat sheet table dynamically from the command definitions in the config.
-- Each state's commands are listed in the appropriate column, with markers based on `command_type`:
-    - `-` for `script` commands
-    - `@` for `prompt` commands
-    - `( ... )` for `manual` steps
-    - `>` for transitions (commands with a `transition` field)
-- Use rich formatting with color to distinguish markers. Fade table delimiters to gray.
-- The exact layout and construction logic will be refined in a later iteration of this plan.
+Status: **done**. Implemented in `workflow/commands/cheat.py`. The table is built
+dynamically from `config.states` and each step renders itself via
+`WorkflowStep.render()` (script/prompt/manual subclasses each contribute their own
+marker and color). No further work is planned under this plan; future tweaks to
+layout or coloring should be tracked separately.
 
 ## File organization
 
-- `workflow/commands/info.py` — new, status, log, cheat commands
+- `workflow/commands/workflow.py` — `new` (alongside the other state-transition commands)
+- `workflow/commands/info.py` — `status`, `log`
+- `workflow/commands/cheat.py` — `cheat` (already done)
 - `workflow/templates/intent.md.j2` — jinja2 template for new intent files
-
-## New dependency
-
-- Add `jinja2` to project dependencies (used for templating in `new` and potentially elsewhere).
 
 ## Dependencies
 
