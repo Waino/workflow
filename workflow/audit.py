@@ -15,9 +15,25 @@ if TYPE_CHECKING:
 from pydantic import ValidationError
 from rich.console import Console
 
-from workflow.models import AuditLogEntry
+from workflow.models import AuditLogEntry, PlanState
+from workflow.names import RepoName
 
 AUDIT_LOG_FILENAME = "workflow.log.jsonl"
+
+# Map audit log `command` values to the (repo, state) the command leaves the plan in.
+# Used by the plan resolver to derive a repo/state hint from the most recent
+# audit log entry mentioning a plan. `push` is intentionally absent — generic
+# pushes are not state transitions and contribute no constraint.
+AUDIT_COMMAND_REPO_STATE: dict[str, tuple[RepoName, PlanState]] = {
+    "new": (RepoName.master, PlanState.INTENT),
+    "plan": (RepoName.planner, PlanState.PLANNING),
+    "subdivide": (RepoName.planner, PlanState.PLANNING),
+    "todo": (RepoName.master, PlanState.TODO),
+    "implement": (RepoName.master, PlanState.IMPLEMENTING),
+    "check": (RepoName.builder, PlanState.CHECKING),
+    "accept": (RepoName.master, PlanState.DONE),
+    "reject": (RepoName.master, PlanState.REJECTED),
+}
 
 _console = Console(stderr=True)
 

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from shutil import copyfile
 
 import pytest
 
-from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError
-from workflow.models import Plan, PlanState, Review, ReviewSubState
+from workflow.audit import write_audit_log
+from workflow.config import WorkflowConfig, load_config
+from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
+from workflow.models import AuditLogEntry, Plan, PlanState, Review, ReviewSubState
 from workflow.plan_resolver import (
     find_all_plans,
     find_all_plans_in_repo,
@@ -38,6 +41,12 @@ def _make_review(root: Path, repo: str, sub_state: ReviewSubState, filename: str
     p = d / filename
     p.write_text(f"# {filename}\n")
     return p
+
+
+def _make_config(tmp_path: Path) -> WorkflowConfig:
+    """Build a workflow config rooted at tmp_path using the default YAML."""
+    copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
+    return load_config(tmp_path / "config.yaml", project_dir=tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -285,130 +294,217 @@ class TestFindAllPlans:
 
 
 class TestResolvePlan:
+    """End-to-end coverage of `resolve_plan` with a real config and tmp filesystem."""
+
     # --- fuzzy name forms ---
 
     def test_seq_only(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         _make_plan(tmp_path, "master", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("002", tmp_path)
+        plan = resolve_plan("002", tmp_path, config=config)
         assert plan.slug == "pydantic_models"
 
     def test_name_only(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         _make_plan(tmp_path, "master", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("002_pydantic_models", tmp_path)
+        plan = resolve_plan("002_pydantic_models", tmp_path, config=config)
         assert plan.slug == "pydantic_models"
 
     def test_name_with_md_suffix(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         _make_plan(tmp_path, "master", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("002_pydantic_models.md", tmp_path)
+        plan = resolve_plan("002_pydantic_models.md", tmp_path, config=config)
         assert plan.slug == "pydantic_models"
 
     def test_state_and_name(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         _make_plan(tmp_path, "master", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("planning/002_pydantic_models", tmp_path)
+        plan = resolve_plan("planning/002_pydantic_models", tmp_path, config=config)
         assert plan.state == PlanState.PLANNING
 
     def test_state_and_seq(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         _make_plan(tmp_path, "master", PlanState.INTENT, "001_idea.md")
-        plan = resolve_plan("intent/001", tmp_path)
+        plan = resolve_plan("intent/001", tmp_path, config=config)
         assert plan.slug == "idea"
 
     def test_docs_plans_prefix(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         _make_plan(tmp_path, "master", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("docs/plans/planning/002_pydantic_models", tmp_path)
+        plan = resolve_plan("docs/plans/planning/002_pydantic_models", tmp_path, config=config)
         assert plan.slug == "pydantic_models"
 
     def test_repo_prefix_in_path(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         _make_plan(tmp_path, "planner", PlanState.PLANNING, "002_foo.md")
-        plan = resolve_plan("planner/docs/plans/planning/002_foo", tmp_path)
+        plan = resolve_plan("planner/docs/plans/planning/002_foo", tmp_path, config=config)
         assert plan.slug == "foo"
-
-    def test_repo_prefix_overrides_repo_param(self, tmp_path: Path) -> None:
-        _make_plan(tmp_path, "planner", PlanState.PLANNING, "002_foo.md")
-        _make_plan(tmp_path, "builder", PlanState.IMPLEMENTING, "002_bar.md")
-        # Path says planner, repo param says builder — path wins
-        plan = resolve_plan("planner/002_foo", tmp_path, repo="builder")
-        assert plan.slug == "foo"
-
-    def test_repo_parameter(self, tmp_path: Path) -> None:
-        _make_plan(tmp_path, "builder", PlanState.IMPLEMENTING, "003_bar.md")
-        plan = resolve_plan("003_bar", tmp_path, repo="builder")
-        assert plan.slug == "bar"
 
     def test_hierarchical_seq(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         _make_plan(tmp_path, "master", PlanState.TODO, "003.1_subtask.md")
-        plan = resolve_plan("003.1", tmp_path)
+        plan = resolve_plan("003.1", tmp_path, config=config)
         assert plan.slug == "subtask"
         assert plan.sequence_number == [3, 1]
 
-    # --- filtering ---
+    # --- subcommand constraint ---
 
-    def test_expected_states_filters_matches(self, tmp_path: Path) -> None:
-        _make_plan(tmp_path, "master", PlanState.INTENT, "001_foo.md")
-        _make_plan(tmp_path, "master", PlanState.PLANNING, "001_foo.md")
-        plan = resolve_plan("001_foo", tmp_path, expected_states=[PlanState.PLANNING])
-        assert plan.state == PlanState.PLANNING
+    def test_subcommand_narrows_to_repo_and_state(self, tmp_path: Path) -> None:
+        # 'check' is a script in implementing state with transition: checking and agent: builder.
+        # A plan with the same seq exists in planner/planning AND builder/checking — the
+        # subcommand picks the latter.
+        config = _make_config(tmp_path)
+        _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_foo.md")
+        _make_plan(tmp_path, "builder", PlanState.CHECKING, "005_foo.md")
+        plan = resolve_plan("005", tmp_path, config=config, command_name="check")
+        assert plan.path.parts[0] == "builder"
+        assert plan.state == PlanState.CHECKING
 
-    def test_expected_states_no_match_raises(self, tmp_path: Path) -> None:
-        _make_plan(tmp_path, "master", PlanState.INTENT, "001_foo.md")
-        with pytest.raises(PlanNotFoundError):
-            resolve_plan("001_foo", tmp_path, expected_states=[PlanState.DONE])
+    def test_subcommand_disagreement_raises_workflow_error(self, tmp_path: Path) -> None:
+        # 'check' wants builder/checking, but the explicit path says planner — empty intersection.
+        config = _make_config(tmp_path)
+        _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_foo.md")
+        with pytest.raises(WorkflowError, match="Sources disagree"):
+            resolve_plan("planner/005", tmp_path, config=config, command_name="check")
 
     # --- disambiguation ---
 
     def test_intent_vs_non_intent_prefers_non_intent(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         _make_plan(tmp_path, "master", PlanState.INTENT, "001_foo.md")
         _make_plan(tmp_path, "master", PlanState.PLANNING, "001_foo.md")
-        plan = resolve_plan("001", tmp_path)
+        plan = resolve_plan("001", tmp_path, config=config)
         assert plan.state == PlanState.PLANNING
 
     def test_two_non_intent_same_seq_ambiguous(self, tmp_path: Path) -> None:
-        # Same slug in PLANNING and IMPLEMENTING → ambiguous
+        config = _make_config(tmp_path)
         _make_plan(tmp_path, "master", PlanState.PLANNING, "002_foo.md")
         _make_plan(tmp_path, "master", PlanState.IMPLEMENTING, "002_foo.md")
         with pytest.raises(AmbiguousPlanError) as exc_info:
-            resolve_plan("002", tmp_path)
+            resolve_plan("002", tmp_path, config=config)
         assert len(exc_info.value.candidates) == 2
 
     # --- error cases ---
 
     def test_not_found_raises(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         with pytest.raises(PlanNotFoundError) as exc_info:
-            resolve_plan("999", tmp_path)
+            resolve_plan("999", tmp_path, config=config)
         assert "999" in exc_info.value.fuzzy_path
 
     def test_collision_propagates(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         _make_plan(tmp_path, "master", PlanState.PLANNING, "002_foo.md")
         _make_plan(tmp_path, "master", PlanState.IMPLEMENTING, "002_bar.md")
         with pytest.raises(PlanCollisionError):
-            resolve_plan("002", tmp_path)
+            resolve_plan("002", tmp_path, config=config)
+
+    def test_relative_review_path_not_supported(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        _make_review(tmp_path, "master", ReviewSubState.PR, "002_plan_0e6baa9.md")
+        with pytest.raises(PlanNotFoundError):
+            resolve_plan("reviews/pr/002_plan_0e6baa9", tmp_path, config=config)
 
     # --- absolute path ---
 
     def test_absolute_path_regular_plan(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         f = _make_plan(tmp_path, "master", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan(str(f), tmp_path)
+        plan = resolve_plan(str(f), tmp_path, config=config)
         assert plan.slug == "pydantic_models"
         assert plan.state == PlanState.PLANNING
         assert plan.path == Path("master/docs/plans/planning/002_pydantic_models.md")
 
     def test_absolute_path_review(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         f = _make_review(tmp_path, "master", ReviewSubState.PR, "002_plan_0e6baa9.md")
-        plan = resolve_plan(str(f), tmp_path)
+        plan = resolve_plan(str(f), tmp_path, config=config)
         assert isinstance(plan, Review)
         assert plan.review_commit == "0e6baa9"
 
     def test_absolute_path_outside_project_raises(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         outside = tmp_path.parent / "outside.md"
         outside.write_text("# outside\n")
         with pytest.raises(PlanNotFoundError):
-            resolve_plan(str(outside), tmp_path)
+            resolve_plan(str(outside), tmp_path, config=config)
 
     def test_absolute_path_nonexistent_raises(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         missing = tmp_path / "master" / "docs" / "plans" / "planning" / "999_missing.md"
         with pytest.raises(PlanNotFoundError):
-            resolve_plan(str(missing), tmp_path)
+            resolve_plan(str(missing), tmp_path, config=config)
 
     def test_absolute_path_full_review_raises(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
         f = _make_review(tmp_path, "master", ReviewSubState.FULL, "2026-03-18T14-30-00Z_0e6baa9.md")
         with pytest.raises(PlanNotFoundError):
-            resolve_plan(str(f), tmp_path)
+            resolve_plan(str(f), tmp_path, config=config)
+
+
+# ---------------------------------------------------------------------------
+# Multi-source helpers and integration with audit log
+# ---------------------------------------------------------------------------
+
+
+class TestAuditSource:
+    """The audit-log source narrows resolution to the (repo, state) of the latest mention."""
+
+    def test_audit_log_picks_most_recent_state(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        # Plan 005 exists in two locations; audit log says it was last 'check'-ed,
+        # which puts it in builder/checking.
+        _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_foo.md")
+        _make_plan(tmp_path, "builder", PlanState.CHECKING, "005_foo.md")
+        write_audit_log(
+            tmp_path,
+            AuditLogEntry(
+                timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+                actor="builder",
+                command="check",
+                input_plan="005_foo",
+            ),
+        )
+        plan = resolve_plan("005", tmp_path, config=config)
+        assert plan.path.parts[0] == "builder"
+        assert plan.state == PlanState.CHECKING
+
+    def test_audit_log_ignores_unrelated_seq(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        _make_plan(tmp_path, "master", PlanState.PLANNING, "005_foo.md")
+        write_audit_log(
+            tmp_path,
+            AuditLogEntry(
+                timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+                actor="builder",
+                command="check",
+                input_plan="999_bar",
+            ),
+        )
+        plan = resolve_plan("005", tmp_path, config=config)
+        assert plan.path.parts[0] == "master"
+        assert plan.state == PlanState.PLANNING
+
+
+class TestSubcommandSource:
+    """The subcommand source contributes (repos, states) from where the command appears."""
+
+    def test_prompt_command_contributes_repos_only(self, tmp_path: Path) -> None:
+        # 'ask' is a prompt — it contributes repos but no state constraint, so a
+        # planning-state plan in planner is still resolvable under 'ask'.
+        config = _make_config(tmp_path)
+        _make_plan(tmp_path, "planner", PlanState.PLANNING, "004_cli.md")
+        plan = resolve_plan("004", tmp_path, config=config, command_name="ask")
+        assert plan.state == PlanState.PLANNING
+        assert plan.path.parts[0] == "planner"
+
+    def test_script_with_repo_override(self, tmp_path: Path) -> None:
+        # 'push' has repo_override=master in both intent and todo. Plan exists in
+        # master/intent, and a same-seq sibling in planner/planning would be
+        # excluded by the master-only soft constraint.
+        config = _make_config(tmp_path)
+        _make_plan(tmp_path, "master", PlanState.INTENT, "005_quux.md")
+        _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_quux.md")
+        plan = resolve_plan("005", tmp_path, config=config, command_name="push")
+        assert plan.path.parts[0] == "master"
+        assert plan.state == PlanState.INTENT

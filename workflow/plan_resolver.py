@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from collections import defaultdict
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TypeVar
 
-if TYPE_CHECKING:
-    from collections.abc import Collection
+import libtmux
+import libtmux.exc
 
-from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError
+from workflow.audit import AUDIT_COMMAND_REPO_STATE, read_audit_log
+from workflow.config import PromptCommand, ScriptCommand, WorkflowConfig
+from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.models import Plan, PlanState, Review, ReviewSubState
 from workflow.names import RepoName
 
@@ -36,6 +40,12 @@ _STATE_PROGRESSION: tuple[PlanState, ...] = (
 # Minimum path depths for absolute-path parsing
 _MIN_PLAN_PARTS = 5  # (repo, docs, plans, state, filename)
 _MIN_REVIEW_PARTS = 6  # (repo, docs, plans, reviews, sub_state, filename)
+
+# Minimum path depths and field counts for git/audit parsing
+_MIN_RELATIVE_PLAN_PARTS = 4  # (docs, plans, state, filename)
+_GIT_HEADER_FIELDS = 2  # "<commit_hash> <timestamp>"
+_GIT_NAME_STATUS_FIELDS = 2  # "<status>\t<path>"
+_GIT_RENAME_FIELDS = 3  # "<status>\t<old>\t<new>"
 
 
 def _state_rank(state: PlanState) -> int:
@@ -251,6 +261,55 @@ def _disambiguate(fuzzy_path: str, matches: list[Plan], repos_searched: list[str
     raise AmbiguousPlanError(fuzzy_path, matches)
 
 
+# ---------------------------------------------------------------------------
+# Multi-source plan resolution
+# ---------------------------------------------------------------------------
+
+_T = TypeVar("_T")
+
+_ALL_REPOS: frozenset[RepoName] = frozenset(RepoName)
+_ALL_STATES: frozenset[PlanState] = frozenset(s for s in PlanState if s != PlanState.REVIEW)
+
+
+@dataclass(frozen=True)
+class _Constraint:
+    """One source's contribution to the resolver's repo and state constraints.
+
+    ``None`` on a dimension means the source is silent on that dimension and
+    contributes no constraint there.
+    """
+
+    repos: frozenset[RepoName] | None = None
+    states: frozenset[PlanState] | None = None
+
+
+@dataclass(frozen=True)
+class _PathHints:
+    """Parsed hints from the user-supplied fuzzy path."""
+
+    constraint: _Constraint
+    seq: list[int] | None
+    slug: str | None
+
+
+def _seq_to_str(seq: list[int]) -> str:
+    """Format a sequence number list as the on-disk string form."""
+    parts = [str(n) for n in seq]
+    parts[0] = parts[0].zfill(3)
+    return ".".join(parts)
+
+
+def _intersect(values: list[frozenset[_T] | None]) -> frozenset[_T] | None:
+    """Intersect non-None frozensets; return None if all are silent."""
+    non_silent = [v for v in values if v is not None]
+    if not non_silent:
+        return None
+    result = non_silent[0]
+    for v in non_silent[1:]:
+        result = result & v
+    return result
+
+
 def _extract_components(
     parts: list[str],
 ) -> tuple[RepoName | None, PlanState | None, list[int] | None, str | None]:
@@ -286,58 +345,346 @@ def _extract_components(
     return repo_hint, state_hint, seq_hint, slug_hint
 
 
+def _from_fuzzy_path(fuzzy_path: str) -> _PathHints:
+    """Parse the fuzzy path and return its constraint plus seq/slug hints."""
+    parts = [p for p in fuzzy_path.removesuffix(".md").replace("\\", "/").split("/") if p]
+    repo_hint, state_hint, seq, slug = _extract_components(parts)
+    repos = frozenset({repo_hint}) if repo_hint is not None else None
+    states = frozenset({state_hint}) if state_hint is not None else None
+    return _PathHints(constraint=_Constraint(repos=repos, states=states), seq=seq, slug=slug)
+
+
+def _agent_repo(agent: str | None, default: RepoName) -> RepoName:
+    """Resolve an agent name string into a RepoName, falling back to *default*."""
+    if agent is None:
+        return default
+    try:
+        return RepoName(agent)
+    except ValueError:
+        return default
+
+
+def _accumulate_subcommand_contribution(
+    cmd: PromptCommand | ScriptCommand,
+    state: PlanState,
+    state_config: object,
+    repos: set[RepoName],
+    states: set[PlanState],
+) -> None:
+    """Add one command's contribution to the running repos/states sets."""
+    agent = getattr(state_config, "agent", None)
+    if isinstance(cmd, PromptCommand):
+        # Prompts contribute no state constraint — agents may be asked about
+        # plans in any state (UX goal: do not enforce the workflow rigidly).
+        if agent is not None:
+            with suppress(ValueError):
+                repos.add(RepoName(agent))
+        return
+    states.add(state)
+    # Plans may already have been transitioned by the previous step's agent.
+    if cmd.transition is not None:
+        states.add(cmd.transition)
+    if cmd.repo_override is not None:
+        repos.add(cmd.repo_override)
+    else:
+        repos.add(_agent_repo(agent, RepoName.master))
+
+
+def _from_subcommand(config: WorkflowConfig, command_name: str | None) -> _Constraint:
+    """Derive a constraint from a CLI subcommand's appearances in the config.
+
+    Prompt commands contribute the agent's repo (master is implicitly excluded
+    because prompts dispatch to agents only). Script commands contribute their
+    ``repo_override`` if set, otherwise the state's agent or master. Scripts
+    also contribute the states they are defined in (plus their transition target).
+    """
+    if command_name is None:
+        return _Constraint()
+    repos: set[RepoName] = set()
+    states: set[PlanState] = set()
+    found = False
+    for state, state_config in config.states.items():
+        for cmd in state_config.commands:
+            if cmd.name != command_name or not isinstance(cmd, (PromptCommand, ScriptCommand)):
+                continue
+            found = True
+            _accumulate_subcommand_contribution(cmd, state, state_config, repos, states)
+    if not found:
+        return _Constraint()
+    return _Constraint(
+        repos=frozenset(repos) if repos else None,
+        states=frozenset(states) if states else None,
+    )
+
+
+def _parse_path_to_state(path_str: str) -> PlanState | None:
+    """Map a `docs/plans/<state>/<file>` path to its PlanState; reviews return None."""
+    parts = Path(path_str).parts
+    if len(parts) < _MIN_RELATIVE_PLAN_PARTS or parts[0] != "docs" or parts[1] != "plans":
+        return None
+    if parts[2] == "reviews":
+        return None
+    try:
+        return PlanState(parts[2])
+    except ValueError:
+        return None
+
+
+def _git_log_chosen_path(lines: list[str]) -> str | None:
+    """From the `--name-status` lines after the header, pick the path of interest."""
+    adds: list[str] = []
+    deletes: list[str] = []
+    chosen: str | None = None
+    for line in lines:
+        parts = line.split("\t")
+        status = parts[0]
+        if status.startswith("R") and len(parts) >= _GIT_RENAME_FIELDS:
+            return parts[2]
+        if status in ("A", "M") and len(parts) >= _GIT_NAME_STATUS_FIELDS:
+            chosen = parts[1]
+            if status == "A":
+                adds.append(parts[1])
+        elif status == "D" and len(parts) >= _GIT_NAME_STATUS_FIELDS:
+            deletes.append(parts[1])
+    if chosen is not None:
+        return chosen
+    # Same-commit D + A with matching basename → treat as rename to the A path.
+    for a in adds:
+        if any(Path(a).name == Path(d).name for d in deletes):
+            return a
+    return None
+
+
+def _parse_git_log_output(output: str) -> tuple[int, PlanState] | None:
+    """Parse the `--format='%H %ct' --name-status` output to (timestamp, state)."""
+    lines = [ln for ln in output.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    header = lines[0].split()
+    if len(header) < _GIT_HEADER_FIELDS:
+        return None
+    try:
+        timestamp = int(header[1])
+    except ValueError:
+        return None
+    chosen = _git_log_chosen_path(lines[1:])
+    if chosen is None:
+        return None
+    state = _parse_path_to_state(chosen)
+    if state is None:
+        return None
+    return timestamp, state
+
+
+def _git_newest_touch(repo_path: Path, seq: list[int], slug: str | None) -> tuple[int, PlanState] | None:
+    """Find the newest non-merge commit in *repo_path* touching a plan file matching seq/slug."""
+    seq_str = _seq_to_str(seq)
+    glob = f"{seq_str}_{slug}.md" if slug else f"{seq_str}_*.md"
+    pathspecs = [f":(glob)docs/plans/*/{glob}", f":(glob)docs/plans/reviews/*/{glob}"]
+    argv = [
+        "git",
+        "-C",
+        str(repo_path),
+        "log",
+        "--all",
+        "--no-merges",
+        "--max-count=1",
+        "--format=%H %ct",
+        "--name-status",
+        "--",
+        *pathspecs,
+    ]
+    try:
+        result = subprocess.run(argv, check=False, capture_output=True, text=True)  # noqa: S603
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return _parse_git_log_output(result.stdout)
+
+
+def _from_git_history(project_dir: Path, seq: list[int], slug: str | None) -> _Constraint:
+    """Pick the repo with the newest commit touching the plan file; derive its state."""
+    best: tuple[int, PlanState, RepoName] | None = None
+    for repo in RepoName:
+        repo_path = project_dir / repo
+        if not (repo_path / ".git").exists():
+            continue
+        result = _git_newest_touch(repo_path, seq, slug)
+        if result is None:
+            continue
+        timestamp, state = result
+        if best is None or timestamp > best[0]:
+            best = (timestamp, state, repo)
+    if best is None:
+        return _Constraint()
+    return _Constraint(repos=frozenset({best[2]}), states=frozenset({best[1]}))
+
+
+def _name_matches_seq(plan_name: str, seq_str: str) -> bool:
+    """Return True when *plan_name* references the same sequence number as *seq_str*."""
+    candidate = Path(plan_name).stem.split("/")[-1]
+    if "_" not in candidate:
+        return candidate == seq_str
+    num_part, _ = candidate.split("_", maxsplit=1)
+    return num_part == seq_str
+
+
+def _from_audit_log(project_dir: Path, seq: list[int]) -> _Constraint:
+    """Derive a constraint from the most recent audit entry mentioning the sequence number."""
+    seq_str = _seq_to_str(seq)
+    most_recent: tuple[RepoName, PlanState] | None = None
+    for entry in read_audit_log(project_dir):
+        names = [entry.input_plan, *entry.output_plans]
+        if not any(n is not None and _name_matches_seq(n, seq_str) for n in names):
+            continue
+        mapping = AUDIT_COMMAND_REPO_STATE.get(entry.command)
+        if mapping is not None:
+            most_recent = mapping
+    if most_recent is None:
+        return _Constraint()
+    return _Constraint(repos=frozenset({most_recent[0]}), states=frozenset({most_recent[1]}))
+
+
+def _active_tmux_repo(session_name: str) -> RepoName | None:
+    """Return the RepoName of the active window in the named tmux session, or None."""
+    try:
+        server = libtmux.Server()
+        if not server.is_alive():
+            return None
+        session = server.sessions.get(session_name=session_name, default=None)
+        if session is None:
+            return None
+        active = session.active_window
+        if active is None or active.name is None:
+            return None
+        try:
+            return RepoName(active.name)
+        except ValueError:
+            return None
+    except (OSError, libtmux.exc.LibTmuxException):
+        return None
+
+
+def _from_tmux(config: WorkflowConfig) -> _Constraint:
+    """Derive a soft repo constraint from the active tmux window, if any."""
+    repo = _active_tmux_repo(config.tmux.session_name)
+    if repo is None:
+        return _Constraint()
+    if repo == RepoName.master:
+        return _Constraint(repos=frozenset({RepoName.master}))
+    return _Constraint(repos=frozenset({repo, RepoName.master}))
+
+
+def _filesystem_matches(
+    project_dir: Path,
+    repos: frozenset[RepoName],
+    states: frozenset[PlanState],
+    seq: list[int],
+    slug: str | None,
+) -> list[Plan]:
+    """Find Plan files in the *repos* x *states* grid whose seq (and slug) match."""
+    matches: list[Plan] = []
+    for repo in repos:
+        if not (project_dir / repo).is_dir():
+            continue
+        for plan in find_all_plans_in_repo(project_dir, repo):
+            if isinstance(plan, Review):
+                continue
+            if plan.state not in states:
+                continue
+            if plan.sequence_number != seq:
+                continue
+            if slug is not None and plan.slug != slug:
+                continue
+            matches.append(plan)
+    return matches
+
+
+def _union_report(fuzzy_path: str, sources: list[tuple[str, _Constraint]]) -> WorkflowError:
+    """Build a multi-line WorkflowError listing the (repo, state) cells each source supports."""
+    contributions: dict[tuple[RepoName, PlanState], list[str]] = defaultdict(list)
+    for label, c in sources:
+        if c.repos is None and c.states is None:
+            continue
+        repos = c.repos if c.repos is not None else _ALL_REPOS
+        states = c.states if c.states is not None else _ALL_STATES
+        for r in repos:
+            for s in states:
+                contributions[(r, s)].append(label)
+    lines = [f"No matching plan for {fuzzy_path!r}. Sources disagree:"]
+    for r, s in sorted(contributions, key=lambda k: (k[0].value, k[1].value)):
+        lines.append(f"  {r}/docs/plans/{s.value}/...: {', '.join(contributions[(r, s)])}")
+    return WorkflowError("\n".join(lines))
+
+
+def _is_review_path(fuzzy_path: str) -> bool:
+    """Return True when *fuzzy_path* names a review document (any `reviews/` segment)."""
+    return "reviews" in Path(fuzzy_path.replace("\\", "/")).parts
+
+
 def resolve_plan(
     fuzzy_path: str,
     project_dir: Path,
-    expected_states: Collection[PlanState] | None = None,
-    repo: str | None = None,
+    *,
+    config: WorkflowConfig,
+    command_name: str | None = None,
 ) -> Plan:
     """Resolve a fuzzy path reference to a canonical Plan.
 
-    Args:
-        fuzzy_path: The human-provided path reference. Supported forms (most
-            to least specific): absolute path, repo/docs/plans/state/name,
-            docs/plans/state/name, state/name, name, state/seq, seq.
-        project_dir: Root of the project (contains master/, planner/, etc.).
-        expected_states: Constrain which states are valid; used to disambiguate
-            when multiple matches exist.
-        repo: Which repo to search. Defaults to 'master'. A repo prefix
-            embedded in fuzzy_path takes precedence over this parameter.
+    Combines constraints from the fuzzy path, the named CLI subcommand (if any),
+    git history across all repo clones, the audit log, and the active tmux
+    window. The result is the unique Plan whose (repo, state, sequence number)
+    triple lies in the intersection of those constraints.
 
-    Returns:
-        A Plan object with the resolved canonical path.
+    Args:
+        fuzzy_path: The user-provided path reference. Absolute paths and full
+            `repo/docs/plans/state/name` paths short-circuit further inference.
+        project_dir: Root of the project (contains master/, planner/, etc.).
+        config: Workflow configuration; provides the subcommand and tmux sources.
+        command_name: Name of the CLI subcommand being resolved. ``None`` skips
+            the subcommand source entirely.
 
     Raises:
-        PlanNotFoundError: No matching plan found.
-        AmbiguousPlanError: Multiple matches and no clear winner.
+        PlanNotFoundError: No plan matches the combined constraints.
+        AmbiguousPlanError: Multiple plans match and no clear winner.
         PlanCollisionError: Two tickets share the same sequence number.
+        WorkflowError: The constraint sources disagree (empty intersection).
     """
-    # Step 1: Absolute path fast-path
     if Path(fuzzy_path).is_absolute():
         return _resolve_absolute(fuzzy_path, project_dir)
 
-    # Step 2: Normalize — strip .md, split on forward slash, drop empty parts
-    parts = [p for p in fuzzy_path.removesuffix(".md").replace("\\", "/").split("/") if p]
+    if _is_review_path(fuzzy_path):
+        # Reviews are resolved by a separate entry point (not yet implemented).
+        raise PlanNotFoundError(fuzzy_path, [])
 
-    # Steps 3: Extract repo/state/seq/slug hints from the path components
-    repo_hint, state_hint, seq_hint, slug_hint = _extract_components(parts)
+    hints = _from_fuzzy_path(fuzzy_path)
+    if hints.seq is None:
+        raise PlanNotFoundError(fuzzy_path, [])
 
-    # Step 4: Search one repo
-    target_repo = repo_hint or repo or RepoName.master
-    plans = find_all_plans_in_repo(project_dir, target_repo)
+    # Fast path: hints already fix repo and state — skip git/audit/tmux entirely.
+    fast_repos = hints.constraint.repos
+    fast_states = hints.constraint.states
+    if fast_repos is not None and len(fast_repos) == 1 and fast_states is not None and len(fast_states) == 1:
+        matches = _filesystem_matches(project_dir, fast_repos, fast_states, hints.seq, hints.slug)
+        if matches:
+            return _disambiguate(fuzzy_path, matches, sorted(fast_repos))
 
-    # Step 5: Filter by extracted components
-    matches: list[Plan] = plans
-    if seq_hint is not None:
-        matches = [p for p in matches if p.sequence_number == seq_hint]
-    if slug_hint is not None:
-        matches = [p for p in matches if p.slug == slug_hint]
-    if state_hint is not None:
-        matches = [p for p in matches if p.state == state_hint]
+    sources: list[tuple[str, _Constraint]] = [
+        ("path", hints.constraint),
+        ("subcommand", _from_subcommand(config, command_name)),
+        ("git", _from_git_history(project_dir, hints.seq, hints.slug)),
+        ("audit", _from_audit_log(project_dir, hints.seq)),
+        ("tmux", _from_tmux(config)),
+    ]
 
-    # Step 6: Filter by expected_states (unless state explicitly given)
-    if expected_states and state_hint is None:
-        matches = [p for p in matches if p.state in expected_states]
+    repos = _intersect([c.repos for _, c in sources])
+    states = _intersect([c.states for _, c in sources])
 
-    # Step 7: Disambiguate
-    return _disambiguate(fuzzy_path, matches, [target_repo])
+    if repos == frozenset() or states == frozenset():
+        raise _union_report(fuzzy_path, sources)
+
+    effective_repos = repos if repos is not None else _ALL_REPOS
+    effective_states = states if states is not None else _ALL_STATES
+    matches = _filesystem_matches(project_dir, effective_repos, effective_states, hints.seq, hints.slug)
+    return _disambiguate(fuzzy_path, matches, sorted(effective_repos))

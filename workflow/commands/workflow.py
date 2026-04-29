@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import click
 
 from workflow.audit import read_audit_log, write_audit_log
-from workflow.config import WORKFLOW_ROOT_MARKER, ScriptCommand, WorkflowConfig
+from workflow.config import WORKFLOW_ROOT_MARKER, WorkflowConfig
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.git_helpers import (
     git_commit,
@@ -33,9 +33,26 @@ from workflow.validate import CHECK_NAMES, CheckResult, infer_target_repo
 from workflow.validate import validate as run_validate
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
     from workflow.config import Command
+
+
+# Hard state constraints for script commands
+_EXPECTED_STATES_FOR: dict[str, set[PlanState]] = {
+    "todo": {PlanState.PLANNING},
+    "implement": {PlanState.PLANNING, PlanState.TODO},
+    "check": {PlanState.CHECKING},
+    "accept": {PlanState.CHECKING},
+    "reject": set(PlanState) - {PlanState.REVIEW},
+}
+
+
+def _enforce_expected_state(plan: Plan, command_name: str) -> None:
+    expected = _EXPECTED_STATES_FOR.get(command_name)
+    if expected is None or plan.state in expected:
+        return
+    states = sorted(s.value for s in expected)
+    msg = f"{command_name!r} expects plan in {states}, got {plan.state.value!r}."
+    raise WorkflowError(msg)
 
 
 def _require_project_dir(config: WorkflowConfig) -> Path:
@@ -272,7 +289,8 @@ def todo(ctx: click.Context, plan_path: str) -> None:
 
     try:
         project_dir = _require_project_dir(config)
-        plan = resolve_plan(plan_path, project_dir, repo=RepoName.planner, expected_states={PlanState.PLANNING})
+        plan = resolve_plan(plan_path, project_dir, config=config, command_name="todo")
+        _enforce_expected_state(plan, "todo")
         results = run_validate(plan, project_dir, config, target_repo_override="planner", dry_run=dry_run)
         if not dry_run:
             _print_results(results)
@@ -314,12 +332,8 @@ def implement(ctx: click.Context, plan_path: str) -> None:
 
     try:
         project_dir = _require_project_dir(config)
-        plan = resolve_plan(
-            plan_path,
-            project_dir,
-            repo=RepoName.master,
-            expected_states={PlanState.PLANNING, PlanState.TODO},
-        )
+        plan = resolve_plan(plan_path, project_dir, config=config, command_name="implement")
+        _enforce_expected_state(plan, "implement")
         if plan.state == PlanState.PLANNING:
             plan = transition_plan(plan, PlanState.TODO, project_dir, dry_run=dry_run)
             git_commit(
@@ -378,8 +392,8 @@ def validate(
         return
 
     try:
-        plan = _resolve_validate_plan(config, plan_path)
-    except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError) as exc:
+        plan = resolve_plan(plan_path, config.project_dir, config=config)
+    except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError, WorkflowError) as exc:
         error_console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
         return
@@ -404,57 +418,6 @@ def validate(
     if not has_failures:
         _print_next_step(plan)
     ctx.exit(1 if has_failures else 0)
-
-
-def _resolve_across_repos(
-    plan_path: str,
-    project_dir: Path,
-    targets_by_repo: Mapping[str, set[PlanState] | None],
-) -> list[Plan]:
-    resolved: list[Plan] = []
-    for repo_name, expected_states in targets_by_repo.items():
-        try:
-            plan = resolve_plan(plan_path, project_dir, expected_states=expected_states, repo=repo_name)
-        except PlanNotFoundError:
-            continue
-        resolved.append(plan)
-    return resolved
-
-
-def _resolve_validate_plan(config: WorkflowConfig, plan_path: str) -> Plan:
-    """Resolve *plan_path* across the repos/states where `validate` is configured."""
-    project_dir = _require_project_dir(config)
-    targets_by_repo: dict[str, set[PlanState]] = {}
-
-    for state, state_config in config.states.items():
-        if not _state_has_validate(state_config.commands):
-            continue
-        repo_name = state_config.agent or RepoName.master
-        targets_by_repo.setdefault(repo_name, set()).add(state)
-
-    if not targets_by_repo:
-        msg = "No 'validate' command found."
-        raise WorkflowError(msg)
-
-    resolved: list[Plan] = []
-    repos_searched: list[str] = []
-    # Prefer states with a validate command defined
-    repos_searched.extend(targets_by_repo.keys())
-    resolved = _resolve_across_repos(plan_path, project_dir, targets_by_repo)
-    # Fall back to any repo
-    if not resolved:
-        all_repos = {repo.name: None for repo in RepoName}
-        resolved = _resolve_across_repos(plan_path, project_dir, all_repos)
-
-    if not resolved:
-        raise PlanNotFoundError(plan_path, repos_searched)
-    if len(resolved) > 1:
-        raise AmbiguousPlanError(plan_path, resolved)
-    return resolved[0]
-
-
-def _state_has_validate(commands: Sequence[object]) -> bool:
-    return any(isinstance(command, ScriptCommand) and command.script == "validate" for command in commands)
 
 
 def _print_results(results: list[CheckResult]) -> None:
@@ -501,7 +464,8 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName) -> None:
 
     try:
         project_dir = _require_project_dir(config)
-        plan = resolve_plan(plan_path, project_dir, repo=target_repo, expected_states={PlanState.CHECKING})
+        plan = resolve_plan(plan_path, project_dir, config=config, command_name="check")
+        _enforce_expected_state(plan, "check")
         _run_pre_commit_in_sandbox(config, target_repo, dry_run=dry_run)
         results = run_validate(plan, project_dir, config, target_repo_override=target_repo, dry_run=dry_run)
         if not dry_run:
@@ -536,7 +500,7 @@ def push(ctx: click.Context, plan_path: str) -> None:
 
     try:
         project_dir = _require_project_dir(config)
-        plan = resolve_plan(plan_path, project_dir, repo=RepoName.master)
+        plan = resolve_plan(plan_path, project_dir, config=config, command_name="push")
         repo = plan.path.parts[0]
         git_push(project_dir / repo, dry_run=dry_run)
         _write_script_audit_log(config, "push", dry_run=dry_run, input_plan=plan.name)
@@ -564,7 +528,8 @@ def accept(ctx: click.Context, plan_path: str) -> None:
 
     try:
         project_dir = _require_project_dir(config)
-        plan = resolve_plan(plan_path, project_dir, repo=RepoName.reviewer, expected_states={PlanState.CHECKING})
+        plan = resolve_plan(plan_path, project_dir, config=config, command_name="accept")
+        _enforce_expected_state(plan, "accept")
         branch = "<dry-run-branch>" if dry_run else git_current_branch(project_dir / RepoName.reviewer)
         git_push(project_dir / RepoName.reviewer, dry_run=dry_run)
         git_pull(project_dir / RepoName.master, dry_run=dry_run)
@@ -609,12 +574,8 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
 
     try:
         project_dir = _require_project_dir(config)
-        plan = resolve_plan(
-            plan_path,
-            project_dir,
-            repo=target_repo,
-            expected_states=set(PlanState) - {PlanState.REVIEW},
-        )
+        plan = resolve_plan(plan_path, project_dir, config=config)
+        _enforce_expected_state(plan, "reject")
         if plan.state == PlanState.REJECTED:
             ctx.exit(0)
             return

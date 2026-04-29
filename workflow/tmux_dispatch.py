@@ -33,18 +33,21 @@ from workflow.names import RepoName, command_cli_name
 from workflow.plan_resolver import resolve_plan
 from workflow.shell import console, error_console
 
+# Reverse map: which workflow repo serves each prompt-eligible plan state.
+_REPO_FOR_PROMPT_STATE: dict[PlanState, RepoName] = {
+    PlanState.INTENT: RepoName.planner,
+    PlanState.PLANNING: RepoName.planner,
+    PlanState.TODO: RepoName.master,
+    PlanState.IMPLEMENTING: RepoName.builder,
+    PlanState.CHECKING: RepoName.reviewer,
+    PlanState.REVIEW: RepoName.reviewer,
+}
+
 
 def _repo_for_prompt_state(state: PlanState) -> RepoName:
     """Return the workflow repo that owns prompt dispatch for *state*."""
-    repo_by_state = {
-        PlanState.INTENT: RepoName.planner,
-        PlanState.PLANNING: RepoName.planner,
-        PlanState.IMPLEMENTING: RepoName.builder,
-        PlanState.CHECKING: RepoName.reviewer,
-        PlanState.REVIEW: RepoName.reviewer,
-    }
     try:
-        return repo_by_state[state]
+        return _REPO_FOR_PROMPT_STATE[state]
     except KeyError as exc:
         msg = f"Prompt dispatch is not supported for state '{state.value}'."
         raise WorkflowError(msg) from exc
@@ -78,17 +81,15 @@ def _collect_prompt_targets(config: WorkflowConfig) -> dict[str, list[_PromptTar
         for cmd in state_config.commands:
             if not isinstance(cmd, PromptCommand):
                 continue
-            targets.setdefault(cmd.name, [])
-            for valid_state in (state, *cmd.also_valid_in_states):
-                targets[cmd.name].append(
-                    _PromptTarget(
-                        command=cmd,
-                        state=valid_state,
-                        agent_name=state_config.agent,
-                        repo_name=_repo_for_prompt_state(valid_state),
-                        has_plan=valid_state != PlanState.REVIEW,
-                    ),
-                )
+            targets.setdefault(cmd.name, []).append(
+                _PromptTarget(
+                    command=cmd,
+                    state=state,
+                    agent_name=state_config.agent,
+                    repo_name=_repo_for_prompt_state(state),
+                    has_plan=state != PlanState.REVIEW,
+                ),
+            )
     return targets
 
 
@@ -127,36 +128,20 @@ def _resolve_plan_target(
     cmd_name: str,
     plan_path_str: str,
 ) -> tuple[_PromptTarget, Plan]:
-    """Resolve the plan and prompt target for a plan-based prompt command."""
+    """Resolve the plan and pick the prompt target for *cmd_name* in the plan's repo."""
     assert config.project_dir is not None
     targets = [target for target in _collect_prompt_targets(config).get(cmd_name, []) if target.has_plan]
     if not targets:
         msg = f"No '{cmd_name}' command found."
         raise WorkflowError(msg)
-    targets_by_repo: dict[str, dict[PlanState, _PromptTarget]] = {}
+
+    plan = resolve_plan(plan_path_str, config.project_dir, config=config, command_name=cmd_name)
+    plan_repo = plan.path.parts[0]
     for target in targets:
-        targets_by_repo.setdefault(target.repo_name, {})[target.state] = target
-
-    resolved: list[tuple[_PromptTarget, Plan]] = []
-    repos_searched: list[str] = []
-    for repo_name, repo_targets in targets_by_repo.items():
-        repos_searched.append(repo_name)
-        try:
-            plan = resolve_plan(
-                plan_path_str,
-                config.project_dir,
-                expected_states=repo_targets.keys(),
-                repo=repo_name,
-            )
-        except PlanNotFoundError:
-            continue
-        resolved.append((repo_targets[plan.state], plan))
-
-    if not resolved:
-        raise PlanNotFoundError(plan_path_str, repos_searched)
-    if len(resolved) > 1:
-        raise AmbiguousPlanError(plan_path_str, [plan for _, plan in resolved])
-    return resolved[0]
+        if target.repo_name == plan_repo:
+            return target, plan
+    # Fall back to the first defined target — the resolver already restricted to valid repos.
+    return targets[0], plan
 
 
 def _git_metadata(target: _PromptTarget, config: WorkflowConfig, *, dry_run: bool) -> tuple[str, str]:
