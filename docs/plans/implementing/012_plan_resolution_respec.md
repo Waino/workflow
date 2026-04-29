@@ -239,12 +239,15 @@ Implements intent §"Git history as an information source":
 def _git_newest_touch(
     repo_path: Path, seq: int, slug: str | None,
 ) -> tuple[int, PlanState, Path] | None:
-    """Run `git log --all --no-merges --max-count=1 --format='%H %ct' --name-status`
-    with `:(glob)docs/plans/*/<filename>.md` pathspecs and parse the newest
-    commit's path-status line into (committer_timestamp, state, resolved_path).
+    """Finds the newest commit touching a file matching the glob
+    `docs/plans/*/<filename>.md`.
     Returns None when no commit touched the file in this repo.
     """
 ```
+
+Run `git log --all --no-merges --max-count=1 --format='%H %ct' --name-status`
+with `:(glob)docs/plans/*/<filename>.md` pathspecs and parse the newest
+commit's path-status line into (committer_timestamp, state, resolved_path).
 
 Runs once per repo (master/planner/builder/reviewer). The repo with the
 highest timestamp wins; its parsed state is the git-source state constraint.
