@@ -13,8 +13,8 @@ import workflow.commands.workflow as wc
 from workflow import main
 from workflow.audit import write_audit_log
 from workflow.config import WORKFLOW_ROOT_MARKER
-from workflow.doublecheck import CheckResult
 from workflow.models import AuditLogEntry, Plan, PlanState
+from workflow.validate import CheckResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -145,7 +145,7 @@ def test_todo_transitions_and_prints_implement_reminder(tmp_path: Path, monkeypa
     _make_plan(tmp_path, "planner", "planning", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     calls: list[tuple[str, tuple[object, ...]]] = []
-    monkeypatch.setattr(wc, "run_doublecheck", _return([CheckResult(check_name="x", status="pass", message="ok")]))
+    monkeypatch.setattr(wc, "run_validate", _return([CheckResult(check_name="x", status="pass", message="ok")]))
     monkeypatch.setattr(wc, "transfer_branch_to_main", _record_args(calls, "transfer"))
     monkeypatch.setattr(wc, "transition_plan", _return(_plan("master", PlanState.TODO)))
     monkeypatch.setattr(wc, "git_commit", _record_args(calls, "commit"))
@@ -179,7 +179,7 @@ def test_push_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkeyp
     monkeypatch.chdir(tmp_path)
     calls: list[list[str]] = []
     monkeypatch.setattr(wc, "run_command", _record_command(calls))
-    monkeypatch.setattr(wc, "run_doublecheck", _return([CheckResult(check_name="x", status="pass", message="ok")]))
+    monkeypatch.setattr(wc, "run_validate", _return([CheckResult(check_name="x", status="pass", message="ok")]))
     monkeypatch.setattr(wc, "git_push", _noop)
     monkeypatch.setattr(wc, "git_fetch", _noop)
 

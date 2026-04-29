@@ -12,8 +12,8 @@ from click.testing import CliRunner
 import workflow.commands.workflow as workflow_commands
 from workflow import main, registry, tmux_dispatch
 from workflow.config import WORKFLOW_ROOT_MARKER
-from workflow.doublecheck import CheckResult
 from workflow.exceptions import WorkflowError
+from workflow.validate import CheckResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -233,12 +233,12 @@ def test_tmux_failures_are_reported_without_traceback(tmp_path: Path, monkeypatc
     assert "Traceback" not in result.output
 
 
-def test_doublecheck_dry_run_resolves_planner_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_dry_run_resolves_planner_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "planner", "planning", "005_plan_state_and_git.md")
     monkeypatch.chdir(tmp_path)
 
-    result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "doublecheck", "planning/005"])
+    result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "validate", "planning/005"])
 
     if result.exit_code != 0:
         print(result.stderr, file=sys.stderr)
@@ -247,12 +247,12 @@ def test_doublecheck_dry_run_resolves_planner_plan(tmp_path: Path, monkeypatch: 
     assert "[-] file-scope: skipped in dry-run" in result.output
 
 
-def test_doublecheck_dry_run_resolves_reviewer_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_dry_run_resolves_reviewer_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "reviewer", "checking", "005_plan_state_and_git.md")
     monkeypatch.chdir(tmp_path)
 
-    result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "doublecheck", "005"])
+    result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "validate", "005"])
 
     if result.exit_code != 0:
         print(result.stderr, file=sys.stderr)
@@ -261,14 +261,14 @@ def test_doublecheck_dry_run_resolves_reviewer_plan(tmp_path: Path, monkeypatch:
     assert "[-] git-hooks: skipped in dry-run" in result.output
 
 
-def test_doublecheck_keeps_click_arguments_across_invocations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_keeps_click_arguments_across_invocations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "planner", "planning", "005_plan_state_and_git.md")
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
 
     help_result = runner.invoke(main, ["--config", str(config_path), "--help"])
-    result = runner.invoke(main, ["--config", str(config_path), "--dry-run", "doublecheck", "005"])
+    result = runner.invoke(main, ["--config", str(config_path), "--dry-run", "validate", "005"])
 
     if result.exit_code != 0:
         print(result.stderr, file=sys.stderr)
@@ -277,12 +277,12 @@ def test_doublecheck_keeps_click_arguments_across_invocations(tmp_path: Path, mo
     assert "Target repo: planner" in result.output
 
 
-def test_doublecheck_prints_results_and_next_step(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_prints_results_and_next_step(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "planner", "planning", "005_plan_state_and_git.md")
     monkeypatch.chdir(tmp_path)
 
-    def fake_doublecheck(*_args: object, **_kwargs: object) -> list[CheckResult]:
+    def fake_validate(*_args: object, **_kwargs: object) -> list[CheckResult]:
         return [
             CheckResult(check_name="file-scope", status="pass", message="ok"),
             CheckResult(check_name="noqa-nosec", status="warn", message="1 found", details=["# noqa"]),
@@ -290,9 +290,9 @@ def test_doublecheck_prints_results_and_next_step(tmp_path: Path, monkeypatch: p
             CheckResult(check_name="claude-md", status="pass", message="ok"),
         ]
 
-    monkeypatch.setattr(workflow_commands, "run_doublecheck", fake_doublecheck)
+    monkeypatch.setattr(workflow_commands, "run_validate", fake_validate)
 
-    result = CliRunner().invoke(main, ["--config", str(config_path), "doublecheck", "005"])
+    result = CliRunner().invoke(main, ["--config", str(config_path), "validate", "005"])
 
     if result.exit_code != 0:
         print(result.stderr, file=sys.stderr)

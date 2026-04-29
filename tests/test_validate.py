@@ -1,4 +1,4 @@
-"""Tests for workflow.doublecheck."""
+"""Tests for workflow.validate."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-import workflow.doublecheck as dc
+import workflow.validate as dc
 from workflow.config import AgentConfig, StateConfig, WorkflowConfig
 from workflow.exceptions import WorkflowError
 from workflow.models import Plan, PlanState
@@ -129,16 +129,16 @@ def test_check_claude_md_fails_when_file_modified_on_branch(tmp_path: Path) -> N
     assert result.message == "CLAUDE.md was modified on this branch"
 
 
-def test_doublecheck_wraps_fetch_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_wraps_fetch_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _config(tmp_path)
     (tmp_path / "planner").mkdir()
     monkeypatch.setattr(dc, "git_fetch", lambda _repo: (_ for _ in ()).throw(subprocess.CalledProcessError(1, ["git"])))
 
     with pytest.raises(WorkflowError, match="git fetch failed"):
-        dc.doublecheck(_plan(PlanState.PLANNING, "planner"), tmp_path, config)
+        dc.validate(_plan(PlanState.PLANNING, "planner"), tmp_path, config)
 
 
-def test_doublecheck_wraps_diff_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_wraps_diff_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _config(tmp_path)
     (tmp_path / "planner").mkdir()
     monkeypatch.setattr(dc, "git_fetch", lambda _repo: None)
@@ -149,4 +149,4 @@ def test_doublecheck_wraps_diff_failure(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(dc, "git_diff_branch", raise_diff)
 
     with pytest.raises(WorkflowError, match="git diff failed"):
-        dc.doublecheck(_plan(PlanState.PLANNING, "planner"), tmp_path, config)
+        dc.validate(_plan(PlanState.PLANNING, "planner"), tmp_path, config)

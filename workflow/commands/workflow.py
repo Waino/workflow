@@ -13,8 +13,6 @@ import click
 
 from workflow.audit import read_audit_log, write_audit_log
 from workflow.config import WORKFLOW_ROOT_MARKER, ScriptCommand, WorkflowConfig
-from workflow.doublecheck import CHECK_NAMES, CheckResult, infer_target_repo
-from workflow.doublecheck import doublecheck as run_doublecheck
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.git_helpers import (
     git_commit,
@@ -31,6 +29,8 @@ from workflow.plan_resolver import find_all_plans, parse_plan_filename, resolve_
 from workflow.registry import register_script
 from workflow.shell import console, error_console, run_command
 from workflow.state import transition_plan
+from workflow.validate import CHECK_NAMES, CheckResult, infer_target_repo
+from workflow.validate import validate as run_validate
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -273,7 +273,7 @@ def todo(ctx: click.Context, plan_path: str) -> None:
     try:
         project_dir = _require_project_dir(config)
         plan = resolve_plan(plan_path, project_dir, repo=RepoName.planner, expected_states={PlanState.PLANNING})
-        results = run_doublecheck(plan, project_dir, config, target_repo_override="planner", dry_run=dry_run)
+        results = run_validate(plan, project_dir, config, target_repo_override="planner", dry_run=dry_run)
         if not dry_run:
             _print_results(results)
             if any(result.status == "fail" for result in results):
@@ -354,7 +354,7 @@ def implement(ctx: click.Context, plan_path: str) -> None:
     ctx.exit(0)
 
 
-@register_script("doublecheck")
+@register_script("validate")
 @click.pass_context
 @click.option(
     "--target-repo",
@@ -363,7 +363,7 @@ def implement(ctx: click.Context, plan_path: str) -> None:
     help="Override the target repo (default: inferred from plan state).",
 )
 @click.argument("plan_path")
-def doublecheck(
+def validate(
     ctx: click.Context,
     plan_path: str,
     target_repo: RepoName | None,
@@ -378,7 +378,7 @@ def doublecheck(
         return
 
     try:
-        plan = _resolve_doublecheck_plan(config, plan_path)
+        plan = _resolve_validate_plan(config, plan_path)
     except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError) as exc:
         error_console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
@@ -393,7 +393,7 @@ def doublecheck(
         return
 
     try:
-        results = run_doublecheck(plan, config.project_dir, config, target_repo_override=target)
+        results = run_validate(plan, config.project_dir, config, target_repo_override=target)
     except WorkflowError as exc:
         error_console.print(f"[red]{exc}[/red]")
         ctx.exit(1)
@@ -421,24 +421,24 @@ def _resolve_across_repos(
     return resolved
 
 
-def _resolve_doublecheck_plan(config: WorkflowConfig, plan_path: str) -> Plan:
-    """Resolve *plan_path* across the repos/states where `doublecheck` is configured."""
+def _resolve_validate_plan(config: WorkflowConfig, plan_path: str) -> Plan:
+    """Resolve *plan_path* across the repos/states where `validate` is configured."""
     project_dir = _require_project_dir(config)
     targets_by_repo: dict[str, set[PlanState]] = {}
 
     for state, state_config in config.states.items():
-        if not _state_has_doublecheck(state_config.commands):
+        if not _state_has_validate(state_config.commands):
             continue
         repo_name = state_config.agent or RepoName.master
         targets_by_repo.setdefault(repo_name, set()).add(state)
 
     if not targets_by_repo:
-        msg = "No 'doublecheck' command found."
+        msg = "No 'validate' command found."
         raise WorkflowError(msg)
 
     resolved: list[Plan] = []
     repos_searched: list[str] = []
-    # Prefer states with a doublecheck command defined
+    # Prefer states with a validate command defined
     repos_searched.extend(targets_by_repo.keys())
     resolved = _resolve_across_repos(plan_path, project_dir, targets_by_repo)
     # Fall back to any repo
@@ -453,8 +453,8 @@ def _resolve_doublecheck_plan(config: WorkflowConfig, plan_path: str) -> Plan:
     return resolved[0]
 
 
-def _state_has_doublecheck(commands: Sequence[object]) -> bool:
-    return any(isinstance(command, ScriptCommand) and command.script == "doublecheck" for command in commands)
+def _state_has_validate(commands: Sequence[object]) -> bool:
+    return any(isinstance(command, ScriptCommand) and command.script == "validate" for command in commands)
 
 
 def _print_results(results: list[CheckResult]) -> None:
@@ -503,7 +503,7 @@ def push(ctx: click.Context, plan_path: str, target_repo: AgentName) -> None:
         project_dir = _require_project_dir(config)
         plan = resolve_plan(plan_path, project_dir, repo=target_repo, expected_states={PlanState.CHECKING})
         _run_pre_commit_in_sandbox(config, target_repo, dry_run=dry_run)
-        results = run_doublecheck(plan, project_dir, config, target_repo_override=target_repo, dry_run=dry_run)
+        results = run_validate(plan, project_dir, config, target_repo_override=target_repo, dry_run=dry_run)
         if not dry_run:
             _print_results(results)
             if any(result.status == "fail" for result in results):

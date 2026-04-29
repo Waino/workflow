@@ -132,8 +132,8 @@ states:
         prompt: |
           Fix the issues identified in the most recent review.
       - command_type: script
-        name: doublecheck
-        script: doublecheck
+        name: validate
+        script: validate
       - command_type: script
         name: accept
         script: accept

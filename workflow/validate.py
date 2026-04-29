@@ -1,7 +1,7 @@
-"""Doublecheck verification suite.
+"""Validate verification suite.
 
 Implements the pre-merge checks and exposes them via the reusable
-``doublecheck`` function.  The CLI command is registered in
+``validate`` function.  The CLI command is registered in
 ``workflow/commands/workflow.py``.
 """
 
@@ -31,7 +31,7 @@ CHECK_NAMES: list[str] = ["file-scope", "noqa-nosec", "git-hooks", "claude-md"]
 
 
 class CheckResult(BaseModel):
-    """Result of a single doublecheck verification."""
+    """Result of a single validate verification."""
 
     check_name: str
     status: Literal["pass", "warn", "fail"]
@@ -62,7 +62,7 @@ def infer_target_repo(
     return state_cfg.agent
 
 
-def doublecheck(
+def validate(
     plan: Plan,
     project_dir: Path,
     config: WorkflowConfig,

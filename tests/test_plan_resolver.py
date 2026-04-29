@@ -251,7 +251,7 @@ class TestFindAllPlans:
         plans = find_all_plans(tmp_path)
         assert len(plans) == 2
 
-    def test_doublecheck_planner_and_reviewer_different_states(self, tmp_path: Path) -> None:
+    def test_validate_planner_and_reviewer_different_states(self, tmp_path: Path) -> None:
         # Plan in planner at CHECKING, same plan in reviewer at CHECKING too
         # (same slug + seq): find_all_plans keeps one (first wins on tie)
         # resolve_plan would raise AmbiguousPlanError, but that's not implemented yet
