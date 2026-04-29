@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, model_validator
 from rich.text import Text
 
 from workflow.models import PlanState
+from workflow.names import RepoName
 
 WORKFLOW_ROOT_MARKER = ".workflow_root"
 CONFIG_FILENAME = "config.yaml"
@@ -55,6 +56,7 @@ class ScriptCommand(WorkflowStep):
     script: str
     transition: PlanState | None = None
     reminder: str | None = None
+    repo_override: RepoName | None = None
 
     def render(self) -> Text:
         """Render the cheatsheet representation of the workflow step."""

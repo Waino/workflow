@@ -24,6 +24,7 @@ states:
       - command_type: script
         name: push
         script: push
+        repo_override: master
         reminder: ask
       - command_type: prompt
         name: ask
@@ -88,6 +89,10 @@ states:
         script: implement
         transition: implementing
         reminder: ask
+      - command_type: script
+        name: push
+        script: push
+        repo_override: master
 
   implementing:
     agent: builder
@@ -104,10 +109,10 @@ states:
         prompt: |
           Read the plan at {{ plan.path }}.
           Implement the plan. When done, transition the plan state to checking.
-        reminder: push
+        reminder: check
       - command_type: script
-        name: push
-        script: push
+        name: check
+        script: check
         transition: checking
         reminder: review
 

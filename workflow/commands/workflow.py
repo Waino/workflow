@@ -484,7 +484,7 @@ def _print_next_step(plan: object) -> None:
         )
 
 
-@register_script("push")
+@register_script("check")
 @click.option(
     "--target-repo",
     type=click.Choice(AgentName),
@@ -494,8 +494,8 @@ def _print_next_step(plan: object) -> None:
 )
 @click.argument("plan_path")
 @click.pass_context
-def push(ctx: click.Context, plan_path: str, target_repo: AgentName) -> None:
-    """Push a branch after verification and fetch it in reviewer."""
+def check(ctx: click.Context, plan_path: str, target_repo: AgentName) -> None:
+    """Hand off a ticket from builder to reviewer: push branch, fetch in reviewer."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
 
@@ -511,8 +511,36 @@ def push(ctx: click.Context, plan_path: str, target_repo: AgentName) -> None:
                 return
         git_push(project_dir / target_repo, dry_run=dry_run)
         git_fetch(project_dir / RepoName.reviewer, dry_run=dry_run)
+        _write_script_audit_log(config, "check", dry_run=dry_run, input_plan=plan.name)
+        _print_command_reminder(config, PlanState.IMPLEMENTING, "check", plan.name)
+    except (
+        subprocess.CalledProcessError,
+        PlanNotFoundError,
+        AmbiguousPlanError,
+        PlanCollisionError,
+        WorkflowError,
+    ) as exc:
+        error_console.print(f"[red]{exc}[/red]")
+        ctx.exit(1)
+        return
+    ctx.exit(0)
+
+
+@register_script("push")
+@click.argument("plan_path")
+@click.pass_context
+def push(ctx: click.Context, plan_path: str) -> None:
+    """Push manual edits for a plan to bare. No state transition."""
+    config: WorkflowConfig = ctx.obj["config"]
+    dry_run: bool = ctx.obj["dry_run"]
+
+    try:
+        project_dir = _require_project_dir(config)
+        plan = resolve_plan(plan_path, project_dir, repo=RepoName.master)
+        repo = plan.path.parts[0]
+        git_push(project_dir / repo, dry_run=dry_run)
         _write_script_audit_log(config, "push", dry_run=dry_run, input_plan=plan.name)
-        _print_command_reminder(config, PlanState.IMPLEMENTING, "push", plan.name)
+        _print_command_reminder(config, plan.state, "push", plan.name)
     except (
         subprocess.CalledProcessError,
         PlanNotFoundError,

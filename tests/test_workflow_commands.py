@@ -173,7 +173,7 @@ def test_implement_prints_explicit_ask_reminder(tmp_path: Path, monkeypatch: pyt
     assert "workflow ask 005_foo" in result.output
 
 
-def test_push_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "builder", "checking", "005_foo.md")
     monkeypatch.chdir(tmp_path)
@@ -183,12 +183,26 @@ def test_push_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkeyp
     monkeypatch.setattr(wc, "git_push", _noop)
     monkeypatch.setattr(wc, "git_fetch", _noop)
 
-    result = CliRunner().invoke(main, ["--config", str(config_path), "push", "005"])
+    result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005"])
 
     assert result.exit_code == 0
     assert calls[0][:2] == ["docker", "exec"]
     assert calls[0][2].endswith("-builder")
     assert "Next step: review" in result.output
+
+
+def test_push_pushes_resolved_repo_without_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "master", "intent", "005_foo.md")
+    monkeypatch.chdir(tmp_path)
+    pushes: list[Path] = []
+    monkeypatch.setattr(wc, "git_push", _record_repo(pushes))
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "push", "005"])
+
+    assert result.exit_code == 0
+    assert pushes == [tmp_path / "master"]
+    assert "workflow ask 005_foo" in result.output
 
 
 def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
