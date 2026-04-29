@@ -6,13 +6,13 @@ import re
 import subprocess
 from collections import defaultdict
 from contextlib import suppress
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypeVar
 
 import libtmux
 import libtmux.exc
+from pydantic import BaseModel, ConfigDict
 
 from workflow.audit import AUDIT_COMMAND_REPO_STATE, read_audit_log
 from workflow.config import PromptCommand, ScriptCommand, WorkflowConfig
@@ -271,21 +271,23 @@ _ALL_REPOS: frozenset[RepoName] = frozenset(RepoName)
 _ALL_STATES: frozenset[PlanState] = frozenset(s for s in PlanState if s != PlanState.REVIEW)
 
 
-@dataclass(frozen=True)
-class _Constraint:
+class _Constraint(BaseModel):
     """One source's contribution to the resolver's repo and state constraints.
 
     ``None`` on a dimension means the source is silent on that dimension and
     contributes no constraint there.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     repos: frozenset[RepoName] | None = None
     states: frozenset[PlanState] | None = None
 
 
-@dataclass(frozen=True)
-class _PathHints:
+class _PathHints(BaseModel):
     """Parsed hints from the user-supplied fuzzy path."""
+
+    model_config = ConfigDict(frozen=True)
 
     constraint: _Constraint
     seq: list[int] | None

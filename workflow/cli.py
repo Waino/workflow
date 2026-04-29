@@ -8,10 +8,10 @@ runs during model construction.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 import click
+from pydantic import BaseModel, ConfigDict
 
 import workflow.commands.cheat
 import workflow.commands.info
@@ -72,9 +72,10 @@ def _build_dynamic_commands(config: WorkflowConfig) -> dict[str, click.Command]:
     return commands
 
 
-@dataclass(frozen=True)
-class _CliRuntime:
+class _CliRuntime(BaseModel):
     """Cached runtime data for one top-level CLI invocation."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     config: WorkflowConfig
     dry_run: bool

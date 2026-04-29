@@ -11,13 +11,13 @@ import os
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import click
 import libtmux
 from jinja2 import Environment, StrictUndefined, UndefinedError
+from pydantic import BaseModel, ConfigDict
 
 from workflow.audit import write_audit_log
 from workflow.config import PromptCommand, WorkflowConfig
@@ -53,9 +53,10 @@ def _repo_for_prompt_state(state: PlanState) -> RepoName:
         raise WorkflowError(msg) from exc
 
 
-@dataclass(frozen=True)
-class _PromptTarget:
+class _PromptTarget(BaseModel):
     """One concrete prompt command target in one workflow state."""
+
+    model_config = ConfigDict(frozen=True)
 
     command: PromptCommand
     state: PlanState
@@ -64,9 +65,10 @@ class _PromptTarget:
     has_plan: bool
 
 
-@dataclass(frozen=True)
-class _PromptContext:
+class _PromptContext(BaseModel):
     """Resolved context shared between the setup helpers and _dispatch_prompt."""
+
+    model_config = ConfigDict(frozen=True)
 
     agent_name: str
     repo_name: RepoName
