@@ -73,6 +73,15 @@ def git_checkout(repo_path: Path, branch: str, *, create: bool = False, dry_run:
     run_command(args, cwd=repo_path, dry_run=dry_run)
 
 
+def git_add(repo_path: Path, file_path: Path, *, dry_run: bool = False) -> None:
+    """Stage *file_path* in *repo_path*.
+
+    *file_path* may be an absolute path or relative to *repo_path*.
+    In dry-run mode prints the command without executing it.
+    """
+    run_command(["git", "add", str(file_path)], cwd=repo_path, dry_run=dry_run)
+
+
 def git_commit(repo_path: Path, message: str, *, dry_run: bool = False, no_verify: bool = False) -> None:
     """Stage all tracked changes (``git add -u``) and commit in *repo_path*.
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.resources
 import os
 import subprocess
 import time
@@ -10,11 +11,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
+import jinja2
 
-from workflow.audit import read_audit_log, write_audit_log
+from workflow.audit import write_audit_log
 from workflow.config import WORKFLOW_ROOT_MARKER, WorkflowConfig
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.git_helpers import (
+    git_add,
     git_commit,
     git_current_branch,
     git_fetch,
@@ -25,7 +28,7 @@ from workflow.git_helpers import (
 )
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import AgentName, RepoName, command_cli_name
-from workflow.plan_resolver import find_all_plans, parse_plan_filename, resolve_plan
+from workflow.plan_resolver import next_intent_number, resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console, error_console, run_command
 from workflow.state import transition_plan
@@ -127,32 +130,6 @@ def _print_command_reminder(config: WorkflowConfig, state: PlanState, command_na
     if reminder is None:
         return
     console.print(f"Next step: [bold]{_format_reminder(config, reminder, plan_name)}[/bold]")
-
-
-def _top_level_number(plan_name: str) -> int | None:
-    candidate = Path(plan_name).stem.split("/")[-1]
-    if "_" not in candidate:
-        return None
-    try:
-        sequence_number, _slug = parse_plan_filename(candidate)
-    except ValueError:
-        return None
-    return sequence_number[0]
-
-
-def _next_intent_number(project_dir: Path) -> int:
-    reserved = {plan.sequence_number[0] for plan in find_all_plans(project_dir)}
-    for entry in read_audit_log(project_dir):
-        for plan_name in [entry.input_plan, *entry.output_plans]:
-            if plan_name is None:
-                continue
-            top_level = _top_level_number(plan_name)
-            if top_level is not None:
-                reserved.add(top_level)
-    number = 1
-    while number in reserved:
-        number += 1
-    return number
 
 
 def _open_in_editor(path: Path) -> None:
@@ -261,9 +238,12 @@ def new(ctx: click.Context, slug: str) -> None:
 
     try:
         project_dir = _require_project_dir(config)
-        number = _next_intent_number(project_dir)
+        number = next_intent_number(project_dir)
         intent_path = project_dir / RepoName.master / "docs" / "plans" / "intent" / f"{number:03d}_{slug}.md"
-        content = f"# {number:03d}: {slug.replace('_', ' ').title()}\n\n## Goal\n\nTODO\n"
+        template_text = (
+            importlib.resources.files("workflow.templates").joinpath("intent.md.j2").read_text(encoding="utf-8")
+        )
+        content = jinja2.Template(template_text).render(number=number, slug=slug)
         if dry_run:
             console.print(f"Would create: {intent_path}")
             console.print(f"Would open in $EDITOR: {intent_path}")
@@ -271,6 +251,11 @@ def new(ctx: click.Context, slug: str) -> None:
             intent_path.parent.mkdir(parents=True, exist_ok=True)
             intent_path.write_text(content, encoding="utf-8")
             _open_in_editor(intent_path)
+        git_add(
+            project_dir / RepoName.master,
+            intent_path.relative_to(project_dir / RepoName.master),
+            dry_run=dry_run,
+        )
         _write_script_audit_log(config, "new", dry_run=dry_run, output_plans=[intent_path.stem])
     except (subprocess.CalledProcessError, WorkflowError) as exc:
         error_console.print(f"[red]{exc}[/red]")

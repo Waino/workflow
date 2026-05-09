@@ -7,19 +7,20 @@ from pathlib import Path
 from shutil import copyfile
 from typing import TYPE_CHECKING, TypeVar
 
+import pytest
 from click.testing import CliRunner
 
 import workflow.commands.workflow as wc
 from workflow import main
 from workflow.audit import write_audit_log
+from workflow.commands.info import _parse_datetime
 from workflow.config import WORKFLOW_ROOT_MARKER
 from workflow.models import AuditLogEntry, Plan, PlanState
+from workflow.plan_resolver import next_intent_number
 from workflow.validate import CheckResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    import pytest
 
 
 def _make_project(tmp_path: Path, *, marker: bool = True) -> Path:
@@ -131,6 +132,7 @@ def test_new_uses_existing_plans_and_audit_log_for_numbering(tmp_path: Path, mon
     opened: list[Path] = []
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(wc, "_open_in_editor", _record_path(opened))
+    monkeypatch.setattr(wc, "git_add", _noop)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "new", "flux_capacitor"])
 
@@ -235,3 +237,212 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     assert reject_result.exit_code == 0
     assert tmp_path / "reviewer" in repos
     assert tmp_path / "master" in repos
+
+
+# ---------------------------------------------------------------------------
+# next_intent_number (moved to plan_resolver)
+# ---------------------------------------------------------------------------
+
+
+def test_next_intent_number_accounts_for_plans_and_audit_log(tmp_path: Path) -> None:
+    _make_project(tmp_path)
+    _make_plan(tmp_path, "master", "intent", "001_idea.md")
+    write_audit_log(
+        tmp_path,
+        AuditLogEntry(
+            timestamp=datetime(2026, 3, 1, tzinfo=UTC),
+            actor="human",
+            command="new",
+            output_plans=["002_bar"],
+        ),
+    )
+    assert next_intent_number(tmp_path) == 3
+
+
+# ---------------------------------------------------------------------------
+# new: template rendering and git_add
+# ---------------------------------------------------------------------------
+
+
+def test_new_renders_template_and_calls_git_add(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "_open_in_editor", _noop)
+    added: list[tuple[Path, Path]] = []
+
+    def _record_git_add(repo_path: Path, file_path: Path, **_kwargs: object) -> None:
+        added.append((repo_path, file_path))
+
+    monkeypatch.setattr(wc, "git_add", _record_git_add)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "new", "flux_capacitor"])
+
+    assert result.exit_code == 0
+    expected = tmp_path / "master" / "docs" / "plans" / "intent" / "001_flux_capacitor.md"
+    assert expected.exists()
+    content = expected.read_text(encoding="utf-8")
+    assert "# 001: Flux Capacitor" in content
+    assert "## Goal" in content
+    assert added == [(tmp_path / "master", Path("docs/plans/intent/001_flux_capacitor.md"))]
+
+
+# ---------------------------------------------------------------------------
+# _parse_datetime
+# ---------------------------------------------------------------------------
+
+
+def test_parse_datetime_accepts_full_iso8601() -> None:
+    dt = _parse_datetime("2026-03-18T14:30:00+00:00")
+    assert dt.year == 2026
+    assert dt.month == 3
+    assert dt.day == 18
+    assert dt.hour == 14
+    assert dt.tzinfo is not None
+
+
+def test_parse_datetime_accepts_date_only() -> None:
+    dt = _parse_datetime("2026-03-18")
+    assert dt.year == 2026
+    assert dt.month == 3
+    assert dt.day == 18
+    assert dt.hour == 0
+    assert dt.tzinfo is not None
+
+
+def test_parse_datetime_treats_naive_as_utc() -> None:
+    dt = _parse_datetime("2026-03-18T14:30:00")
+    assert dt.tzinfo is not None
+    assert dt.utcoffset().total_seconds() == 0  # type: ignore[union-attr]
+
+
+def test_parse_datetime_rejects_garbage() -> None:
+    with pytest.raises(ValueError, match=r"."):
+        _parse_datetime("not-a-date")
+
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+
+
+def test_status_shows_active_plans_and_next_free_number(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "master", "intent", "003_foo.md")
+    _make_plan(tmp_path, "master", "implementing", "001_bar.md")
+    _make_plan(tmp_path, "master", "done", "002_baz.md")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "status"])
+
+    assert result.exit_code == 0
+    assert "001" in result.output
+    assert "003" in result.output
+    # done plan excluded by default
+    assert "002" not in result.output
+    assert "Next free number: 004" in result.output
+
+
+def test_status_shows_done_plans_with_all_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "master", "done", "002_baz.md")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "status", "--all"])
+
+    assert result.exit_code == 0
+    assert "002" in result.output
+
+
+# ---------------------------------------------------------------------------
+# log
+# ---------------------------------------------------------------------------
+
+
+def _write_entries(tmp_path: Path) -> None:
+    for actor, command, ts, input_plan, output_plans in [
+        ("human", "new", datetime(2026, 3, 1, tzinfo=UTC), None, ["001_foo"]),
+        ("human", "todo", datetime(2026, 3, 2, tzinfo=UTC), "001_foo", []),
+        ("planner", "plan", datetime(2026, 3, 3, tzinfo=UTC), "001_foo", ["002_bar"]),
+        ("human", "new", datetime(2026, 3, 4, tzinfo=UTC), None, ["003_baz"]),
+    ]:
+        write_audit_log(
+            tmp_path,
+            AuditLogEntry(
+                timestamp=ts,
+                actor=actor,
+                command=command,
+                input_plan=input_plan,
+                output_plans=output_plans,
+            ),
+        )
+
+
+def test_log_no_filter_shows_all_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _write_entries(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "log"])
+
+    assert result.exit_code == 0
+    assert "001_foo" in result.output
+    assert "003_baz" in result.output
+
+
+def test_log_filter_by_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _write_entries(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--agent", "planner"])
+
+    assert result.exit_code == 0
+    assert "plan" in result.output
+    assert "todo" not in result.output
+
+
+def test_log_filter_by_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _write_entries(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--command", "new"])
+
+    assert result.exit_code == 0
+    assert "001_foo" in result.output
+    assert "003_baz" in result.output
+    assert "todo" not in result.output
+
+
+def test_log_filter_by_since(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _write_entries(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--since", "2026-03-03"])
+
+    assert result.exit_code == 0
+    assert "002_bar" in result.output
+    assert "003_baz" in result.output
+    assert "todo" not in result.output  # 2026-03-02 excluded
+
+
+def test_log_filter_by_plan_substring(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _write_entries(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    # "001" matches 001_foo but resolve_plan will fail (no actual plan files) → substring fallback
+    result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--plan", "baz"])
+
+    assert result.exit_code == 0
+    assert "003_baz" in result.output
+    assert "001_foo" not in result.output
+
+
+def test_log_since_invalid_value_exits_with_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--since", "not-a-date"])
+
+    assert result.exit_code != 0

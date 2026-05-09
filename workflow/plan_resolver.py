@@ -164,6 +164,41 @@ def find_all_plans_in_repo(project_dir: Path, repo: str = RepoName.master) -> li
     return plans
 
 
+def _top_level_number_from_name(plan_name: str) -> int | None:
+    """Extract the top-level sequence number from a plan name like '003_foo'.
+
+    Returns ``None`` when the name does not match the ``NNN_slug`` pattern.
+    """
+    candidate = Path(plan_name).stem.split("/")[-1]
+    if "_" not in candidate:
+        return None
+    try:
+        sequence_number, _slug = parse_plan_filename(candidate)
+    except ValueError:
+        return None
+    return sequence_number[0]
+
+
+def next_intent_number(project_dir: Path) -> int:
+    """Return the lowest positive integer not yet reserved by any plan or audit log entry.
+
+    Scans all repos for existing plans and the audit log for any previously
+    created plan names, then returns the first gap starting from 1.
+    """
+    reserved = {plan.sequence_number[0] for plan in find_all_plans(project_dir)}
+    for entry in read_audit_log(project_dir):
+        for plan_name in [entry.input_plan, *entry.output_plans]:
+            if plan_name is None:
+                continue
+            top_level = _top_level_number_from_name(plan_name)
+            if top_level is not None:
+                reserved.add(top_level)
+    number = 1
+    while number in reserved:
+        number += 1
+    return number
+
+
 def find_all_plans(project_dir: Path) -> list[Plan]:
     """Scan all repos and return a merged, deduplicated list of plans.
 
