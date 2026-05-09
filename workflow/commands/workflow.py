@@ -8,7 +8,6 @@ import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import click
 import jinja2
@@ -27,17 +26,14 @@ from workflow.git_helpers import (
     transfer_branch_to_main,
 )
 from workflow.models import AuditLogEntry, Plan, PlanState
-from workflow.names import AgentName, RepoName, command_cli_name
+from workflow.names import AgentName, RepoName
+from workflow.next_step import find_next_step, find_reminder_name, format_next_step_invocation
 from workflow.plan_resolver import next_intent_number, resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console, error_console, run_command
 from workflow.state import transition_plan
 from workflow.validate import CHECK_NAMES, CheckResult, infer_target_repo
 from workflow.validate import validate as run_validate
-
-if TYPE_CHECKING:
-    from workflow.config import Command
-
 
 # Hard state constraints for script commands
 _EXPECTED_STATES_FOR: dict[str, set[PlanState]] = {
@@ -88,48 +84,13 @@ def _write_script_audit_log(
     )
 
 
-def _find_command(config: WorkflowConfig, state: PlanState, command_name: str) -> Command | None:
-    state_config = config.states.get(state)
-    if state_config is None:
-        return None
-    for command in state_config.commands:
-        if command.name == command_name:
-            return command
-    return None
-
-
-def _format_reminder(config: WorkflowConfig, reminder: str, plan_name: str) -> str:
-    for state_config in config.states.values():
-        for command in state_config.commands:
-            if command.name != reminder:
-                continue
-            if command.command_type == "manual":
-                return reminder
-            return f"workflow {command_cli_name(reminder)} {plan_name}"
-    return reminder
-
-
-def _find_reminder(config: WorkflowConfig, state: PlanState, command_name: str) -> str | None:
-    command = _find_command(config, state, command_name)
-    if command is None:
-        return None
-    reminder = getattr(command, "reminder", None)
-    if reminder:
-        return reminder
-    transition = getattr(command, "transition", None)
-    if transition is None:
-        return None
-    target_state = config.states.get(transition)
-    if target_state is None or not target_state.commands:
-        return None
-    return target_state.commands[0].name
-
-
 def _print_command_reminder(config: WorkflowConfig, state: PlanState, command_name: str, plan_name: str) -> None:
-    reminder = _find_reminder(config, state, command_name)
+    reminder = find_reminder_name(config, state, command_name)
     if reminder is None:
         return
-    console.print(f"Next step: [bold]{_format_reminder(config, reminder, plan_name)}[/bold]")
+    next_step = find_next_step(config, state, command_name)
+    formatted = format_next_step_invocation(reminder, plan_name, command=next_step)
+    console.print(f"Next step: [bold]{formatted}[/bold]")
 
 
 def _open_in_editor(path: Path) -> None:

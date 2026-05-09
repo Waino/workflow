@@ -60,10 +60,15 @@ def status(ctx: click.Context) -> None:
 ### Output
 
 - Use `rich.table.Table` for formatted output.
-- Columns: sequence number, name, current state, next step(s).
+- Columns: sequence number, name, current state, last logged action, next step.
 - Omit plans in `done` and `rejected` states (unless a `--all` flag is passed).
-- Next step(s) are derived from the state config: list available commands for the plan's
-  current state. Render each step via `WorkflowStep.render()` (the same path the cheat
+- Next step(s) should be derived from the audit log and the state config.
+  First determine the last logged action for the plan, using the audit log.
+  Then, use the same logic as in the existing _print_command_reminder to determine the next command.
+- Refactor to unify the two uses, to keep it DRY.
+- If no logged action for the plan exists, leave both last logged action and next step empty.
+- Render the next step using `WorkflowStep.render()` to get marker and color consistent with the cheatsheet table.
+- Render each step via `WorkflowStep.render()` (the same path the cheat
   sheet uses) so markers and colors stay consistent with `workflow cheat`.
 - Footer: print the lowest free sequence number for plans by calling
   `_next_intent_number` (already extracted in `workflow/commands/workflow.py`); do not

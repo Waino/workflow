@@ -339,6 +339,8 @@ def test_status_shows_active_plans_and_next_free_number(tmp_path: Path, monkeypa
     assert "003" in result.output
     # done plan excluded by default
     assert "002" not in result.output
+    assert "last action" in result.output
+    assert "next step" in result.output
     assert "Next free number: 004" in result.output
 
 
@@ -351,6 +353,68 @@ def test_status_shows_done_plans_with_all_flag(tmp_path: Path, monkeypatch: pyte
 
     assert result.exit_code == 0
     assert "002" in result.output
+
+
+def test_status_last_action_and_next_step_from_audit_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "master", "implementing", "001_foo.md")
+    write_audit_log(
+        tmp_path,
+        AuditLogEntry(
+            timestamp=datetime(2026, 3, 18, tzinfo=UTC),
+            actor="builder",
+            command="build",
+            input_plan="001_foo",
+        ),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "status"])
+
+    assert result.exit_code == 0
+    # last-action column shows the executed command; next step is the configured reminder.
+    assert "build" in result.output
+    assert "check" in result.output
+
+
+def test_status_no_audit_entry_leaves_columns_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "master", "implementing", "001_foo.md")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "status"])
+
+    assert result.exit_code == 0
+    # No audit entries: neither "build" nor "check" should appear in the body.
+    assert "build" not in result.output
+    assert "check" not in result.output
+
+
+def test_status_cross_state_next_step_via_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`todo` is defined in PLANNING; running it transitions the plan to TODO.
+
+    For a plan now in TODO with the last logged action ``todo``, the heuristic
+    should locate the source state (PLANNING) and resolve the next step to the
+    first command in TODO ("implement").
+    """
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "master", "todo", "001_foo.md")
+    write_audit_log(
+        tmp_path,
+        AuditLogEntry(
+            timestamp=datetime(2026, 3, 18, tzinfo=UTC),
+            actor="planner",
+            command="todo",
+            input_plan="001_foo",
+        ),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "status"])
+
+    assert result.exit_code == 0
+    assert "todo" in result.output
+    assert "implement" in result.output
 
 
 # ---------------------------------------------------------------------------

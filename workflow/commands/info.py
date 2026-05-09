@@ -12,6 +12,7 @@ from workflow.audit import read_audit_log
 from workflow.config import WorkflowConfig
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.models import PlanState
+from workflow.next_step import find_next_step, find_source_state_for_command
 from workflow.plan_resolver import find_all_plans, next_intent_number, resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console, error_console
@@ -19,7 +20,9 @@ from workflow.shell import console, error_console
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from workflow.models import AuditLogEntry
+    from rich.text import Text
+
+    from workflow.models import AuditLogEntry, Plan
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -100,6 +103,17 @@ def _entry_matches(  # noqa: PLR0911, PLR0913
     return True
 
 
+def _last_audit_entry_for_plan(entries: list[AuditLogEntry], plan: Plan) -> AuditLogEntry | None:
+    """Return the most recent audit log entry referencing *plan* by name, or ``None``.
+
+    Assumes *entries* is sorted ascending by timestamp (as :func:`read_audit_log` returns).
+    """
+    for entry in reversed(entries):
+        if entry.input_plan == plan.name or plan.name in entry.output_plans:
+            return entry
+    return None
+
+
 @register_script("status")
 @click.option("--all", "show_all", is_flag=True, default=False, help="Include done and rejected plans.")
 @click.pass_context
@@ -117,17 +131,26 @@ def status(ctx: click.Context, show_all: bool) -> None:  # noqa: FBT001
     plans = find_all_plans(project_dir)
     visible = [p for p in plans if p.state != PlanState.REVIEW and (show_all or p.state not in terminal_states)]
     visible.sort(key=lambda p: p.sequence_number)
+    entries = read_audit_log(project_dir)
 
     table = Table(title="Workflow Status")
     table.add_column("#", style="bold", no_wrap=True)
     table.add_column("name")
     table.add_column("state")
-    table.add_column("next steps")
+    table.add_column("last action")
+    table.add_column("next step")
 
     for plan in visible:
-        state_cfg = config.states.get(plan.state)
-        next_steps = " ".join(cmd.name for cmd in state_cfg.commands) if state_cfg else ""
-        table.add_row(plan.sequence_number_str, plan.slug, plan.state.value, next_steps)
+        last_entry = _last_audit_entry_for_plan(entries, plan)
+        last_action = last_entry.command if last_entry is not None else ""
+        next_step_renderable: str | Text = ""
+        if last_entry is not None:
+            source_state = find_source_state_for_command(config, plan.state, last_entry.command)
+            if source_state is not None:
+                next_step = find_next_step(config, source_state, last_entry.command)
+                if next_step is not None:
+                    next_step_renderable = next_step.render()
+        table.add_row(plan.sequence_number_str, plan.slug, plan.state.value, last_action, next_step_renderable)
 
     console.print(table)
     next_number = next_intent_number(project_dir)
