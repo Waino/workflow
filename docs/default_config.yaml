@@ -86,6 +86,7 @@ states:
         name: implement
         script: implement
         transition: implementing
+        also_valid_in_states: [planning]
         reminder: ask
       - command_type: script
         name: push
@@ -144,7 +145,7 @@ states:
       - command_type: script
         name: reject
         script: reject
-        transition: done
+        transition: rejected
 
   done:
     agent: null

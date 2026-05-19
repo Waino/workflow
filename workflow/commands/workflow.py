@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.resources
 import os
 import re
+import shlex
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -105,7 +106,7 @@ def _run_pre_commit_in_sandbox(config: WorkflowConfig, repo_name: str, *, dry_ru
         raise WorkflowError(msg)
     project_name = config.project_name or _require_project_dir(config).name
     container_name = f"auggie-{project_name}-{repo_name}"
-    repo_path = f"/home/auggie/projects/{project_name}"
+    repo_path = shlex.quote(f"/home/auggie/projects/{project_name}")
     run_command(
         ["docker", "exec", container_name, "bash", "-lc", f"cd {repo_path} && ./.git-pre-commit-hook"],
         dry_run=dry_run,
@@ -125,6 +126,9 @@ def init(ctx: click.Context) -> None:
     project_dir = (config.project_dir or Path.cwd()).resolve()
 
     try:
+        if not (project_dir / RepoName.master / ".git").is_dir():
+            msg = f"{project_dir / RepoName.master} is not a git repository (no .git/ found)."
+            raise WorkflowError(msg)
         run_command(["git", "clone", "--bare", RepoName.master, "bare"], cwd=project_dir, dry_run=dry_run)
         for agent in config.agents:
             run_command(["git", "clone", "bare", agent.name], cwd=project_dir, dry_run=dry_run)
@@ -288,7 +292,12 @@ def implement(ctx: click.Context, plan_path: str) -> None:
         plan = resolve_plan(plan_path, project_dir, config=config, command_name="implement")
         _enforce_expected_state(plan, "implement")
         if plan.state == PlanState.PLANNING:
-            plan = transition_plan(plan, PlanState.TODO, project_dir, dry_run=dry_run)
+            transfer_branch_to_main(
+                project_dir / RepoName.planner,
+                project_dir / RepoName.master,
+                dry_run=dry_run,
+            )
+            plan = transition_plan(plan, PlanState.TODO, project_dir, repo_override=RepoName.master, dry_run=dry_run)
             git_commit(
                 project_dir / RepoName.master,
                 _transition_commit_message(plan, PlanState.TODO),
@@ -306,7 +315,7 @@ def implement(ctx: click.Context, plan_path: str) -> None:
         _write_script_audit_log(config, "implement", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.TODO, "implement", new_plan.name)
         if not dry_run:
-            time.sleep(0.1)
+            time.sleep(1.0)
         # TODO: switch to the builder tmux window.
     except (
         subprocess.CalledProcessError,
@@ -484,6 +493,9 @@ def accept(ctx: click.Context, plan_path: str) -> None:
         plan = resolve_plan(plan_path, project_dir, config=config, command_name="accept")
         _enforce_expected_state(plan, "accept")
         branch = "<dry-run-branch>" if dry_run else git_current_branch(project_dir / RepoName.reviewer)
+        if not dry_run and branch == "main":
+            msg = "accept: reviewer is on 'main'; expected a feature branch"
+            raise WorkflowError(msg)
         git_push(project_dir / RepoName.reviewer, dry_run=dry_run)
         git_pull(project_dir / RepoName.master, dry_run=dry_run)
         new_plan = transition_plan(plan, PlanState.DONE, project_dir, repo_override=RepoName.master, dry_run=dry_run)

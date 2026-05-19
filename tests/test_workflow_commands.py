@@ -12,7 +12,7 @@ from click.testing import CliRunner
 
 import workflow.commands.workflow as wc
 from workflow import main
-from workflow.audit import write_audit_log
+from workflow.audit import read_audit_log, write_audit_log
 from workflow.commands.info import _parse_datetime
 from workflow.config import WORKFLOW_ROOT_MARKER
 from workflow.models import AuditLogEntry, Plan, PlanState
@@ -221,6 +221,13 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     )
     assert tmp_path / "reviewer" in all_repos
     assert tmp_path / "master" in all_repos
+    # §2.10 audit-log assertions
+    entries = read_audit_log(tmp_path)
+    commands = [e.command for e in entries]
+    assert "accept" in commands
+    assert "reject" in commands
+    # accept produces no next-step reminder (done state has no commands)
+    assert "Next step:" not in accept_result.output
 
 
 # ---------------------------------------------------------------------------
@@ -576,3 +583,79 @@ def test_new_rejects_invalid_slug(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         result = CliRunner().invoke(main, ["--config", str(config_path), "new", bad_slug])
         assert result.exit_code != 0, f"Expected non-zero exit for slug {bad_slug!r}"
         assert "Invalid slug" in result.output
+
+
+def test_implement_from_planning_branch_transfers_and_transitions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Implement from a PLANNING plan: transfer planner→master, transition TODO then IMPLEMENTING."""
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "planner", "planning", "005_foo.md")
+    monkeypatch.chdir(tmp_path)
+    call_order: list[str] = []
+    fake_transfer = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("transfer"))
+    fake_commit = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("commit"))
+    fake_push = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("push"))
+    monkeypatch.setattr(wc, "transfer_branch_to_main", fake_transfer)
+    monkeypatch.setattr(
+        wc,
+        "transition_plan",
+        MagicMock(
+            side_effect=[
+                _plan("master", PlanState.TODO),
+                _plan("master", PlanState.IMPLEMENTING),
+            ],
+        ),
+    )
+    monkeypatch.setattr(wc, "git_commit", fake_commit)
+    monkeypatch.setattr(wc, "git_push", fake_push)
+    monkeypatch.setattr(wc.time, "sleep", MagicMock())
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005"])
+
+    assert result.exit_code == 0, result.output
+    assert call_order == ["transfer", "commit", "commit", "push"]
+    assert "workflow ask 005_foo" in result.output
+    entries = read_audit_log(tmp_path)
+    assert any(e.command == "implement" for e in entries)
+
+
+def test_accept_main_branch_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Accept exits non-zero when reviewer is on 'main' instead of a feature branch."""
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "reviewer", "checking", "005_foo.md")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="main"))
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005"])
+
+    assert result.exit_code != 0
+    assert "main" in result.output
+
+
+def test_init_fails_without_master_git_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Init exits non-zero when master/.git is missing."""
+    config_path = _make_project(tmp_path, marker=False)
+    # Do NOT create master/.git — the precheck should fire.
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+
+    assert result.exit_code != 0
+    assert "no .git/" in result.output
+
+
+def test_todo_resolver_error_exits_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Todo exits non-zero with a red message when the plan cannot be resolved."""
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    fake_push = MagicMock()
+    fake_commit = MagicMock()
+    monkeypatch.setattr(wc, "git_push", fake_push)
+    monkeypatch.setattr(wc, "git_commit", fake_commit)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "todo", "999_does_not_exist"])
+
+    assert result.exit_code != 0
+    fake_push.assert_not_called()
+    fake_commit.assert_not_called()

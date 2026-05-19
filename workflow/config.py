@@ -54,6 +54,7 @@ class ScriptCommand(WorkflowStep):
     transition: PlanState | None = None
     reminder: str | None = None
     repo_override: RepoName | None = None
+    also_valid_in_states: list[PlanState] = []
 
     def render(self) -> Text:
         """Render the cheatsheet representation of the workflow step."""

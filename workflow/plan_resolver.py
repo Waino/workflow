@@ -421,6 +421,7 @@ def _accumulate_subcommand_contribution(
     # Plans may already have been transitioned by the previous step's agent.
     if cmd.transition is not None:
         states.add(cmd.transition)
+    states.update(cmd.also_valid_in_states)
     if cmd.repo_override is not None:
         repos.add(cmd.repo_override)
     else:
@@ -446,6 +447,12 @@ def _from_subcommand(config: WorkflowConfig, command_name: str | None) -> _Const
                 continue
             found = True
             _accumulate_subcommand_contribution(cmd, state, state_config, repos, states)
+            # Contribute the repo for each state listed in also_valid_in_states.
+            if isinstance(cmd, ScriptCommand):
+                for extra_state in cmd.also_valid_in_states:
+                    extra_cfg = config.states.get(extra_state)
+                    extra_agent = getattr(extra_cfg, "agent", None) if extra_cfg is not None else None
+                    repos.add(_agent_repo(extra_agent, RepoName.master))
     if not found:
         return _Constraint()
     return _Constraint(

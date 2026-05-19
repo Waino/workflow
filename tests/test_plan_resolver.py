@@ -508,3 +508,11 @@ class TestSubcommandSource:
         plan = resolve_plan("005", tmp_path, config=config, command_name="push")
         assert plan.path.parts[0] == "master"
         assert plan.state == PlanState.INTENT
+
+    def test_also_valid_in_states_allows_planning_plan_for_implement(self, tmp_path: Path) -> None:
+        """Implement has also_valid_in_states=[planning], so a planning-state plan resolves."""
+        config = _make_config(tmp_path)
+        _make_plan(tmp_path, "planner", PlanState.PLANNING, "007_feature.md")
+        plan = resolve_plan("007", tmp_path, config=config, command_name="implement")
+        assert plan.state == PlanState.PLANNING
+        assert plan.path.parts[0] == "planner"

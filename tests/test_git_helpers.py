@@ -37,3 +37,16 @@ def test_transfer_branch_to_main_rejects_main_branch(monkeypatch: pytest.MonkeyP
 
     with pytest.raises(WorkflowError, match="expected a feature branch"):
         git_helpers.transfer_branch_to_main(tmp_path / "builder", tmp_path / "master")
+
+
+def test_git_merge_includes_double_dash_separator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """git_merge passes '--' before the branch name to prevent flag injection."""
+    captured: list[list[str]] = []
+    monkeypatch.setattr(git_helpers, "run_command", lambda cmd, **_kw: captured.append(cmd))
+
+    git_helpers.git_merge(tmp_path, "feat/my-branch")
+
+    assert len(captured) == 1
+    assert "--" in captured[0]
+    idx = captured[0].index("--")
+    assert captured[0][idx + 1] == "feat/my-branch"
