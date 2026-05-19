@@ -40,6 +40,10 @@ def find_source_state_for_command(
       the plan into its current state).
     * Otherwise fall back to *plan_state* itself if it contains a step with that
       name and no transition.
+
+    Ties (multiple states defining the same command) are broken by config-iteration
+    order.  This is acceptable because the same-state fallback branch always picks
+    the unique state where the plan currently lives.
     """
     transition_match: PlanState | None = None
     same_state_match: PlanState | None = None

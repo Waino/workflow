@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from shutil import copyfile
 from typing import TYPE_CHECKING
+from unittest.mock import MagicMock
 
 from click.testing import CliRunner
 
@@ -16,14 +17,19 @@ from workflow.exceptions import WorkflowError
 from workflow.validate import CheckResult
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     import pytest
 
     from workflow.models import AuditLogEntry
 
 
 def _make_project(tmp_path: Path) -> Path:
+    """Create a minimal project directory tree and return the config path.
+
+    Note: the per-repo directories are *not* initialised as git repositories.
+    Tests that need git-side behaviour (current branch, push, fetch, the
+    git-history resolver source) must either monkey-patch the relevant helpers
+    or initialise the repo themselves.
+    """
     (tmp_path / WORKFLOW_ROOT_MARKER).touch()
     config_path = tmp_path / "config.yaml"
     copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", config_path)
@@ -36,17 +42,6 @@ def _make_plan(project_dir: Path, repo: str, state: str, filename: str) -> None:
     plan_dir = project_dir / repo / "docs" / "plans" / state
     plan_dir.mkdir(parents=True, exist_ok=True)
     (plan_dir / filename).write_text(f"# {filename}\n", encoding="utf-8")
-
-
-def _noop(*_args: object, **_kwargs: object) -> None:
-    pass
-
-
-def _return(value: str) -> Callable[..., str]:
-    def _inner(*_args: object, **_kwargs: object) -> str:
-        return value
-
-    return _inner
 
 
 def test_help_lists_dynamic_prompt_and_script_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,9 +99,9 @@ def test_ask_resolves_planner_plan_and_dispatches_prompt(tmp_path: Path, monkeyp
     )
 
     monkeypatch.setattr(tmux_dispatch, "git_pull", fake_pull)
-    monkeypatch.setattr(tmux_dispatch, "git_current_branch", _return("plan/ask/004_cli_framework"))
-    monkeypatch.setattr(tmux_dispatch, "git_commit_hash", _return("abc1234"))
-    monkeypatch.setattr(tmux_dispatch, "write_audit_log", _noop)
+    monkeypatch.setattr(tmux_dispatch, "git_current_branch", MagicMock(return_value="plan/ask/004_cli_framework"))
+    monkeypatch.setattr(tmux_dispatch, "git_commit_hash", MagicMock(return_value="abc1234"))
+    monkeypatch.setattr(tmux_dispatch, "write_audit_log", MagicMock())
     monkeypatch.setattr(tmux_dispatch, "send_prompt_to_agent", fake_send)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "ask", "004"])
@@ -137,9 +132,9 @@ def test_pr_uses_reviewer_repo_and_renders_branch_commit_and_plan(
         prompts.append(prompt)
 
     monkeypatch.setattr(tmux_dispatch, "git_pull", fake_pull)
-    monkeypatch.setattr(tmux_dispatch, "git_current_branch", _return("feat/004_cli_framework"))
-    monkeypatch.setattr(tmux_dispatch, "git_commit_hash", _return("1e84d3a"))
-    monkeypatch.setattr(tmux_dispatch, "write_audit_log", _noop)
+    monkeypatch.setattr(tmux_dispatch, "git_current_branch", MagicMock(return_value="feat/004_cli_framework"))
+    monkeypatch.setattr(tmux_dispatch, "git_commit_hash", MagicMock(return_value="1e84d3a"))
+    monkeypatch.setattr(tmux_dispatch, "write_audit_log", MagicMock())
     monkeypatch.setattr(tmux_dispatch, "send_prompt_to_agent", fake_send)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "pr", "004"])
@@ -168,8 +163,8 @@ def test_full_review_works_without_plan_argument(tmp_path: Path, monkeypatch: py
         "Write a report into docs/plans/reviews/full/."
     )
 
-    monkeypatch.setattr(tmux_dispatch, "git_pull", _noop)
-    monkeypatch.setattr(tmux_dispatch, "write_audit_log", _noop)
+    monkeypatch.setattr(tmux_dispatch, "git_pull", MagicMock())
+    monkeypatch.setattr(tmux_dispatch, "write_audit_log", MagicMock())
     monkeypatch.setattr(tmux_dispatch, "send_prompt_to_agent", fake_send)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "full-review"])
@@ -194,10 +189,10 @@ def test_edit_cancellation_skips_dispatch_and_audit(tmp_path: Path, monkeypatch:
     def fake_audit(_project_dir: Path, entry: AuditLogEntry) -> None:
         audits.append(entry.command)
 
-    monkeypatch.setattr(tmux_dispatch, "git_pull", _noop)
-    monkeypatch.setattr(tmux_dispatch, "git_current_branch", _return("plan/ask/004_cli_framework"))
-    monkeypatch.setattr(tmux_dispatch, "git_commit_hash", _return("abc1234"))
-    monkeypatch.setattr(tmux_dispatch, "_open_in_editor", _noop)
+    monkeypatch.setattr(tmux_dispatch, "git_pull", MagicMock())
+    monkeypatch.setattr(tmux_dispatch, "git_current_branch", MagicMock(return_value="plan/ask/004_cli_framework"))
+    monkeypatch.setattr(tmux_dispatch, "git_commit_hash", MagicMock(return_value="abc1234"))
+    monkeypatch.setattr(tmux_dispatch, "_open_in_editor", MagicMock(return_value=None))
     monkeypatch.setattr(tmux_dispatch, "send_prompt_to_agent", fake_send)
     monkeypatch.setattr(tmux_dispatch, "write_audit_log", fake_audit)
 
@@ -221,9 +216,9 @@ def test_tmux_failures_are_reported_without_traceback(tmp_path: Path, monkeypatc
         message = "tmux session missing"
         raise WorkflowError(message)
 
-    monkeypatch.setattr(tmux_dispatch, "git_pull", _noop)
-    monkeypatch.setattr(tmux_dispatch, "git_current_branch", _return("plan/ask/004_cli_framework"))
-    monkeypatch.setattr(tmux_dispatch, "git_commit_hash", _return("abc1234"))
+    monkeypatch.setattr(tmux_dispatch, "git_pull", MagicMock())
+    monkeypatch.setattr(tmux_dispatch, "git_current_branch", MagicMock(return_value="plan/ask/004_cli_framework"))
+    monkeypatch.setattr(tmux_dispatch, "git_commit_hash", MagicMock(return_value="abc1234"))
     monkeypatch.setattr(tmux_dispatch, "send_prompt_to_agent", raise_tmux)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "ask", "004"])

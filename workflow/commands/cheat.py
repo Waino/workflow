@@ -5,7 +5,7 @@ from __future__ import annotations
 from itertools import groupby, zip_longest
 
 import click
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from rich.console import Console, RenderableType
 from rich.rule import Rule
 from rich.style import Style
@@ -19,13 +19,10 @@ from workflow.registry import register_script
 class SubColumn(BaseModel):
     """A column in the inner tables of the cheatsheet."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     header: RenderableType
     cells: list[RenderableType]
-
-    class Config:
-        """Pydantic config class."""
-
-        arbitrary_types_allowed = True
 
     def render(self) -> list[RenderableType]:
         """Render the post-header rule and contents of this subcolumn."""
@@ -35,13 +32,10 @@ class SubColumn(BaseModel):
 class Column(BaseModel):
     """A column in the outer table of the cheatsheet."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     header: Text | str
     subcolumns: list[SubColumn]
-
-    class Config:
-        """Pydantic config class."""
-
-        arbitrary_types_allowed = True
 
     def render_inner_table(self) -> Table:
         """Render the inner table for this column."""
@@ -63,12 +57,9 @@ class Column(BaseModel):
 class CheatsheetTable(BaseModel):
     """The cheatsheet table."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     columns: list[Column]
-
-    class Config:
-        """Pydantic config class."""
-
-        arbitrary_types_allowed = True
 
     def render(self) -> Table:
         """Render the cheatsheet table."""

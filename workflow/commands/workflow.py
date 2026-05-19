@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.resources
 import os
+import re
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -189,6 +190,9 @@ def start(ctx: click.Context) -> None:
     ctx.exit(0)
 
 
+_SLUG_RE = re.compile(r"[a-z0-9]+(?:_[a-z0-9]+)*")
+
+
 @register_script("new")
 @click.argument("slug")
 @click.pass_context
@@ -199,6 +203,9 @@ def new(ctx: click.Context, slug: str) -> None:
 
     try:
         project_dir = _require_project_dir(config)
+        if not _SLUG_RE.fullmatch(slug):
+            msg = f"Invalid slug {slug!r}: use lowercase letters, digits, and underscores."
+            raise WorkflowError(msg)
         number = next_intent_number(project_dir)
         intent_path = project_dir / RepoName.master / "docs" / "plans" / "intent" / f"{number:03d}_{slug}.md"
         template_text = (

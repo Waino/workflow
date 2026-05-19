@@ -68,6 +68,7 @@ def _resolve_plan_filter(
     try:
         resolved = resolve_plan(plan_filter, project_dir, config=config, command_name=None)
     except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError, WorkflowError):
+        error_console.print("[yellow]Plan filter not uniquely resolved; falling back to substring match.[/yellow]")
         return None, None, True
     else:
         return resolved.name, resolved.sequence_number_str, False

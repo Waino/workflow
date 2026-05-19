@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 from shutil import copyfile
-from typing import TYPE_CHECKING, TypeVar
+from unittest.mock import MagicMock
 
 import pytest
 from click.testing import CliRunner
@@ -19,11 +19,15 @@ from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.plan_resolver import next_intent_number
 from workflow.validate import CheckResult
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
 
 def _make_project(tmp_path: Path, *, marker: bool = True) -> Path:
+    """Create a minimal project directory tree and return the config path.
+
+    Note: the per-repo directories are *not* initialised as git repositories.
+    Tests that need git-side behaviour (current branch, push, fetch, the
+    git-history resolver source) must either monkey-patch the relevant helpers
+    or initialise the repo themselves.
+    """
     if marker:
         (tmp_path / WORKFLOW_ROOT_MARKER).touch()
     copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
@@ -42,58 +46,17 @@ def _plan(repo: str, state: PlanState, name: str = "005_foo") -> Plan:
     return Plan(sequence_number=[5], slug="foo", state=state, path=Path(f"{repo}/docs/plans/{state.value}/{name}.md"))
 
 
-T = TypeVar("T")
-
-
-def _noop(*_args: object, **_kwargs: object) -> None:
-    pass
-
-
-def _return(value: T) -> Callable[..., T]:
-    def _inner(*_args: object, **_kwargs: object) -> T:
-        return value
-
-    return _inner
-
-
-def _record_command(calls: list[list[str]]) -> Callable[..., None]:
-    def _inner(args: list[str], **_kwargs: object) -> None:
-        calls.append(args)
-
-    return _inner
-
-
-def _record_path(paths: list[Path]) -> Callable[[Path], None]:
-    def _inner(path: Path) -> None:
-        paths.append(path)
-
-    return _inner
-
-
-def _record_args(calls: list[tuple[str, tuple[object, ...]]], name: str) -> Callable[..., None]:
-    def _inner(*args: object, **_kwargs: object) -> None:
-        calls.append((name, args))
-
-    return _inner
-
-
-def _record_repo(repos: list[Path]) -> Callable[..., None]:
-    def _inner(repo: Path, *_args: object, **_kwargs: object) -> None:
-        repos.append(repo)
-
-    return _inner
-
-
 def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path, marker=False)
+    (tmp_path / "master" / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
-    calls: list[list[str]] = []
-    monkeypatch.setattr(wc, "run_command", _record_command(calls))
+    fake_run_command = MagicMock()
+    monkeypatch.setattr(wc, "run_command", fake_run_command)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
 
     assert result.exit_code == 0
-    assert calls == [
+    assert [c.args[0] for c in fake_run_command.call_args_list] == [
         ["git", "clone", "--bare", "master", "bare"],
         ["git", "clone", "bare", "planner"],
         ["git", "clone", "bare", "builder"],
@@ -105,12 +68,13 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
 def test_start_runs_tmux_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)
-    calls: list[list[str]] = []
-    monkeypatch.setattr(wc, "run_command", _record_command(calls))
+    fake_run_command = MagicMock()
+    monkeypatch.setattr(wc, "run_command", fake_run_command)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "start"])
 
     assert result.exit_code == 0
+    calls = [c.args[0] for c in fake_run_command.call_args_list]
     assert calls[0][:6] == ["tmux", "new-session", "-d", "-s", "workflow", "-n"]
     assert calls[0][6] == "planner"
     assert [call[5] for call in calls[1:3]] == ["builder", "reviewer"]
@@ -129,45 +93,52 @@ def test_new_uses_existing_plans_and_audit_log_for_numbering(tmp_path: Path, mon
             output_plans=["002_bar"],
         ),
     )
-    opened: list[Path] = []
+    fake_open = MagicMock()
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(wc, "_open_in_editor", _record_path(opened))
-    monkeypatch.setattr(wc, "git_add", _noop)
+    monkeypatch.setattr(wc, "_open_in_editor", fake_open)
+    monkeypatch.setattr(wc, "git_add", MagicMock())
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "new", "flux_capacitor"])
 
     assert result.exit_code == 0
     expected = tmp_path / "master" / "docs" / "plans" / "intent" / "003_flux_capacitor.md"
     assert expected.exists()
-    assert opened == [expected]
+    assert fake_open.call_args.args[0] == expected
 
 
 def test_todo_transitions_and_prints_implement_reminder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "planner", "planning", "005_foo.md")
     monkeypatch.chdir(tmp_path)
-    calls: list[tuple[str, tuple[object, ...]]] = []
-    monkeypatch.setattr(wc, "run_validate", _return([CheckResult(check_name="x", status="pass", message="ok")]))
-    monkeypatch.setattr(wc, "transfer_branch_to_main", _record_args(calls, "transfer"))
-    monkeypatch.setattr(wc, "transition_plan", _return(_plan("master", PlanState.TODO)))
-    monkeypatch.setattr(wc, "git_commit", _record_args(calls, "commit"))
-    monkeypatch.setattr(wc, "git_push", _record_args(calls, "push"))
+    call_order: list[str] = []
+    monkeypatch.setattr(
+        wc,
+        "run_validate",
+        MagicMock(return_value=[CheckResult(check_name="x", status="pass", message="ok")]),
+    )
+    fake_transfer = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("transfer"))
+    fake_commit = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("commit"))
+    fake_push = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("push"))
+    monkeypatch.setattr(wc, "transfer_branch_to_main", fake_transfer)
+    monkeypatch.setattr(wc, "transition_plan", MagicMock(return_value=_plan("master", PlanState.TODO)))
+    monkeypatch.setattr(wc, "git_commit", fake_commit)
+    monkeypatch.setattr(wc, "git_push", fake_push)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "todo", "005"])
 
     assert result.exit_code == 0
     assert "workflow implement 005_foo" in result.output
-    assert [name for name, _args in calls] == ["transfer", "commit", "push"]
+    assert call_order == ["transfer", "commit", "push"]
 
 
 def test_implement_prints_explicit_ask_reminder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "master", "todo", "005_foo.md")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(wc, "transition_plan", _return(_plan("master", PlanState.IMPLEMENTING)))
-    monkeypatch.setattr(wc, "git_commit", _noop)
-    monkeypatch.setattr(wc, "git_push", _noop)
-    monkeypatch.setattr(wc.time, "sleep", _noop)
+    monkeypatch.setattr(wc, "transition_plan", MagicMock(return_value=_plan("master", PlanState.IMPLEMENTING)))
+    monkeypatch.setattr(wc, "git_commit", MagicMock())
+    monkeypatch.setattr(wc, "git_push", MagicMock())
+    monkeypatch.setattr(wc.time, "sleep", MagicMock())
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005"])
 
@@ -179,17 +150,22 @@ def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkey
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "builder", "checking", "005_foo.md")
     monkeypatch.chdir(tmp_path)
-    calls: list[list[str]] = []
-    monkeypatch.setattr(wc, "run_command", _record_command(calls))
-    monkeypatch.setattr(wc, "run_validate", _return([CheckResult(check_name="x", status="pass", message="ok")]))
-    monkeypatch.setattr(wc, "git_push", _noop)
-    monkeypatch.setattr(wc, "git_fetch", _noop)
+    fake_run_command = MagicMock()
+    monkeypatch.setattr(wc, "run_command", fake_run_command)
+    monkeypatch.setattr(
+        wc,
+        "run_validate",
+        MagicMock(return_value=[CheckResult(check_name="x", status="pass", message="ok")]),
+    )
+    monkeypatch.setattr(wc, "git_push", MagicMock())
+    monkeypatch.setattr(wc, "git_fetch", MagicMock())
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005"])
 
     assert result.exit_code == 0
-    assert calls[0][:2] == ["docker", "exec"]
-    assert calls[0][2].endswith("-builder")
+    first_call_args = fake_run_command.call_args_list[0].args[0]
+    assert first_call_args[:2] == ["docker", "exec"]
+    assert first_call_args[2].endswith("-builder")
     assert "Next step: review" in result.output
 
 
@@ -197,13 +173,13 @@ def test_push_pushes_resolved_repo_without_transition(tmp_path: Path, monkeypatc
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "master", "intent", "005_foo.md")
     monkeypatch.chdir(tmp_path)
-    pushes: list[Path] = []
-    monkeypatch.setattr(wc, "git_push", _record_repo(pushes))
+    fake_push = MagicMock()
+    monkeypatch.setattr(wc, "git_push", fake_push)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "push", "005"])
 
     assert result.exit_code == 0
-    assert pushes == [tmp_path / "master"]
+    assert [c.args[0] for c in fake_push.call_args_list] == [tmp_path / "master"]
     assert "workflow ask 005_foo" in result.output
 
 
@@ -212,8 +188,11 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     _make_plan(tmp_path, "reviewer", "checking", "005_foo.md")
     _make_plan(tmp_path, "reviewer", "implementing", "006_bar.md")
     monkeypatch.chdir(tmp_path)
-    repos: list[Path] = []
-    monkeypatch.setattr(wc, "git_current_branch", _return("feat/005_foo"))
+    fake_push = MagicMock()
+    fake_pull = MagicMock()
+    fake_merge = MagicMock()
+    fake_commit = MagicMock()
+    monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="feat/005_foo"))
     monkeypatch.setattr(
         wc,
         "transition_plan",
@@ -222,10 +201,10 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
             target_state,
         ),
     )
-    monkeypatch.setattr(wc, "git_push", _record_repo(repos))
-    monkeypatch.setattr(wc, "git_pull", _record_repo(repos))
-    monkeypatch.setattr(wc, "git_merge", _noop)
-    monkeypatch.setattr(wc, "git_commit", _record_repo(repos))
+    monkeypatch.setattr(wc, "git_push", fake_push)
+    monkeypatch.setattr(wc, "git_pull", fake_pull)
+    monkeypatch.setattr(wc, "git_merge", fake_merge)
+    monkeypatch.setattr(wc, "git_commit", fake_commit)
 
     accept_result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005"])
     reject_result = CliRunner().invoke(
@@ -235,8 +214,13 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
 
     assert accept_result.exit_code == 0
     assert reject_result.exit_code == 0
-    assert tmp_path / "reviewer" in repos
-    assert tmp_path / "master" in repos
+    all_repos = (
+        [c.args[0] for c in fake_push.call_args_list]
+        + [c.args[0] for c in fake_pull.call_args_list]
+        + [c.args[0] for c in fake_commit.call_args_list]
+    )
+    assert tmp_path / "reviewer" in all_repos
+    assert tmp_path / "master" in all_repos
 
 
 # ---------------------------------------------------------------------------
@@ -267,13 +251,9 @@ def test_next_intent_number_accounts_for_plans_and_audit_log(tmp_path: Path) -> 
 def test_new_renders_template_and_calls_git_add(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(wc, "_open_in_editor", _noop)
-    added: list[tuple[Path, Path]] = []
-
-    def _record_git_add(repo_path: Path, file_path: Path, **_kwargs: object) -> None:
-        added.append((repo_path, file_path))
-
-    monkeypatch.setattr(wc, "git_add", _record_git_add)
+    monkeypatch.setattr(wc, "_open_in_editor", MagicMock())
+    fake_git_add = MagicMock()
+    monkeypatch.setattr(wc, "git_add", fake_git_add)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "new", "flux_capacitor"])
 
@@ -283,7 +263,9 @@ def test_new_renders_template_and_calls_git_add(tmp_path: Path, monkeypatch: pyt
     content = expected.read_text(encoding="utf-8")
     assert "# 001: Flux Capacitor" in content
     assert "## Goal" in content
-    assert added == [(tmp_path / "master", Path("docs/plans/intent/001_flux_capacitor.md"))]
+    assert [(c.args[0], c.args[1]) for c in fake_git_add.call_args_list] == [
+        (tmp_path / "master", Path("docs/plans/intent/001_flux_capacitor.md")),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -510,3 +492,87 @@ def test_log_since_invalid_value_exits_with_error(tmp_path: Path, monkeypatch: p
     result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--since", "not-a-date"])
 
     assert result.exit_code != 0
+
+
+def test_log_filter_by_until(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _write_entries(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--until", "2026-03-02"])
+
+    assert result.exit_code == 0
+    assert "001_foo" in result.output
+    assert "todo" in result.output
+    assert "002_bar" not in result.output  # 2026-03-03 excluded
+
+
+def test_log_filter_by_plan_strict_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the plan resolves uniquely the substring-fallback notice must NOT appear."""
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "master", "intent", "001_foo.md")
+    write_audit_log(
+        tmp_path,
+        AuditLogEntry(
+            timestamp=datetime(2026, 3, 1, tzinfo=UTC),
+            actor="human",
+            command="new",
+            output_plans=["001_foo"],
+        ),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--plan", "001_foo"])
+
+    assert result.exit_code == 0
+    assert "001_foo" in result.output
+    assert "falling back to substring match" not in result.output
+
+
+def test_log_filter_by_plan_fallback_notice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unresolvable --plan value triggers the fallback notice in the output."""
+    config_path = _make_project(tmp_path)
+    _write_entries(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--plan", "baz"])
+
+    assert result.exit_code == 0
+    assert "falling back to substring match" in result.output
+
+
+def test_status_shows_rejected_plan_only_with_all_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "master", "rejected", "005_foo.md")
+    monkeypatch.chdir(tmp_path)
+
+    result_default = CliRunner().invoke(main, ["--config", str(config_path), "status"])
+    result_all = CliRunner().invoke(main, ["--config", str(config_path), "status", "--all"])
+
+    assert result_default.exit_code == 0
+    assert "005" not in result_default.output
+    assert result_all.exit_code == 0
+    assert "005" in result_all.output
+
+
+def test_new_dry_run_does_not_create_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "new", "my_feature"])
+
+    assert result.exit_code == 0
+    expected = tmp_path / "master" / "docs" / "plans" / "intent" / "001_my_feature.md"
+    assert not expected.exists()
+    assert "Would create" in result.output
+    assert "Would open in $EDITOR" in result.output
+
+
+def test_new_rejects_invalid_slug(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    for bad_slug in ("Foo", "foo/bar", "../tmp/pwn", "foo bar", ""):
+        result = CliRunner().invoke(main, ["--config", str(config_path), "new", bad_slug])
+        assert result.exit_code != 0, f"Expected non-zero exit for slug {bad_slug!r}"
+        assert "Invalid slug" in result.output
