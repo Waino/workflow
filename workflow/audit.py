@@ -30,7 +30,7 @@ AUDIT_COMMAND_REPO_STATE: dict[str, tuple[RepoName, PlanState]] = {
     "subdivide": (RepoName.planner, PlanState.PLANNING),
     "todo": (RepoName.master, PlanState.TODO),
     "implement": (RepoName.master, PlanState.IMPLEMENTING),
-    "check": (RepoName.builder, PlanState.CHECKING),
+    "check": (RepoName.reviewer, PlanState.CHECKING),
     "accept": (RepoName.master, PlanState.DONE),
     "reject": (RepoName.master, PlanState.REJECTED),
 }

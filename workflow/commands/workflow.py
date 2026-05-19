@@ -16,6 +16,7 @@ import jinja2
 
 from workflow.audit import write_audit_log
 from workflow.config import WORKFLOW_ROOT_MARKER, WorkflowConfig
+from workflow.config import ScriptCommand as _ScriptCommand
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.git_helpers import (
     git_add,
@@ -29,7 +30,7 @@ from workflow.git_helpers import (
 )
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import AgentName, RepoName
-from workflow.next_step import find_next_step, find_reminder_name, format_next_step_invocation
+from workflow.next_step import find_command, find_next_step, find_reminder_name, format_next_step_invocation
 from workflow.plan_resolver import next_intent_number, resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console, error_console, run_command
@@ -463,8 +464,20 @@ def push(ctx: click.Context, plan_path: str) -> None:
     try:
         project_dir = _require_project_dir(config)
         plan = resolve_plan(plan_path, project_dir, config=config, command_name="push")
-        repo = plan.path.parts[0]
+        repo = RepoName(plan.path.parts[0])
+        if not dry_run and repo != RepoName.master:
+            branch = git_current_branch(project_dir / repo)
+            if branch == "main":
+                msg = f"push: {repo} is on 'main'; expected a feature branch"
+                raise WorkflowError(msg)
         git_push(project_dir / repo, dry_run=dry_run)
+        script_cmd = find_command(config, plan.state, "push")
+        if (
+            isinstance(script_cmd, _ScriptCommand)
+            and script_cmd.pull_target is not None
+            and script_cmd.pull_target != repo
+        ):
+            git_pull(project_dir / script_cmd.pull_target, dry_run=dry_run)
         _write_script_audit_log(config, "push", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, plan.state, "push", plan.name)
     except (

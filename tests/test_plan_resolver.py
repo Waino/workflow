@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from shutil import copyfile
+from unittest.mock import MagicMock, patch
 
+import libtmux
 import pytest
 
 from workflow.audit import write_audit_log
 from workflow.config import WorkflowConfig, load_config
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.models import AuditLogEntry, Plan, PlanState, Review, ReviewSubState
+from workflow.names import RepoName
 from workflow.plan_resolver import (
+    _from_tmux,
+    _parse_git_log_output,
     find_all_plans,
     find_all_plans_in_repo,
     parse_plan_filename,
@@ -453,20 +460,20 @@ class TestAuditSource:
     def test_audit_log_picks_most_recent_state(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         # Plan 005 exists in two locations; audit log says it was last 'check'-ed,
-        # which puts it in builder/checking.
+        # which puts it in reviewer/checking (§3.2 mapping fix).
         _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_foo.md")
-        _make_plan(tmp_path, "builder", PlanState.CHECKING, "005_foo.md")
+        _make_plan(tmp_path, "reviewer", PlanState.CHECKING, "005_foo.md")
         write_audit_log(
             tmp_path,
             AuditLogEntry(
                 timestamp=datetime(2026, 1, 1, tzinfo=UTC),
-                actor="builder",
+                actor="reviewer",
                 command="check",
                 input_plan="005_foo",
             ),
         )
         plan = resolve_plan("005", tmp_path, config=config)
-        assert plan.path.parts[0] == "builder"
+        assert plan.path.parts[0] == "reviewer"
         assert plan.state == PlanState.CHECKING
 
     def test_audit_log_ignores_unrelated_seq(self, tmp_path: Path) -> None:
@@ -516,3 +523,230 @@ class TestSubcommandSource:
         plan = resolve_plan("007", tmp_path, config=config, command_name="implement")
         assert plan.state == PlanState.PLANNING
         assert plan.path.parts[0] == "planner"
+
+
+# ---------------------------------------------------------------------------
+# §3.2 Audit mapping fix for 'check'
+# ---------------------------------------------------------------------------
+
+
+class TestAuditCheckMapping:
+    """check now maps to (reviewer, checking) so accept resolution works."""
+
+    def test_check_audit_entry_resolves_with_accept(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        _make_plan(tmp_path, "reviewer", PlanState.CHECKING, "005_foo.md")
+        write_audit_log(
+            tmp_path,
+            AuditLogEntry(
+                timestamp=datetime(2026, 4, 1, tzinfo=UTC),
+                actor="reviewer",
+                command="check",
+                input_plan="005_foo",
+            ),
+        )
+        # Previously failed: audit said (builder, checking) but accept expects reviewer.
+        plan = resolve_plan("005", tmp_path, config=config, command_name="accept")
+        assert plan.path.parts[0] == "reviewer"
+        assert plan.state == PlanState.CHECKING
+
+
+# ---------------------------------------------------------------------------
+# §3.3 Direct unit tests for _parse_git_log_output
+# ---------------------------------------------------------------------------
+
+
+class TestParseGitLogOutput:
+    def test_rename_line_returns_new_path_state(self) -> None:
+        output = "abc123 1700000000\nR100\tdocs/plans/planning/005_foo.md\tdocs/plans/implementing/005_foo.md"
+        result = _parse_git_log_output(output)
+        assert result is not None
+        timestamp, state = result
+        assert timestamp == 1700000000
+        assert state == PlanState.IMPLEMENTING
+
+    def test_add_line_returns_state(self) -> None:
+        output = "abc123 1700000001\nA\tdocs/plans/todo/005_foo.md"
+        result = _parse_git_log_output(output)
+        assert result is not None
+        _, state = result
+        assert state == PlanState.TODO
+
+    def test_modify_line_returns_state(self) -> None:
+        output = "abc123 1700000002\nM\tdocs/plans/checking/005_foo.md"
+        result = _parse_git_log_output(output)
+        assert result is not None
+        _, state = result
+        assert state == PlanState.CHECKING
+
+    def test_delete_then_add_same_basename_returns_add_path(self) -> None:
+        output = "abc123 1700000003\nD\tdocs/plans/planning/005_foo.md\nA\tdocs/plans/implementing/005_foo.md"
+        result = _parse_git_log_output(output)
+        assert result is not None
+        _, state = result
+        assert state == PlanState.IMPLEMENTING
+
+    def test_malformed_header_returns_none(self) -> None:
+        output = "not-a-hash-no-timestamp\nA\tdocs/plans/todo/005_foo.md"
+        result = _parse_git_log_output(output)
+        assert result is None
+
+    def test_empty_output_returns_none(self) -> None:
+        assert _parse_git_log_output("") is None
+        assert _parse_git_log_output("   \n  ") is None
+
+    @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+    def test_integration_real_git_repo(self, tmp_path: Path) -> None:
+        """Create a real git repo, commit plan files, assert resolver tracks state."""
+        repo = tmp_path / "master"
+        repo.mkdir()
+        git = shutil.which("git") or "git"
+        subprocess.run([git, "init", str(repo)], check=True, capture_output=True)  # noqa: S603
+        subprocess.run(  # noqa: S603
+            [git, "config", "user.email", "test@example.com"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run([git, "config", "user.name", "Test"], cwd=repo, check=True, capture_output=True)  # noqa: S603
+        # Commit initial plan in planning/
+        plan_dir = repo / "docs" / "plans" / "planning"
+        plan_dir.mkdir(parents=True)
+        plan_file = plan_dir / "005_foo.md"
+        plan_file.write_text("# plan\n")
+        subprocess.run([git, "add", "."], cwd=repo, check=True, capture_output=True)  # noqa: S603
+        subprocess.run([git, "commit", "-m", "add plan"], cwd=repo, check=True, capture_output=True)  # noqa: S603
+        # Move to implementing/
+        impl_dir = repo / "docs" / "plans" / "implementing"
+        impl_dir.mkdir()
+        subprocess.run(  # noqa: S603
+            [git, "mv", "docs/plans/planning/005_foo.md", "docs/plans/implementing/005_foo.md"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(  # noqa: S603
+            [git, "commit", "-m", "move to implementing"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        # Create a minimal project around this repo
+        (tmp_path / ".workflow_root").touch()
+        config = _make_config(tmp_path)
+        plan = resolve_plan("005", tmp_path, config=config)
+        assert plan.state == PlanState.IMPLEMENTING
+
+
+# ---------------------------------------------------------------------------
+# §3.4 Direct unit tests for _from_tmux / _active_tmux_repo
+# ---------------------------------------------------------------------------
+
+
+class TestTmuxSource:
+    def _make_session(self, window_name: str) -> MagicMock:
+        window = MagicMock()
+        window.name = window_name
+        session = MagicMock()
+        session.active_window = window
+        return session
+
+    def test_server_not_alive_returns_none(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        server = MagicMock()
+        server.is_alive.return_value = False
+        with patch("workflow.plan_resolver.libtmux.Server", return_value=server):
+            constraint = _from_tmux(config)
+        assert constraint.repos is None
+
+    def test_session_not_found_returns_none(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        server = MagicMock()
+        server.is_alive.return_value = True
+        server.sessions.get.return_value = None
+        with patch("workflow.plan_resolver.libtmux.Server", return_value=server):
+            constraint = _from_tmux(config)
+        assert constraint.repos is None
+
+    def test_window_name_not_a_repo_returns_none(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        server = MagicMock()
+        server.is_alive.return_value = True
+        server.sessions.get.return_value = self._make_session("random-window")
+        with patch("workflow.plan_resolver.libtmux.Server", return_value=server):
+            constraint = _from_tmux(config)
+        assert constraint.repos is None
+
+    def test_builder_window_returns_builder_and_master(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        server = MagicMock()
+        server.is_alive.return_value = True
+        server.sessions.get.return_value = self._make_session("builder")
+        with patch("workflow.plan_resolver.libtmux.Server", return_value=server):
+            constraint = _from_tmux(config)
+        assert constraint.repos == frozenset({RepoName.builder, RepoName.master})
+
+    def test_master_window_returns_master_only(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        server = MagicMock()
+        server.is_alive.return_value = True
+        server.sessions.get.return_value = self._make_session("master")
+        with patch("workflow.plan_resolver.libtmux.Server", return_value=server):
+            constraint = _from_tmux(config)
+        assert constraint.repos == frozenset({RepoName.master})
+
+    def test_server_raises_oserror_returns_none(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        with patch("workflow.plan_resolver.libtmux.Server", side_effect=OSError("no server")):
+            constraint = _from_tmux(config)
+        assert constraint.repos is None
+
+    def test_server_raises_libtmux_exception_returns_none(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        with patch("workflow.plan_resolver.libtmux.Server", side_effect=libtmux.exc.LibTmuxException("err")):
+            constraint = _from_tmux(config)
+        assert constraint.repos is None
+
+
+# ---------------------------------------------------------------------------
+# §3.5 Fast-path enforcement: fully-qualified path skips git/tmux sources
+# ---------------------------------------------------------------------------
+
+
+class TestFastPathSkipsExpensiveSources:
+    def test_absolute_like_path_skips_git_and_tmux(self, tmp_path: Path) -> None:
+        """A path with explicit repo+state already fixed → git/tmux never called."""
+        config = _make_config(tmp_path)
+        _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_foo.md")
+
+        def _raise(*_args: object, **_kwargs: object) -> object:
+            msg = "expensive source should not be called"
+            raise AssertionError(msg)
+
+        with (
+            patch("workflow.plan_resolver._from_git_history", side_effect=_raise),
+            patch("workflow.plan_resolver._from_tmux", side_effect=_raise),
+        ):
+            plan = resolve_plan("planner/planning/005", tmp_path, config=config)
+        assert plan.state == PlanState.PLANNING
+        assert plan.path.parts[0] == "planner"
+
+
+# ---------------------------------------------------------------------------
+# §3.6 Strengthen union-report message shape
+# ---------------------------------------------------------------------------
+
+
+class TestUnionReport:
+    def test_disagreement_message_includes_source_labels(self, tmp_path: Path) -> None:
+        """The disagreement error message includes per-source labels (path, subcommand)."""
+        config = _make_config(tmp_path)
+        _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_foo.md")
+        with pytest.raises(WorkflowError) as exc_info:
+            resolve_plan("planner/005", tmp_path, config=config, command_name="check")
+        msg = exc_info.value.args[0]
+        assert "Sources disagree" in msg
+        assert ": path" in msg
+        assert ": subcommand" in msg
+        # Should list at least one cell with a repo/state combination
+        assert "docs/plans/" in msg

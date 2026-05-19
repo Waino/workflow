@@ -174,12 +174,16 @@ def test_push_pushes_resolved_repo_without_transition(tmp_path: Path, monkeypatc
     _make_plan(tmp_path, "master", "intent", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     fake_push = MagicMock()
+    fake_pull = MagicMock()
     monkeypatch.setattr(wc, "git_push", fake_push)
+    monkeypatch.setattr(wc, "git_pull", fake_pull)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "push", "005"])
 
     assert result.exit_code == 0
     assert [c.args[0] for c in fake_push.call_args_list] == [tmp_path / "master"]
+    # intent-state push has pull_target=planner — assert pull_target was also called
+    assert [c.args[0] for c in fake_pull.call_args_list] == [tmp_path / "planner"]
     assert "workflow ask 005_foo" in result.output
 
 
@@ -586,7 +590,8 @@ def test_new_rejects_invalid_slug(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 
 def test_implement_from_planning_branch_transfers_and_transitions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Implement from a PLANNING plan: transfer planner→master, transition TODO then IMPLEMENTING."""
     config_path = _make_project(tmp_path)
@@ -659,3 +664,49 @@ def test_todo_resolver_error_exits_nonzero(tmp_path: Path, monkeypatch: pytest.M
     assert result.exit_code != 0
     fake_push.assert_not_called()
     fake_commit.assert_not_called()
+
+
+def test_push_with_pull_target_pulls_after_push(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Push from master with pull_target=planner runs git_push then git_pull(planner)."""
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "master", "intent", "005_foo.md")
+    monkeypatch.chdir(tmp_path)
+    fake_push = MagicMock()
+    fake_pull = MagicMock()
+    monkeypatch.setattr(wc, "git_push", fake_push)
+    monkeypatch.setattr(wc, "git_pull", fake_pull)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "push", "005"])
+
+    assert result.exit_code == 0
+    assert fake_push.call_args_list[0].args[0] == tmp_path / "master"
+    assert fake_pull.call_args_list[0].args[0] == tmp_path / "planner"
+
+
+def test_push_main_branch_guard_non_master_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Push raises error when source repo is not master and current branch is 'main'."""
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    # The default config always resolves push to master; bypass the resolver
+    # to exercise the defensive guard for non-master repos.
+    monkeypatch.setattr(wc, "resolve_plan", MagicMock(return_value=_plan("planner", PlanState.PLANNING)))
+    monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="main"))
+    monkeypatch.setattr(wc, "git_push", MagicMock())
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "push", "005"])
+
+    assert result.exit_code != 0
+    assert "main" in result.output
+
+
+def test_push_master_on_main_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Push from master on 'main' is allowed (master legitimately pushes intent/todo)."""
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "master", "intent", "005_foo.md")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "git_push", MagicMock())
+    monkeypatch.setattr(wc, "git_pull", MagicMock())
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "push", "005"])
+
+    assert result.exit_code == 0

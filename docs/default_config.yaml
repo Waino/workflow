@@ -25,6 +25,7 @@ states:
         name: push
         script: push
         repo_override: master
+        pull_target: planner
         reminder: ask
       - command_type: prompt
         name: ask
