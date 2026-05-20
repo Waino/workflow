@@ -585,30 +585,26 @@ class TestParseGitLogOutput:
         output = "abc123 1700000000\nR100\tdocs/plans/planning/005_foo.md\tdocs/plans/implementing/005_foo.md"
         result = _parse_git_log_output(output)
         assert result is not None
-        timestamp, state = result
-        assert timestamp == 1700000000
-        assert state == PlanState.IMPLEMENTING
+        assert result.timestamp == 1700000000
+        assert result.state == PlanState.IMPLEMENTING
 
     def test_add_line_returns_state(self) -> None:
         output = "abc123 1700000001\nA\tdocs/plans/todo/005_foo.md"
         result = _parse_git_log_output(output)
         assert result is not None
-        _, state = result
-        assert state == PlanState.TODO
+        assert result.state == PlanState.TODO
 
     def test_modify_line_returns_state(self) -> None:
         output = "abc123 1700000002\nM\tdocs/plans/checking/005_foo.md"
         result = _parse_git_log_output(output)
         assert result is not None
-        _, state = result
-        assert state == PlanState.CHECKING
+        assert result.state == PlanState.CHECKING
 
     def test_delete_then_add_same_basename_returns_add_path(self) -> None:
         output = "abc123 1700000003\nD\tdocs/plans/planning/005_foo.md\nA\tdocs/plans/implementing/005_foo.md"
         result = _parse_git_log_output(output)
         assert result is not None
-        _, state = result
-        assert state == PlanState.IMPLEMENTING
+        assert result.state == PlanState.IMPLEMENTING
 
     def test_malformed_header_returns_none(self) -> None:
         output = "not-a-hash-no-timestamp\nA\tdocs/plans/todo/005_foo.md"

@@ -329,6 +329,54 @@ class _PathHints(BaseModel):
     slug: str | None
 
 
+class _GitTouch(BaseModel):
+    """Newest git log touch of a plan file: commit timestamp and resulting state."""
+
+    model_config = ConfigDict(frozen=True)
+
+    timestamp: int
+    state: PlanState
+
+
+class _BestGitTouch(BaseModel):
+    """Like _GitTouch but also records which repo clone the commit was found in."""
+
+    model_config = ConfigDict(frozen=True)
+
+    timestamp: int
+    state: PlanState
+    repo: RepoName
+
+
+class _PathComponents(BaseModel):
+    """Raw components extracted from a fuzzy path string by _extract_components."""
+
+    model_config = ConfigDict(frozen=True)
+
+    repo: RepoName | None = None
+    state: PlanState | None = None
+    seq: list[int] | None = None
+    slug: str | None = None
+
+
+class _Source(BaseModel):
+    """A named constraint source contributing to plan resolution."""
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    constraint: _Constraint
+
+
+class _RepoStatePair(BaseModel):
+    """A (repo, state) pair used as a hashable key in _union_report's contribution map."""
+
+    model_config = ConfigDict(frozen=True)
+
+    repo: RepoName
+    state: PlanState
+
+
 def _seq_to_str(seq: list[int]) -> str:
     """Format a sequence number list as the on-disk string form."""
     parts = [str(n) for n in seq]
@@ -349,8 +397,8 @@ def _intersect(values: list[frozenset[_T] | None]) -> frozenset[_T] | None:
 
 def _extract_components(
     parts: list[str],
-) -> tuple[RepoName | None, PlanState | None, list[int] | None, str | None]:
-    """Parse normalized path parts into (repo_hint, state_hint, seq_hint, slug_hint)."""
+) -> _PathComponents:
+    """Parse normalized path parts into a _PathComponents with repo/state/seq/slug hints."""
     state_values = {s.value: s for s in PlanState}
     repo_hint: RepoName | None = None
     state_hint: PlanState | None = None
@@ -379,16 +427,16 @@ def _extract_components(
             with suppress(ValueError):
                 seq_hint = [int(n) for n in name_part.split(".")]
 
-    return repo_hint, state_hint, seq_hint, slug_hint
+    return _PathComponents(repo=repo_hint, state=state_hint, seq=seq_hint, slug=slug_hint)
 
 
 def _from_fuzzy_path(fuzzy_path: str) -> _PathHints:
     """Parse the fuzzy path and return its constraint plus seq/slug hints."""
     parts = [p for p in fuzzy_path.removesuffix(".md").replace("\\", "/").split("/") if p]
-    repo_hint, state_hint, seq, slug = _extract_components(parts)
-    repos = frozenset({repo_hint}) if repo_hint is not None else None
-    states = frozenset({state_hint}) if state_hint is not None else None
-    return _PathHints(constraint=_Constraint(repos=repos, states=states), seq=seq, slug=slug)
+    components = _extract_components(parts)
+    repos = frozenset({components.repo}) if components.repo is not None else None
+    states = frozenset({components.state}) if components.state is not None else None
+    return _PathHints(constraint=_Constraint(repos=repos, states=states), seq=components.seq, slug=components.slug)
 
 
 def _agent_repo(agent: str | None, default: RepoName) -> RepoName:
@@ -499,8 +547,8 @@ def _git_log_chosen_path(lines: list[str]) -> str | None:
     return None
 
 
-def _parse_git_log_output(output: str) -> tuple[int, PlanState] | None:
-    """Parse the `--format='%H %ct' --name-status` output to (timestamp, state)."""
+def _parse_git_log_output(output: str) -> _GitTouch | None:
+    """Parse the `--format='%H %ct' --name-status` output to a _GitTouch."""
     lines = [ln for ln in output.splitlines() if ln.strip()]
     if not lines:
         return None
@@ -517,10 +565,10 @@ def _parse_git_log_output(output: str) -> tuple[int, PlanState] | None:
     state = _parse_path_to_state(chosen)
     if state is None:
         return None
-    return timestamp, state
+    return _GitTouch(timestamp=timestamp, state=state)
 
 
-def _git_newest_touch(repo_path: Path, seq: list[int], slug: str | None) -> tuple[int, PlanState] | None:
+def _git_newest_touch(repo_path: Path, seq: list[int], slug: str | None) -> _GitTouch | None:
     """Find the newest non-merge commit in *repo_path* touching a plan file matching seq/slug."""
     seq_str = _seq_to_str(seq)
     glob = f"{seq_str}_{slug}.md" if slug else f"{seq_str}_*.md"
@@ -568,21 +616,24 @@ def _from_git_history(
     commit with the more progressed state reflects the true current state
     even when its committer date matches an older sibling.
     """
-    best: tuple[int, PlanState, RepoName] | None = None
+    best: _BestGitTouch | None = None
     for repo in RepoName:
         repo_path = project_dir / repo
         if not (repo_path / ".git").exists():
             continue
-        result = _git_newest_touch(repo_path, seq, slug)
-        if result is None:
+        touch = _git_newest_touch(repo_path, seq, slug)
+        if touch is None:
             continue
-        timestamp, state = result
-        if best is None or timestamp > best[0] or (timestamp == best[0] and _state_rank(state) > _state_rank(best[1])):
-            best = (timestamp, state, repo)
+        if (
+            best is None
+            or touch.timestamp > best.timestamp
+            or (touch.timestamp == best.timestamp and _state_rank(touch.state) > _state_rank(best.state))
+        ):
+            best = _BestGitTouch(timestamp=touch.timestamp, state=touch.state, repo=repo)
     if best is None:
         return _Constraint()
-    repos = frozenset({best[2]}) if provides_repo else None
-    return _Constraint(repos=repos, states=frozenset({best[1]}))
+    repos = frozenset({best.repo}) if provides_repo else None
+    return _Constraint(repos=repos, states=frozenset({best.state}))
 
 
 def _name_matches_seq(plan_name: str, seq_str: str) -> bool:
@@ -681,20 +732,24 @@ def _filesystem_matches(
     return matches
 
 
-def _union_report(fuzzy_path: str, sources: list[tuple[str, _Constraint]]) -> WorkflowError:
+def _union_report(fuzzy_path: str, sources: list[_Source]) -> WorkflowError:
     """Build a multi-line WorkflowError listing the (repo, state) cells each source supports."""
-    contributions: dict[tuple[RepoName, PlanState], list[str]] = defaultdict(list)
-    for label, c in sources:
-        if c.repos is None and c.states is None:
+    contributions: dict[_RepoStatePair, list[str]] = defaultdict(list)
+    for source in sources:
+        if source.constraint.repos is None and source.constraint.states is None:
             continue
-        repos = c.repos if c.repos is not None else _ALL_REPOS
-        states = c.states if c.states is not None else _ALL_STATES
+        repos = source.constraint.repos if source.constraint.repos is not None else _ALL_REPOS
+        states = source.constraint.states if source.constraint.states is not None else _ALL_STATES
         for r in repos:
             for s in states:
-                contributions[(r, s)].append(label)
-    lines = [f"No matching plan for {fuzzy_path!r}. Sources disagree:"]
-    for r, s in sorted(contributions, key=lambda k: (k[0].value, k[1].value)):
-        lines.append(f"  {r}/docs/plans/{s.value}/...: {', '.join(contributions[(r, s)])}")
+                contributions[_RepoStatePair(repo=r, state=s)].append(source.label)
+    lines = [
+        f"No matching plan for {fuzzy_path!r}. Sources disagree:",
+        *[
+            f"  {rs.repo}/docs/plans/{rs.state.value}/...: {', '.join(contributions[rs])}"
+            for rs in sorted(contributions, key=lambda k: (k.repo.value, k.state.value))
+        ],
+    ]
     return WorkflowError("\n".join(lines))
 
 
@@ -758,16 +813,19 @@ def resolve_plan(
             return _disambiguate(fuzzy_path, matches, sorted(fast_repos))
 
     audit_mapping = build_audit_command_repo_state(config)
-    sources: list[tuple[str, _Constraint]] = [
-        ("path", hints.constraint),
-        ("subcommand", _from_subcommand(config, command_name)),
-        ("git", _from_git_history(project_dir, hints.seq, hints.slug, provides_repo=git_provides_repo)),
-        ("audit", _from_audit_log(project_dir, hints.seq, audit_mapping)),
-        ("tmux", _from_tmux(config)),
+    sources: list[_Source] = [
+        _Source(label="path", constraint=hints.constraint),
+        _Source(label="subcommand", constraint=_from_subcommand(config, command_name)),
+        _Source(
+            label="git",
+            constraint=_from_git_history(project_dir, hints.seq, hints.slug, provides_repo=git_provides_repo),
+        ),
+        _Source(label="audit", constraint=_from_audit_log(project_dir, hints.seq, audit_mapping)),
+        _Source(label="tmux", constraint=_from_tmux(config)),
     ]
 
-    repos = _intersect([c.repos for _, c in sources])
-    states = _intersect([c.states for _, c in sources])
+    repos = _intersect([s.constraint.repos for s in sources])
+    states = _intersect([s.constraint.states for s in sources])
 
     if repos == frozenset() or states == frozenset():
         raise _union_report(fuzzy_path, sources)
