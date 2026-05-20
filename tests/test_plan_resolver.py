@@ -12,12 +12,13 @@ from unittest.mock import MagicMock, patch
 import libtmux
 import pytest
 
-from workflow.audit import write_audit_log
+from workflow.audit import build_audit_command_repo_state, write_audit_log
 from workflow.config import WorkflowConfig, load_config
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.models import AuditLogEntry, Plan, PlanState, Review, ReviewSubState
 from workflow.names import RepoName
 from workflow.plan_resolver import (
+    _from_git_history,
     _from_tmux,
     _parse_git_log_output,
     find_all_plans,
@@ -750,3 +751,95 @@ class TestUnionReport:
         assert ": subcommand" in msg
         # Should list at least one cell with a repo/state combination
         assert "docs/plans/" in msg
+
+
+# ---------------------------------------------------------------------------
+# §4a Git source: provides_repo flag (opt-in repo constraint)
+# ---------------------------------------------------------------------------
+
+
+def _init_git_repo(repo: Path) -> None:
+    """Initialise a git repo at *repo* with a fixed identity (test helper)."""
+    git = shutil.which("git") or "git"
+    repo.mkdir(parents=True, exist_ok=True)
+    subprocess.run([git, "init", str(repo)], check=True, capture_output=True)  # noqa: S603
+    subprocess.run(  # noqa: S603
+        [git, "config", "user.email", "test@example.com"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run([git, "config", "user.name", "Test"], cwd=repo, check=True, capture_output=True)  # noqa: S603
+
+
+def _commit_plan(repo: Path, state: PlanState, name: str) -> None:
+    """Add a plan file under *repo*/docs/plans/<state>/ and commit it (test helper)."""
+    git = shutil.which("git") or "git"
+    plan_dir = repo / "docs" / "plans" / state.value
+    plan_dir.mkdir(parents=True, exist_ok=True)
+    (plan_dir / name).write_text("# plan\n")
+    subprocess.run([git, "add", "."], cwd=repo, check=True, capture_output=True)  # noqa: S603
+    subprocess.run([git, "commit", "-m", f"add {name}"], cwd=repo, check=True, capture_output=True)  # noqa: S603
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+class TestGitProvidesRepoFlag:
+    """_from_git_history contributes a repo only when provides_repo=True."""
+
+    def test_default_returns_state_only(self, tmp_path: Path) -> None:
+        _init_git_repo(tmp_path / "master")
+        _commit_plan(tmp_path / "master", PlanState.IMPLEMENTING, "005_foo.md")
+        constraint = _from_git_history(tmp_path, [5], "foo")
+        assert constraint.repos is None
+        assert constraint.states == frozenset({PlanState.IMPLEMENTING})
+
+    def test_provides_repo_true_returns_repo_and_state(self, tmp_path: Path) -> None:
+        _init_git_repo(tmp_path / "master")
+        _commit_plan(tmp_path / "master", PlanState.IMPLEMENTING, "005_foo.md")
+        constraint = _from_git_history(tmp_path, [5], "foo", provides_repo=True)
+        assert constraint.repos == frozenset({RepoName.master})
+        assert constraint.states == frozenset({PlanState.IMPLEMENTING})
+
+
+class TestResolvePlanForwardsGitProvidesRepo:
+    """resolve_plan forwards the git_provides_repo flag to _from_git_history."""
+
+    def test_default_is_false(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        _make_plan(tmp_path, "master", PlanState.TODO, "005_foo.md")
+        with patch("workflow.plan_resolver._from_git_history", wraps=_from_git_history) as mock:
+            resolve_plan("005", tmp_path, config=config)
+        assert mock.call_args.kwargs["provides_repo"] is False
+
+    def test_true_when_requested(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        _make_plan(tmp_path, "master", PlanState.TODO, "005_foo.md")
+        with patch("workflow.plan_resolver._from_git_history", wraps=_from_git_history) as mock:
+            resolve_plan("005", tmp_path, config=config, git_provides_repo=True)
+        assert mock.call_args.kwargs["provides_repo"] is True
+
+
+# ---------------------------------------------------------------------------
+# §4b Audit mapping is derived from the config, not hardcoded
+# ---------------------------------------------------------------------------
+
+
+class TestAuditCommandRepoStateBuilder:
+    """build_audit_command_repo_state(config) reflects each command's transition target."""
+
+    def test_transition_commands_map_to_target_state_and_owning_agent(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        mapping = build_audit_command_repo_state(config)
+        assert mapping["plan"] == (RepoName.planner, PlanState.PLANNING)
+        assert mapping["subdivide"] == (RepoName.planner, PlanState.PLANNING)
+        assert mapping["todo"] == (RepoName.master, PlanState.TODO)
+        assert mapping["implement"] == (RepoName.builder, PlanState.IMPLEMENTING)
+        assert mapping["check"] == (RepoName.reviewer, PlanState.CHECKING)
+        assert mapping["accept"] == (RepoName.master, PlanState.DONE)
+        assert mapping["reject"] == (RepoName.master, PlanState.REJECTED)
+
+    def test_commands_without_transition_are_absent(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        mapping = build_audit_command_repo_state(config)
+        for cmd in ("new", "push", "ask", "build", "critique", "pr", "validate"):
+            assert cmd not in mapping

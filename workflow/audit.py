@@ -7,10 +7,8 @@ The log file lives at {project_dir}/workflow.log.jsonl and is never committed.
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 from pydantic import ValidationError
 from rich.console import Console
@@ -18,22 +16,43 @@ from rich.console import Console
 from workflow.models import AuditLogEntry, PlanState
 from workflow.names import RepoName
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from workflow.config import WorkflowConfig
+
 AUDIT_LOG_FILENAME = "workflow.log.jsonl"
 
-# Map audit log `command` values to the (repo, state) the command leaves the plan in.
-# Used by the plan resolver to derive a repo/state hint from the most recent
-# audit log entry mentioning a plan. `push` is intentionally absent — generic
-# pushes are not state transitions and contribute no constraint.
-AUDIT_COMMAND_REPO_STATE: dict[str, tuple[RepoName, PlanState]] = {
-    "new": (RepoName.master, PlanState.INTENT),
-    "plan": (RepoName.planner, PlanState.PLANNING),
-    "subdivide": (RepoName.planner, PlanState.PLANNING),
-    "todo": (RepoName.master, PlanState.TODO),
-    "implement": (RepoName.master, PlanState.IMPLEMENTING),
-    "check": (RepoName.reviewer, PlanState.CHECKING),
-    "accept": (RepoName.master, PlanState.DONE),
-    "reject": (RepoName.master, PlanState.REJECTED),
-}
+
+def build_audit_command_repo_state(config: WorkflowConfig) -> dict[str, tuple[RepoName, PlanState]]:
+    """Derive the audit `command` → `(repo, state)` mapping from *config*.
+
+    For each command (script or prompt) in any state with a non-``None``
+    ``transition``, the command leaves the plan in ``transition`` state,
+    owned by that state's agent (or ``master`` when no agent is configured).
+    Commands without a transition contribute no entry; their audit-log
+    appearances do not constrain the resolver.
+    """
+    # Lazy import to avoid a hard dependency from audit.py to config.py at import time.
+    from workflow.config import PromptCommand, ScriptCommand  # noqa: PLC0415
+
+    mapping: dict[str, tuple[RepoName, PlanState]] = {}
+    for state_config in config.states.values():
+        for cmd in state_config.commands:
+            if not isinstance(cmd, (PromptCommand, ScriptCommand)):
+                continue
+            if cmd.transition is None:
+                continue
+            target_state = cmd.transition
+            target_cfg = config.states.get(target_state)
+            agent = getattr(target_cfg, "agent", None) if target_cfg is not None else None
+            repo = RepoName.master
+            if agent is not None:
+                with suppress(ValueError):
+                    repo = RepoName(agent)
+            mapping[cmd.name] = (repo, target_state)
+    return mapping
+
 
 _console = Console(stderr=True)
 

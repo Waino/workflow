@@ -140,5 +140,6 @@ def transfer_branch_to_main(
         raise WorkflowError(msg)
     git_push(source_repo, dry_run=dry_run)
     git_pull(master_repo, dry_run=dry_run)
-    git_merge(master_repo, branch, dry_run=dry_run)
+    # Merge via the remote-tracking ref so the branch need not exist locally.
+    git_merge(master_repo, f"origin/{branch}", dry_run=dry_run)
     git_push(master_repo, dry_run=dry_run)

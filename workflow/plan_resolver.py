@@ -14,7 +14,7 @@ import libtmux
 import libtmux.exc
 from pydantic import BaseModel, ConfigDict
 
-from workflow.audit import AUDIT_COMMAND_REPO_STATE, read_audit_log
+from workflow.audit import build_audit_command_repo_state, read_audit_log
 from workflow.config import PromptCommand, ScriptCommand, WorkflowConfig
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.models import Plan, PlanState, Review, ReviewSubState
@@ -547,8 +547,22 @@ def _git_newest_touch(repo_path: Path, seq: list[int], slug: str | None) -> tupl
     return _parse_git_log_output(result.stdout)
 
 
-def _from_git_history(project_dir: Path, seq: list[int], slug: str | None) -> _Constraint:
-    """Pick the repo with the newest commit touching the plan file; derive its state."""
+def _from_git_history(
+    project_dir: Path,
+    seq: list[int],
+    slug: str | None,
+    *,
+    provides_repo: bool = False,
+) -> _Constraint:
+    """Pick the newest commit touching the plan file; derive state (and optionally repo).
+
+    By default the returned constraint carries only ``states``; ``repos`` is
+    left silent because the same transition commit is replayed (via pull/
+    fetch) into both ``master`` and the agent's clone, and git's `%ct`
+    tie-break would otherwise arbitrarily pick one. Callers that genuinely
+    need the source-of-edit repo (currently only ``push``) pass
+    ``provides_repo=True``.
+    """
     best: tuple[int, PlanState, RepoName] | None = None
     for repo in RepoName:
         repo_path = project_dir / repo
@@ -562,7 +576,8 @@ def _from_git_history(project_dir: Path, seq: list[int], slug: str | None) -> _C
             best = (timestamp, state, repo)
     if best is None:
         return _Constraint()
-    return _Constraint(repos=frozenset({best[2]}), states=frozenset({best[1]}))
+    repos = frozenset({best[2]}) if provides_repo else None
+    return _Constraint(repos=repos, states=frozenset({best[1]}))
 
 
 def _name_matches_seq(plan_name: str, seq_str: str) -> bool:
@@ -574,7 +589,11 @@ def _name_matches_seq(plan_name: str, seq_str: str) -> bool:
     return num_part == seq_str
 
 
-def _from_audit_log(project_dir: Path, seq: list[int]) -> _Constraint:
+def _from_audit_log(
+    project_dir: Path,
+    seq: list[int],
+    mapping: dict[str, tuple[RepoName, PlanState]],
+) -> _Constraint:
     """Derive a constraint from the most recent audit entry mentioning the sequence number."""
     seq_str = _seq_to_str(seq)
     most_recent: tuple[RepoName, PlanState] | None = None
@@ -582,9 +601,9 @@ def _from_audit_log(project_dir: Path, seq: list[int]) -> _Constraint:
         names = [entry.input_plan, *entry.output_plans]
         if not any(n is not None and _name_matches_seq(n, seq_str) for n in names):
             continue
-        mapping = AUDIT_COMMAND_REPO_STATE.get(entry.command)
-        if mapping is not None:
-            most_recent = mapping
+        hit = mapping.get(entry.command)
+        if hit is not None:
+            most_recent = hit
     if most_recent is None:
         return _Constraint()
     return _Constraint(repos=frozenset({most_recent[0]}), states=frozenset({most_recent[1]}))
@@ -673,6 +692,7 @@ def resolve_plan(
     *,
     config: WorkflowConfig,
     command_name: str | None = None,
+    git_provides_repo: bool = False,
 ) -> Plan:
     """Resolve a fuzzy path reference to a canonical Plan.
 
@@ -688,6 +708,12 @@ def resolve_plan(
         config: Workflow configuration; provides the subcommand and tmux sources.
         command_name: Name of the CLI subcommand being resolved. ``None`` skips
             the subcommand source entirely.
+        git_provides_repo: When True, the git data source contributes a repo
+            constraint (the clone with the newest commit touching the plan
+            file). Only ``push`` opts in: it needs to identify the clone with
+            unpushed manual edits. All other callers leave git silent on the
+            repo dimension so transition commits don't tie-break to ``master``
+            and conflict with the subcommand's agent-owned repo.
 
     Raises:
         PlanNotFoundError: No plan matches the combined constraints.
@@ -714,11 +740,12 @@ def resolve_plan(
         if matches:
             return _disambiguate(fuzzy_path, matches, sorted(fast_repos))
 
+    audit_mapping = build_audit_command_repo_state(config)
     sources: list[tuple[str, _Constraint]] = [
         ("path", hints.constraint),
         ("subcommand", _from_subcommand(config, command_name)),
-        ("git", _from_git_history(project_dir, hints.seq, hints.slug)),
-        ("audit", _from_audit_log(project_dir, hints.seq)),
+        ("git", _from_git_history(project_dir, hints.seq, hints.slug, provides_repo=git_provides_repo)),
+        ("audit", _from_audit_log(project_dir, hints.seq, audit_mapping)),
         ("tmux", _from_tmux(config)),
     ]
 

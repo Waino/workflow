@@ -27,7 +27,8 @@ def test_transfer_branch_to_main_runs_steps_in_order(monkeypatch: pytest.MonkeyP
     assert calls == [
         ("push", source_repo, True),
         ("pull", master_repo, True),
-        ("merge", master_repo, "feat/005_plan_state_and_git", True),
+        # origin/ prefix because the branch is only a remote tracking ref in target repo
+        ("merge", master_repo, "origin/feat/005_plan_state_and_git", True),
         ("push", master_repo, True),
     ]
 

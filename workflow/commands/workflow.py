@@ -463,7 +463,13 @@ def push(ctx: click.Context, plan_path: str) -> None:
 
     try:
         project_dir = _require_project_dir(config)
-        plan = resolve_plan(plan_path, project_dir, config=config, command_name="push")
+        plan = resolve_plan(
+            plan_path,
+            project_dir,
+            config=config,
+            command_name="push",
+            git_provides_repo=True,
+        )
         repo = RepoName(plan.path.parts[0])
         if not dry_run and repo != RepoName.master:
             branch = git_current_branch(project_dir / repo)
@@ -511,8 +517,9 @@ def accept(ctx: click.Context, plan_path: str) -> None:
             raise WorkflowError(msg)
         git_push(project_dir / RepoName.reviewer, dry_run=dry_run)
         git_pull(project_dir / RepoName.master, dry_run=dry_run)
+        # Merge via remote-tracking ref: the branch is not checked out locally in master.
+        git_merge(project_dir / RepoName.master, f"origin/{branch}", dry_run=dry_run)
         new_plan = transition_plan(plan, PlanState.DONE, project_dir, repo_override=RepoName.master, dry_run=dry_run)
-        git_merge(project_dir / RepoName.master, branch, dry_run=dry_run)
         git_commit(
             project_dir / RepoName.master,
             _transition_commit_message(new_plan, PlanState.DONE),
