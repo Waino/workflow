@@ -133,6 +133,19 @@ def init(ctx: click.Context) -> None:
         run_command(["git", "clone", "--bare", RepoName.master, "bare"], cwd=project_dir, dry_run=dry_run)
         for agent in config.agents:
             run_command(["git", "clone", "bare", agent.name], cwd=project_dir, dry_run=dry_run)
+        # Configure push behaviour in each agent clone so feature branches push
+        # to a same-named remote branch without requiring a pre-existing upstream.
+        for agent in config.agents:
+            agent_repo = project_dir / agent.name
+            run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=agent_repo, dry_run=dry_run)
+            run_command(["git", "config", "push.default", "current"], cwd=agent_repo, dry_run=dry_run)
+        # Wire master to bare so git pull/push work in place.
+        bare_path = project_dir / "bare"
+        master_repo = project_dir / RepoName.master
+        run_command(["git", "remote", "add", "origin", str(bare_path)], cwd=master_repo, dry_run=dry_run)
+        run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=master_repo, dry_run=dry_run)
+        run_command(["git", "config", "push.default", "current"], cwd=master_repo, dry_run=dry_run)
+        run_command(["git", "push", "-u", "origin", "HEAD"], cwd=master_repo, dry_run=dry_run)
         if not dry_run:
             (project_dir / WORKFLOW_ROOT_MARKER).touch()
         _write_script_audit_log(config.model_copy(update={"project_dir": project_dir}), "init", dry_run=dry_run)

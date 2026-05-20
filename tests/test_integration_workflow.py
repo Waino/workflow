@@ -85,26 +85,16 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
 
-    # Step 2: workflow init
+    # Step 2: workflow init (also wires origin remote and push config in all repos)
     result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
     assert result.exit_code == 0, result.output
 
-    # Configure git user and push behaviour in each cloned repo. push.default=current
-    # makes `git push origin` push the current branch to a same-named remote branch,
-    # which is what feat/* and plan/* branches need (they inherit origin/main as their
-    # upstream from `checkout -b … origin/main`, which would otherwise reject the push).
+    # Set git user identity in each cloned repo (needed for commits made by the test).
+    # push.autoSetupRemote, push.default=current, and the origin remote are set up by init.
     for repo_name in ("planner", "builder", "reviewer"):
         repo = tmp_path / repo_name
         _git(["config", "user.email", "test@example.com"], cwd=repo)
         _git(["config", "user.name", "Test"], cwd=repo)
-        _git(["config", "push.autoSetupRemote", "true"], cwd=repo)
-        _git(["config", "push.default", "current"], cwd=repo)
-
-    # Configure master's remote and push config so git push works
-    _git(["config", "push.autoSetupRemote", "true"], cwd=master)
-    _git(["config", "push.default", "current"], cwd=master)
-    _git(["remote", "add", "origin", str(tmp_path / "bare")], cwd=master)
-    _git(["push", "-u", "origin", "main"], cwd=master)
 
     # Step 3: simulate planner edit - create plan on a feature branch
     planner = tmp_path / "planner"

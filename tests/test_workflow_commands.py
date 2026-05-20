@@ -56,11 +56,22 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
     result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
 
     assert result.exit_code == 0
+    project_dir = tmp_path.resolve()
     assert [c.args[0] for c in fake_run_command.call_args_list] == [
         ["git", "clone", "--bare", "master", "bare"],
         ["git", "clone", "bare", "planner"],
         ["git", "clone", "bare", "builder"],
         ["git", "clone", "bare", "reviewer"],
+        ["git", "config", "push.autoSetupRemote", "true"],  # planner
+        ["git", "config", "push.default", "current"],  # planner
+        ["git", "config", "push.autoSetupRemote", "true"],  # builder
+        ["git", "config", "push.default", "current"],  # builder
+        ["git", "config", "push.autoSetupRemote", "true"],  # reviewer
+        ["git", "config", "push.default", "current"],  # reviewer
+        ["git", "remote", "add", "origin", str(project_dir / "bare")],
+        ["git", "config", "push.autoSetupRemote", "true"],  # master
+        ["git", "config", "push.default", "current"],  # master
+        ["git", "push", "-u", "origin", "HEAD"],
     ]
     assert (tmp_path / WORKFLOW_ROOT_MARKER).exists()
 
