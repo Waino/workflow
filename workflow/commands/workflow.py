@@ -33,7 +33,7 @@ from workflow.names import AgentName, RepoName
 from workflow.next_step import find_command, find_next_step, find_reminder_name, format_next_step_invocation
 from workflow.plan_resolver import next_intent_number, resolve_plan
 from workflow.registry import register_script
-from workflow.shell import console, error_console, run_command
+from workflow.shell import console, error_console, print_workflow_error, run_command
 from workflow.state import transition_plan
 from workflow.validate import CHECK_NAMES, CheckResult, infer_target_repo
 from workflow.validate import validate as run_validate
@@ -150,7 +150,7 @@ def init(ctx: click.Context) -> None:
             (project_dir / WORKFLOW_ROOT_MARKER).touch()
         _write_script_audit_log(config.model_copy(update={"project_dir": project_dir}), "init", dry_run=dry_run)
     except (subprocess.CalledProcessError, WorkflowError) as exc:
-        error_console.print(f"[red]{exc}[/red]")
+        print_workflow_error(exc)
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -202,7 +202,7 @@ def start(ctx: click.Context) -> None:
         )
         _write_script_audit_log(config, "start", dry_run=dry_run)
     except (subprocess.CalledProcessError, WorkflowError) as exc:
-        error_console.print(f"[red]{exc}[/red]")
+        print_workflow_error(exc)
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -244,7 +244,7 @@ def new(ctx: click.Context, slug: str) -> None:
         )
         _write_script_audit_log(config, "new", dry_run=dry_run, output_plans=[intent_path.stem])
     except (subprocess.CalledProcessError, WorkflowError) as exc:
-        error_console.print(f"[red]{exc}[/red]")
+        print_workflow_error(exc)
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -287,7 +287,7 @@ def todo(ctx: click.Context, plan_path: str) -> None:
         PlanCollisionError,
         WorkflowError,
     ) as exc:
-        error_console.print(f"[red]{exc}[/red]")
+        print_workflow_error(exc)
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -338,7 +338,7 @@ def implement(ctx: click.Context, plan_path: str) -> None:
         PlanCollisionError,
         WorkflowError,
     ) as exc:
-        error_console.print(f"[red]{exc}[/red]")
+        print_workflow_error(exc)
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -370,7 +370,7 @@ def validate(
     try:
         plan = resolve_plan(plan_path, config.project_dir, config=config)
     except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError, WorkflowError) as exc:
-        error_console.print(f"[red]{exc}[/red]")
+        print_workflow_error(exc)
         ctx.exit(1)
         return
 
@@ -385,7 +385,7 @@ def validate(
     try:
         results = run_validate(plan, config.project_dir, config, target_repo_override=target)
     except WorkflowError as exc:
-        error_console.print(f"[red]{exc}[/red]")
+        print_workflow_error(exc)
         ctx.exit(1)
         return
 
@@ -460,7 +460,7 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName) -> None:
         PlanCollisionError,
         WorkflowError,
     ) as exc:
-        error_console.print(f"[red]{exc}[/red]")
+        print_workflow_error(exc)
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -506,7 +506,7 @@ def push(ctx: click.Context, plan_path: str) -> None:
         PlanCollisionError,
         WorkflowError,
     ) as exc:
-        error_console.print(f"[red]{exc}[/red]")
+        print_workflow_error(exc)
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -549,7 +549,7 @@ def accept(ctx: click.Context, plan_path: str) -> None:
         PlanCollisionError,
         WorkflowError,
     ) as exc:
-        error_console.print(f"[red]{exc}[/red]")
+        print_workflow_error(exc)
         ctx.exit(1)
         return
     ctx.exit(0)
@@ -592,7 +592,7 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
         PlanCollisionError,
         WorkflowError,
     ) as exc:
-        error_console.print(f"[red]{exc}[/red]")
+        print_workflow_error(exc)
         ctx.exit(1)
         return
     ctx.exit(0)

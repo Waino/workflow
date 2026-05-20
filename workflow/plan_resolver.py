@@ -13,12 +13,38 @@ from typing import TypeVar
 import libtmux
 import libtmux.exc
 from pydantic import BaseModel, ConfigDict
+from rich.console import Group
+from rich.text import Text
 
 from workflow.audit import build_audit_command_repo_state, read_audit_log
 from workflow.config import PromptCommand, ScriptCommand, WorkflowConfig
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.models import Plan, PlanState, Review, ReviewSubState
 from workflow.names import RepoName
+
+# Color styles for the SourcesDisagreeError rendering.
+_REPO_STYLES: dict[RepoName, str] = {
+    RepoName.master: "steel_blue3",
+    RepoName.planner: "turquoise4",
+    RepoName.builder: "gold3",
+    RepoName.reviewer: "light_salmon3",
+}
+_STATE_STYLES: dict[PlanState, str] = {
+    PlanState.INTENT: "steel_blue3",
+    PlanState.PLANNING: "turquoise4",
+    PlanState.TODO: "spring_green3",
+    PlanState.IMPLEMENTING: "gold3",
+    PlanState.CHECKING: "light_salmon3",
+    PlanState.DONE: "grey70",
+    PlanState.REJECTED: "grey30",
+    PlanState.REVIEW: "deep_pink3",
+}
+_SOURCE_STYLES: dict[str, str] = {
+    "subcommand": "grey70",
+    "git": "aquamarine1",
+    "audit": "violet",
+    "tmux": "steel_blue3",
+}
 
 # Timestamp as used in critique review filenames: 2026-03-18T14-30-00Z (dashes, no colons)
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z$")
@@ -732,8 +758,50 @@ def _filesystem_matches(
     return matches
 
 
-def _union_report(fuzzy_path: str, sources: list[_Source]) -> WorkflowError:
-    """Build a multi-line WorkflowError listing the (repo, state) cells each source supports."""
+class SourcesDisagreeError(WorkflowError):
+    """Raised when the resolver's constraint sources have an empty intersection.
+
+    Carries structured per-(repo, state) contribution data so the CLI can render
+    a colorized, aligned table on stderr instead of treating the message as a
+    single red blob.
+    """
+
+    def __init__(self, fuzzy_path: str, contributions: dict[_RepoStatePair, list[str]]) -> None:
+        """Store the fuzzy path and contributions; build a plain-text fallback message."""
+        self.fuzzy_path = fuzzy_path
+        self.contributions = contributions
+        lines = [
+            f"No matching plan for {fuzzy_path!r}. Sources disagree:",
+            *[
+                f"  {rs.repo}/docs/plans/{rs.state.value}/...   {', '.join(contributions[rs])}"
+                for rs in sorted(contributions, key=lambda k: (k.repo.value, k.state.value))
+            ],
+        ]
+        super().__init__("\n".join(lines))
+
+    def __rich__(self) -> Group:
+        """Render as a colorized, aligned table for `rich.console.Console.print`."""
+        sorted_rows = sorted(self.contributions, key=lambda k: (k.repo.value, k.state.value))
+        repo_w = max((len(rs.repo.value) for rs in sorted_rows), default=0)
+        state_w = max((len(rs.state.value) for rs in sorted_rows), default=0)
+        header = Text(f"No matching plan for {self.fuzzy_path!r}. Sources disagree:")
+        rendered: list[Text] = [header]
+        for rs in sorted_rows:
+            line = Text("  ")
+            line.append(rs.repo.value.rjust(repo_w), style=_REPO_STYLES.get(rs.repo, ""))
+            line.append("/docs/plans/")
+            line.append(rs.state.value, style=_STATE_STYLES.get(rs.state, ""))
+            line.append("/..." + " " * (state_w - len(rs.state.value) + 3))
+            for i, src in enumerate(self.contributions[rs]):
+                if i > 0:
+                    line.append(", ")
+                line.append(src, style=_SOURCE_STYLES.get(src, ""))
+            rendered.append(line)
+        return Group(*rendered)
+
+
+def _union_report(fuzzy_path: str, sources: list[_Source]) -> SourcesDisagreeError:
+    """Build a SourcesDisagreeError listing the (repo, state) cells each source supports."""
     contributions: dict[_RepoStatePair, list[str]] = defaultdict(list)
     for source in sources:
         if source.constraint.repos is None and source.constraint.states is None:
@@ -743,14 +811,7 @@ def _union_report(fuzzy_path: str, sources: list[_Source]) -> WorkflowError:
         for r in repos:
             for s in states:
                 contributions[_RepoStatePair(repo=r, state=s)].append(source.label)
-    lines = [
-        f"No matching plan for {fuzzy_path!r}. Sources disagree:",
-        *[
-            f"  {rs.repo}/docs/plans/{rs.state.value}/...: {', '.join(contributions[rs])}"
-            for rs in sorted(contributions, key=lambda k: (k.repo.value, k.state.value))
-        ],
-    ]
-    return WorkflowError("\n".join(lines))
+    return SourcesDisagreeError(fuzzy_path, dict(contributions))
 
 
 def _is_review_path(fuzzy_path: str) -> bool:

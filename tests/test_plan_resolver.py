@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import libtmux
 import pytest
+from rich.console import Console
 
 from workflow.audit import build_audit_command_repo_state, write_audit_log
 from workflow.config import WorkflowConfig, load_config
@@ -19,6 +21,7 @@ from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotF
 from workflow.models import AuditLogEntry, Plan, PlanState, Review, ReviewSubState
 from workflow.names import RepoName
 from workflow.plan_resolver import (
+    SourcesDisagreeError,
     _from_git_history,
     _from_tmux,
     _parse_git_log_output,
@@ -758,18 +761,36 @@ class TestFastPathSkipsExpensiveSources:
 
 
 class TestUnionReport:
-    def test_disagreement_message_includes_source_labels(self, tmp_path: Path) -> None:
-        """The disagreement error message includes per-source labels (path, subcommand)."""
+    def test_disagreement_raises_sources_disagree_error(self, tmp_path: Path) -> None:
+        """Disagreement raises SourcesDisagreeError carrying structured contributions."""
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_foo.md")
-        with pytest.raises(WorkflowError) as exc_info:
+        with pytest.raises(SourcesDisagreeError) as exc_info:
             resolve_plan("planner/005", tmp_path, config=config, command_name="check")
-        msg = exc_info.value.args[0]
-        assert "Sources disagree" in msg
-        assert ": path" in msg
-        assert ": subcommand" in msg
-        # Should list at least one cell with a repo/state combination
-        assert "docs/plans/" in msg
+        err = exc_info.value
+        # SourcesDisagreeError is a WorkflowError subclass with a plain fallback message.
+        assert isinstance(err, WorkflowError)
+        assert err.fuzzy_path == "planner/005"
+        assert "Sources disagree" in err.args[0]
+        # The 'path' source pins planner; the 'check' subcommand pins reviewer — disjoint.
+        labels_by_repo = {rs.repo: set(err.contributions[rs]) for rs in err.contributions}
+        assert "path" in set().union(*labels_by_repo.values())
+        assert "subcommand" in set().union(*labels_by_repo.values())
+
+    def test_rich_render_uses_aligned_columns_and_styled_segments(self, tmp_path: Path) -> None:
+        """__rich__ produces an aligned table with colorized repo/state/source segments."""
+        config = _make_config(tmp_path)
+        _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_foo.md")
+        with pytest.raises(SourcesDisagreeError) as exc_info:
+            resolve_plan("planner/005", tmp_path, config=config, command_name="check")
+        # Render to a buffer with colors enabled and capture ANSI escapes.
+        buf = io.StringIO()
+        Console(file=buf, force_terminal=True, color_system="truecolor", width=200).print(exc_info.value)
+        output = buf.getvalue()
+        assert "Sources disagree" in output
+        assert "/docs/plans/" in output
+        # ANSI escape sequence appears at least once (styled segment was emitted).
+        assert "\x1b[" in output
 
 
 # ---------------------------------------------------------------------------
