@@ -562,6 +562,11 @@ def _from_git_history(
     tie-break would otherwise arbitrarily pick one. Callers that genuinely
     need the source-of-edit repo (currently only ``push``) pass
     ``provides_repo=True``.
+
+    Ties on ``%ct`` (one-second resolution) are broken by state progression:
+    the more progressed state wins. Tickets only move forward, so a later
+    commit with the more progressed state reflects the true current state
+    even when its committer date matches an older sibling.
     """
     best: tuple[int, PlanState, RepoName] | None = None
     for repo in RepoName:
@@ -572,7 +577,7 @@ def _from_git_history(
         if result is None:
             continue
         timestamp, state = result
-        if best is None or timestamp > best[0]:
+        if best is None or timestamp > best[0] or (timestamp == best[0] and _state_rank(state) > _state_rank(best[1])):
             best = (timestamp, state, repo)
     if best is None:
         return _Constraint()
@@ -594,7 +599,16 @@ def _from_audit_log(
     seq: list[int],
     mapping: dict[str, tuple[RepoName, PlanState]],
 ) -> _Constraint:
-    """Derive a constraint from the most recent audit entry mentioning the sequence number."""
+    """Derive a constraint from the most recent audit entry mentioning the sequence number.
+
+    The state dimension is widened to include every state ranked at or after
+    the recorded one in ``_STATE_PROGRESSION``: the audit log captures script
+    transitions but not agent-driven moves (e.g. the builder running ``git mv
+    implementing/ → checking/`` while executing the ``build`` prompt), so the
+    recorded state is a *lower bound* on the plan's current state. Tickets
+    only ever move forward (012 §Assumptions 1), so anything earlier is
+    impossible and anything later is consistent.
+    """
     seq_str = _seq_to_str(seq)
     most_recent: tuple[RepoName, PlanState] | None = None
     for entry in read_audit_log(project_dir):
@@ -606,7 +620,10 @@ def _from_audit_log(
             most_recent = hit
     if most_recent is None:
         return _Constraint()
-    return _Constraint(repos=frozenset({most_recent[0]}), states=frozenset({most_recent[1]}))
+    repo, state = most_recent
+    rank = _state_rank(state)
+    forward = frozenset(_STATE_PROGRESSION[rank:]) if rank >= 0 else frozenset({state})
+    return _Constraint(repos=frozenset({repo}), states=forward)
 
 
 def _active_tmux_repo(session_name: str) -> RepoName | None:

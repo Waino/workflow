@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -493,6 +494,28 @@ class TestAuditSource:
         assert plan.path.parts[0] == "master"
         assert plan.state == PlanState.PLANNING
 
+    def test_audit_state_widens_to_forward_progression(self, tmp_path: Path) -> None:
+        # The `build` prompt instructs the builder agent to move the plan from
+        # implementing/ to checking/ without writing an audit entry. The audit
+        # log therefore lags the actual state: its `implement` entry says
+        # implementing, but the plan on disk is in checking. The resolver must
+        # widen the audit's state to {implementing, …, rejected} so the actual
+        # current state is still in the intersection.
+        config = _make_config(tmp_path)
+        _make_plan(tmp_path, "builder", PlanState.CHECKING, "005_foo.md")
+        write_audit_log(
+            tmp_path,
+            AuditLogEntry(
+                timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+                actor="human",
+                command="implement",
+                input_plan="005_foo",
+            ),
+        )
+        plan = resolve_plan("005", tmp_path, config=config, command_name="check")
+        assert plan.path.parts[0] == "builder"
+        assert plan.state == PlanState.CHECKING
+
 
 class TestSubcommandSource:
     """The subcommand source contributes (repos, states) from where the command appears."""
@@ -799,6 +822,29 @@ class TestGitProvidesRepoFlag:
         constraint = _from_git_history(tmp_path, [5], "foo", provides_repo=True)
         assert constraint.repos == frozenset({RepoName.master})
         assert constraint.states == frozenset({PlanState.IMPLEMENTING})
+
+    def test_ties_break_to_more_progressed_state(self, tmp_path: Path) -> None:
+        # Both repos commit at the same %ct (one-second resolution); the more
+        # progressed state (CHECKING > IMPLEMENTING) wins because tickets only
+        # ever move forward.
+        git = shutil.which("git") or "git"
+        _init_git_repo(tmp_path / "master")
+        _init_git_repo(tmp_path / "builder")
+        env = {**os.environ, "GIT_COMMITTER_DATE": "1700000000 +0000", "GIT_AUTHOR_DATE": "1700000000 +0000"}
+        for repo, state in ((tmp_path / "master", PlanState.IMPLEMENTING), (tmp_path / "builder", PlanState.CHECKING)):
+            plan_dir = repo / "docs" / "plans" / state.value
+            plan_dir.mkdir(parents=True, exist_ok=True)
+            (plan_dir / "005_foo.md").write_text("# plan\n")
+            subprocess.run([git, "add", "."], cwd=repo, check=True, capture_output=True)  # noqa: S603
+            subprocess.run(  # noqa: S603
+                [git, "commit", "-m", f"add {state.value}"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                env=env,
+            )
+        constraint = _from_git_history(tmp_path, [5], "foo")
+        assert constraint.states == frozenset({PlanState.CHECKING})
 
 
 class TestResolvePlanForwardsGitProvidesRepo:
