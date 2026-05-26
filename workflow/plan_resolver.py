@@ -766,14 +766,15 @@ class SourcesDisagreeError(WorkflowError):
     single red blob.
     """
 
-    def __init__(self, fuzzy_path: str, contributions: dict[_RepoStatePair, list[str]]) -> None:
+    def __init__(self, fuzzy_path: str, filename: str, contributions: dict[_RepoStatePair, list[str]]) -> None:
         """Store the fuzzy path and contributions; build a plain-text fallback message."""
         self.fuzzy_path = fuzzy_path
+        self.filename = filename
         self.contributions = contributions
         lines = [
             f"No matching plan for {fuzzy_path!r}. Sources disagree:",
             *[
-                f"  {rs.repo}/docs/plans/{rs.state.value}/...   {', '.join(contributions[rs])}"
+                f"  {rs.repo}/docs/plans/{rs.state.value}/{self.filename}   {', '.join(contributions[rs])}"
                 for rs in sorted(contributions, key=lambda k: (k.repo.value, k.state.value))
             ],
         ]
@@ -791,7 +792,7 @@ class SourcesDisagreeError(WorkflowError):
             line.append(rs.repo.value.rjust(repo_w), style=_REPO_STYLES.get(rs.repo, ""))
             line.append("/docs/plans/")
             line.append(rs.state.value, style=_STATE_STYLES.get(rs.state, ""))
-            line.append("/..." + " " * (state_w - len(rs.state.value) + 3))
+            line.append(f"/{self.filename}" + " " * (state_w - len(rs.state.value) + 3))
             for i, src in enumerate(self.contributions[rs]):
                 if i > 0:
                     line.append(", ")
@@ -800,7 +801,7 @@ class SourcesDisagreeError(WorkflowError):
         return Group(*rendered)
 
 
-def _union_report(fuzzy_path: str, sources: list[_Source]) -> SourcesDisagreeError:
+def _union_report(fuzzy_path: str, filename: str, sources: list[_Source]) -> SourcesDisagreeError:
     """Build a SourcesDisagreeError listing the (repo, state) cells each source supports."""
     contributions: dict[_RepoStatePair, list[str]] = defaultdict(list)
     for source in sources:
@@ -811,7 +812,7 @@ def _union_report(fuzzy_path: str, sources: list[_Source]) -> SourcesDisagreeErr
         for r in repos:
             for s in states:
                 contributions[_RepoStatePair(repo=r, state=s)].append(source.label)
-    return SourcesDisagreeError(fuzzy_path, dict(contributions))
+    return SourcesDisagreeError(fuzzy_path, filename, dict(contributions))
 
 
 def _is_review_path(fuzzy_path: str) -> bool:
@@ -889,7 +890,8 @@ def resolve_plan(
     states = _intersect([s.constraint.states for s in sources])
 
     if repos == frozenset() or states == frozenset():
-        raise _union_report(fuzzy_path, sources)
+        filename = f"{hints.seq}_{hints.slug}.md"
+        raise _union_report(fuzzy_path, filename, sources)
 
     effective_repos = repos if repos is not None else _ALL_REPOS
     effective_states = states if states is not None else _ALL_STATES
