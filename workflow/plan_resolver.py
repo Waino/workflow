@@ -514,13 +514,20 @@ def _accumulate_subcommand_contribution(
         repos.add(_agent_repo(agent, RepoName.master))
 
 
-def _from_subcommand(config: WorkflowConfig, command_name: str | None) -> _Constraint:
+def _from_subcommand(
+    config: WorkflowConfig,
+    command_name: str | None,
+    *,
+    path_provides_repos: bool = False,
+) -> _Constraint:
     """Derive a constraint from a CLI subcommand's appearances in the config.
 
-    Prompt commands contribute the agent's repo (master is implicitly excluded
-    because prompts dispatch to agents only). Script commands contribute their
-    ``repo_override`` if set, otherwise the state's agent or master. Scripts
-    also contribute the states they are defined in (plus their transition target).
+    Prompt commands contribute the agent's repo as a soft routing hint; this
+    contribution is suppressed when *path_provides_repos* is True because the
+    caller has already pinned the repo explicitly.  Script commands contribute
+    their ``repo_override`` if set, otherwise the state's agent or master.
+    Scripts also contribute the states they are defined in (plus their
+    transition target).
     """
     if command_name is None:
         return _Constraint()
@@ -532,7 +539,12 @@ def _from_subcommand(config: WorkflowConfig, command_name: str | None) -> _Const
             if cmd.name != command_name or not isinstance(cmd, (PromptCommand, ScriptCommand)):
                 continue
             found = True
-            _accumulate_subcommand_contribution(cmd, state, state_config, repos, states)
+            if path_provides_repos and isinstance(cmd, PromptCommand):
+                # Soft hint: any agent can receive any prompt, so suppress the
+                # repo contribution when the path already pins the repo.
+                pass
+            else:
+                _accumulate_subcommand_contribution(cmd, state, state_config, repos, states)
             # Contribute the repo for each state listed in also_valid_in_states.
             if isinstance(cmd, ScriptCommand):
                 for extra_state in cmd.also_valid_in_states:
@@ -687,6 +699,8 @@ def _from_audit_log(
     project_dir: Path,
     seq: list[int],
     mapping: dict[str, tuple[RepoName, PlanState]],
+    *,
+    path_provides_repos: bool = False,
 ) -> _Constraint:
     """Derive a constraint from the most recent audit entry mentioning the sequence number.
 
@@ -699,6 +713,11 @@ def _from_audit_log(
     state is a *lower bound* on the plan's current state; tickets only ever move
     forward (012 §Assumptions 1), so anything ranked at or after the recorded
     state is still consistent with the audit evidence.
+
+    The repo contribution is soft: it records which agent *ran* the last logged
+    command, but plans are routinely pulled into every clone afterwards.  When
+    *path_provides_repos* is True the caller has already pinned the repo via an
+    explicit path hint, so the audit repo is suppressed to avoid false conflicts.
     """
     seq_str = _seq_to_str(seq)
     most_recent: tuple[RepoName, PlanState] | None = None
@@ -714,7 +733,8 @@ def _from_audit_log(
     repo, state = most_recent
     rank = _state_rank(state)
     forward = frozenset(_STATE_PROGRESSION[rank:]) if rank >= 0 else frozenset({state})
-    return _Constraint(repos=frozenset({repo}), states=forward)
+    repos = None if path_provides_repos else frozenset({repo})
+    return _Constraint(repos=repos, states=forward)
 
 
 def _active_tmux_repo(session_name: str) -> RepoName | None:
@@ -889,14 +909,21 @@ def resolve_plan(
             return _disambiguate(fuzzy_path, matches, sorted(fast_repos))
 
     audit_mapping = build_audit_command_repo_state(config)
+    path_provides_repos = hints.constraint.repos is not None
     sources: list[_Source] = [
         _Source(label="path", constraint=hints.constraint),
-        _Source(label="subcommand", constraint=_from_subcommand(config, command_name)),
+        _Source(
+            label="subcommand",
+            constraint=_from_subcommand(config, command_name, path_provides_repos=path_provides_repos),
+        ),
         _Source(
             label="git",
             constraint=_from_git_history(project_dir, hints.seq, hints.slug, provides_repo=git_provides_repo),
         ),
-        _Source(label="audit", constraint=_from_audit_log(project_dir, hints.seq, audit_mapping)),
+        _Source(
+            label="audit",
+            constraint=_from_audit_log(project_dir, hints.seq, audit_mapping, path_provides_repos=path_provides_repos),
+        ),
         _Source(label="tmux", constraint=_from_tmux(config)),
     ]
 
