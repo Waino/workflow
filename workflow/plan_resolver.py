@@ -44,6 +44,7 @@ _SOURCE_STYLES: dict[str, str] = {
     "git": "aquamarine1",
     "audit": "violet",
     "tmux": "steel_blue3",
+    "path": "light_salmon3",
 }
 
 # Timestamp as used in critique review filenames: 2026-03-18T14-30-00Z (dashes, no colons)
@@ -353,6 +354,17 @@ class _PathHints(BaseModel):
     constraint: _Constraint
     seq: list[int] | None
     slug: str | None
+
+    def filename(self) -> str:
+        """Reconstruct what is known of the filename for SourcesDisagreeError"""
+        if self.seq is None:
+            return "..."
+        parts = [str(n) for n in self.seq]
+        parts[0] = parts[0].zfill(3)
+        seq_str = ".".join(parts)
+        if self.slug is None:
+            return seq_str
+        return f"{seq_str}_{self.slug}.md"
 
 
 class _GitTouch(BaseModel):
@@ -892,8 +904,7 @@ def resolve_plan(
     states = _intersect([s.constraint.states for s in sources])
 
     if repos == frozenset() or states == frozenset():
-        filename = f"{hints.seq}_{hints.slug}.md"
-        raise _union_report(fuzzy_path, filename, sources)
+        raise _union_report(fuzzy_path, hints.filename(), sources)
 
     effective_repos = repos if repos is not None else _ALL_REPOS
     effective_states = states if states is not None else _ALL_STATES
