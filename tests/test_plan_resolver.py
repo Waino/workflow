@@ -33,6 +33,25 @@ from workflow.plan_resolver import (
 )
 
 # ---------------------------------------------------------------------------
+# Module-level tmux silence
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _silence_tmux(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Return a dead libtmux server for every test in this module.
+
+    This prevents tests from being flaky on developer machines that happen to
+    have a ``workflow`` tmux session running.  ``TestTmuxSource`` tests are
+    unaffected: each of their methods uses ``with patch(...)`` which overrides
+    the monkeypatched value within that context, restoring it on exit.
+    """
+    dead = MagicMock()
+    dead.is_alive.return_value = False
+    monkeypatch.setattr("workflow.plan_resolver.libtmux.Server", lambda: dead)
+
+
+# ---------------------------------------------------------------------------
 # Filesystem helpers
 # ---------------------------------------------------------------------------
 
