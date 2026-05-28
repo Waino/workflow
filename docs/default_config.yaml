@@ -108,7 +108,7 @@ states:
         name: build
         prompt: |
           Read the plan at {{ plan.path }}.
-          Implement the plan. When done, transition the plan state to checking.
+          Implement the plan.
         reminder: check
       - command_type: script
         name: check

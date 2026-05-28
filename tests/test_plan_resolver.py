@@ -498,12 +498,14 @@ class TestAuditSource:
         assert plan.state == PlanState.PLANNING
 
     def test_audit_state_widens_to_forward_progression(self, tmp_path: Path) -> None:
-        # The `build` prompt instructs the builder agent to move the plan from
-        # implementing/ to checking/ without writing an audit entry. The audit
-        # log therefore lags the actual state: its `implement` entry says
-        # implementing, but the plan on disk is in checking. The resolver must
-        # widen the audit's state to {implementing, …, rejected} so the actual
-        # current state is still in the intersection.
+        # Non-standard scenario: the audit log lags the on-disk state because
+        # a plan was moved outside a logged script command (e.g. a manual
+        # `git mv` or an ad-hoc agent action).  Normally every transition is
+        # performed by a script that writes a matching audit entry, but the
+        # resolver must still tolerate this edge case.  Here the audit records
+        # `implement` (→ implementing) while the plan is already in checking/;
+        # the widened state set {implementing, …, rejected} must include the
+        # actual on-disk state so the resolver can still find the plan.
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "builder", PlanState.CHECKING, "005_foo.md")
         write_audit_log(

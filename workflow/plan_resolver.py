@@ -679,12 +679,14 @@ def _from_audit_log(
     """Derive a constraint from the most recent audit entry mentioning the sequence number.
 
     The state dimension is widened to include every state ranked at or after
-    the recorded one in ``_STATE_PROGRESSION``: the audit log captures script
-    transitions but not agent-driven moves (e.g. the builder running ``git mv
-    implementing/ → checking/`` while executing the ``build`` prompt), so the
-    recorded state is a *lower bound* on the plan's current state. Tickets
-    only ever move forward (012 §Assumptions 1), so anything earlier is
-    impossible and anything later is consistent.
+    the recorded one in ``_STATE_PROGRESSION``.  Normally every transition is
+    performed by a script command that also writes an audit entry, so the audit
+    and the on-disk state stay in sync.  As a safety net, widening tolerates
+    the rare case where a plan was moved outside a logged script command (e.g. a
+    manual ``git mv``, or an ad-hoc agent action).  In those cases the recorded
+    state is a *lower bound* on the plan's current state; tickets only ever move
+    forward (012 §Assumptions 1), so anything ranked at or after the recorded
+    state is still consistent with the audit evidence.
     """
     seq_str = _seq_to_str(seq)
     most_recent: tuple[RepoName, PlanState] | None = None

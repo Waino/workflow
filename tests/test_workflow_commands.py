@@ -159,7 +159,7 @@ def test_implement_prints_explicit_ask_reminder(tmp_path: Path, monkeypatch: pyt
 
 def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "builder", "checking", "005_foo.md")
+    _make_plan(tmp_path, "builder", "implementing", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     fake_run_command = MagicMock()
     monkeypatch.setattr(wc, "run_command", fake_run_command)
@@ -168,6 +168,8 @@ def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkey
         "run_validate",
         MagicMock(return_value=[CheckResult(check_name="x", status="pass", message="ok")]),
     )
+    monkeypatch.setattr(wc, "transition_plan", lambda _p, ts, *_a, **_kw: _plan("builder", ts))
+    monkeypatch.setattr(wc, "git_commit", MagicMock())
     monkeypatch.setattr(wc, "git_push", MagicMock())
     monkeypatch.setattr(wc, "git_fetch", MagicMock())
 

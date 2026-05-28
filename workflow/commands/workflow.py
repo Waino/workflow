@@ -42,7 +42,7 @@ from workflow.validate import validate as run_validate
 _EXPECTED_STATES_FOR: dict[str, set[PlanState]] = {
     "todo": {PlanState.PLANNING},
     "implement": {PlanState.PLANNING, PlanState.TODO},
-    "check": {PlanState.CHECKING},
+    "check": {PlanState.IMPLEMENTING},
     "accept": {PlanState.CHECKING},
     "reject": set(PlanState) - {PlanState.REVIEW},
 }
@@ -449,10 +449,17 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName) -> None:
             if any(result.status == "fail" for result in results):
                 ctx.exit(1)
                 return
+        new_plan = transition_plan(plan, PlanState.CHECKING, project_dir, dry_run=dry_run)
+        git_commit(
+            project_dir / target_repo,
+            _transition_commit_message(new_plan, PlanState.CHECKING),
+            dry_run=dry_run,
+            no_verify=True,
+        )
         git_push(project_dir / target_repo, dry_run=dry_run)
         git_fetch(project_dir / RepoName.reviewer, dry_run=dry_run)
-        _write_script_audit_log(config, "check", dry_run=dry_run, input_plan=plan.name)
-        _print_command_reminder(config, PlanState.IMPLEMENTING, "check", plan.name)
+        _write_script_audit_log(config, "check", dry_run=dry_run, input_plan=new_plan.name)
+        _print_command_reminder(config, PlanState.IMPLEMENTING, "check", new_plan.name)
     except (
         subprocess.CalledProcessError,
         PlanNotFoundError,

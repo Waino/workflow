@@ -114,23 +114,21 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
     assert result.exit_code == 0, result.output
 
     # Step 6: simulate builder edit - fetch from bare, branch from main,
-    # do real work, and move the plan from implementing/ -> checking/ (the
-    # `build` prompt instructs the builder agent to perform this transition).
+    # do real work, and commit. Leave the plan in implementing/ — the `check`
+    # script is responsible for the implementing -> checking transition.
     builder = tmp_path / "builder"
     _git(["fetch", "origin"], cwd=builder)
     _git(["checkout", "-b", "feat/005_foo", "origin/main"], cwd=builder)
     (builder / "README.md").write_text("builder work\n", encoding="utf-8")
-    (builder / "docs" / "plans" / "checking").mkdir(parents=True, exist_ok=True)
-    _git(
-        ["mv", "docs/plans/implementing/005_foo.md", "docs/plans/checking/005_foo.md"],
-        cwd=builder,
-    )
     _git(["add", "."], cwd=builder)
     _git(["commit", "-m", "builder work on 005"], cwd=builder)
 
-    # Step 7: workflow check - _run_pre_commit_in_sandbox is mocked
+    # Step 7: workflow check - transitions implementing -> checking, then pushes.
     result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005_foo"])
     assert result.exit_code == 0, result.output
+    # check must have moved the plan to checking/
+    assert (builder / "docs" / "plans" / "checking" / "005_foo.md").exists()
+    assert not (builder / "docs" / "plans" / "implementing" / "005_foo.md").exists()
 
     # Step 8: reviewer fetches and checks out the feature branch
     reviewer = tmp_path / "reviewer"
