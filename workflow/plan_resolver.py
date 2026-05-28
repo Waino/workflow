@@ -356,7 +356,7 @@ class _PathHints(BaseModel):
     slug: str | None
 
     def filename(self) -> str:
-        """Reconstruct what is known of the filename for SourcesDisagreeError"""
+        """Reconstruct what is known of the filename for SourcesDisagreeError."""
         if self.seq is None:
             return "..."
         parts = [str(n) for n in self.seq]
