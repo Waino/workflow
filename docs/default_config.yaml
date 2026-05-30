@@ -15,27 +15,33 @@ tmux:
 
 states:
   intent:
+    description: Plans being explored.
     agent: planner
     commands:
       - command_type: script
         name: new
+        description: Create a new intent file.
         script: new
         reminder: push
       - command_type: script
         name: push
+        description: Push pending content to master.
         script: push
         repo_override: master
         pull_target: planner
         reminder: ask
       - command_type: prompt
         name: ask
+        description: Read the plan; ask clarifying questions.
         prompt: |
           Read the plan at {{ plan.path }}.
           Ask any questions until you have a clear understanding.
       - command_type: manual
         name: answer
+        description: Human answers questions in chat.
       - command_type: prompt
         name: critique
+        description: Critique the plan.
         prompt: |
           Read the plan at {{ plan.path }}.
           Critique the idea.
@@ -45,8 +51,10 @@ states:
           Propose additional features, to improve the effectiveness, robustness, and usability of the system.
       - command_type: manual
         name: revise
+        description: Human revises the plan.
       - command_type: prompt
         name: plan
+        description: Write a detailed plan from an intent.
         prompt: |
           Read the intent at {{ plan.path }}.
           Write a detailed implementation plan into docs/plans/planning/.
@@ -54,6 +62,7 @@ states:
         reminder: critique
       - command_type: prompt
         name: subdivide
+        description: Break the plan into smaller planning documents.
         prompt: |
           Read the plan at {{ plan.path }}.
           Break it down into several detailed implementation plans.
@@ -61,12 +70,15 @@ states:
         transition: planning
 
   planning:
+    description: Plans being drafted.
     agent: planner
     commands:
       - command_type: manual
         name: adjust
+        description: Human edits the plan directly.
       - command_type: prompt
         name: critique
+        description: Critique the plan.
         prompt: |
           Read the plan at {{ plan.path }}.
           Critique the plan.
@@ -75,54 +87,67 @@ states:
           Point out any decisions that have a high risk of becoming technical debt.
       - command_type: manual
         name: revise
+        description: Human revises the plan.
       - command_type: script
         name: todo
+        description: Approve for implementation.
         script: todo
         transition: todo
 
   todo:
+    description: Plans approved for implementation.
     agent: null
     commands:
       - command_type: script
         name: implement
+        description: Start implementation.
         script: implement
         transition: implementing
         also_valid_in_states: [planning]
         reminder: ask
       - command_type: script
         name: push
+        description: Push pending content to master.
         script: push
         repo_override: master
 
   implementing:
+    description: Plans under active implementation.
     agent: builder
     commands:
       - command_type: prompt
         name: ask
+        description: Read the plan; ask clarifying questions.
         prompt: |
           Read the plan at {{ plan.path }}.
           Ask any questions until you have a clear understanding.
       - command_type: manual
         name: answer
+        description: Human answers questions in chat.
       - command_type: prompt
         name: build
+        description: Implement the plan.
         prompt: |
           Read the plan at {{ plan.path }}.
           Implement the plan.
         reminder: check
       - command_type: script
         name: check
+        description: Run verification checks and hand off.
         script: check
         transition: checking
         reminder: review
 
   checking:
+    description: Implementation complete, review in progress.
     agent: reviewer
     commands:
       - command_type: manual
         name: review
+        description: Human reviews the proposed change.
       - command_type: prompt
         name: pr
+        description: Write a thorough code review.
         prompt: |
           Perform a thorough code review of the changes on the {{ branch }} branch.
           The plan is at {{ plan.path }}.
@@ -132,47 +157,58 @@ states:
           Commit your changes. Do not modify the code.
       - command_type: manual
         name: adjust
+        description: Human edits the review or code directly.
       - command_type: prompt
         name: fix
+        description: Fix issues from the most recent review.
         prompt: |
           Fix the issues identified in the most recent review.
       - command_type: script
         name: validate
+        description: Run verification checks.
         script: validate
       - command_type: script
         name: accept
+        description: Accept and merge to main.
         script: accept
         transition: done
       - command_type: script
         name: reject
+        description: Close out without merging.
         script: reject
         transition: rejected
 
   done:
+    description: Merged to main. Implementation and review complete.
     agent: null
     commands: []
 
   rejected:
+    description: Will not be implemented.
     agent: null
     commands: []
 
   review:
+    description: Codebase-wide review and audit tasks unrelated to a specific plan.
     agent: reviewer
     commands:
       - command_type: prompt
         name: full review
+        description: Perform a full review of the current codebase.
         prompt: |
           Perform a full review of the current state of the codebase.
           Search for dead code, propose integration tests, and review overall architecture.
           Write a report into docs/plans/reviews/full/.
       - command_type: prompt
         name: followthrough
+        description: Compare done plans against the codebase for unimplemented features.
         prompt: |
           Go through all plans in the states intent, checking, and done.
           Compare features against the codebase.
           List unimplemented and only partially implemented features.
       - command_type: prompt
         name: refresh
+        description: Update planning/todo plans against decisions made since they were written.
         prompt: |
           Go through all plans in the states `planning` and `todo` (target plans).
           For each target plan, check against any plans in the `done` state that have been modified after the target plan.

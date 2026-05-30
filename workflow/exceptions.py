@@ -12,6 +12,10 @@ class WorkflowError(Exception):
     """Raised for workflow operation errors (e.g. tmux session not found)."""
 
 
+class ClaudeMdGenerationError(WorkflowError):
+    """Raised when CLAUDE.md cannot be safely (re)generated."""
+
+
 class PlanNotFoundError(Exception):
     """Raised when a fuzzy path reference does not match any plan."""
 

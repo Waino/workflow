@@ -1,0 +1,22 @@
+The workflow below is enacted by a human operator. Agents do not invoke
+`workflow` subcommands themselves; they receive rendered prompts in
+their tmux window. This listing exists so an agent knows in advance
+which state a plan is in, which actions are expected in that state,
+and which actions belong to other states. For example, an agent
+reading a plan in the `planning` state must not start writing code; an
+agent in the `implementing` state must not rewrite the plan.
+
+The human operator may deviate from the workflow at any time. A prompt
+command may therefore arrive in a state where it is not listed below
+(for example, `ask` may be sent in any state). When this happens,
+follow the prompt as given.
+{% for state in states %}
+
+### {{ state.name }} (agent: {{ state.agent }})
+{{ state.description }}
+Inbound: {{ state.inbound_str }}
+Outbound: {{ state.outbound_str }}
+{% if state.commands %}Commands:
+{% for cmd in state.commands %}- [{{ cmd.type }}] {{ cmd.name }}{% if cmd.transition %} -> {{ cmd.transition }}{% endif %} — {{ cmd.description }}
+{% endfor %}{% else %}Commands: (none)
+{% endif %}{% endfor %}

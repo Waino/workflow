@@ -24,14 +24,17 @@ def _config(project_dir: Path) -> WorkflowConfig:
             AgentConfig(name="reviewer", model="test"),
         ],
         states={
-            PlanState.INTENT: StateConfig(agent="planner"),
-            PlanState.PLANNING: StateConfig(agent="planner"),
-            PlanState.TODO: StateConfig(agent=None),
-            PlanState.IMPLEMENTING: StateConfig(agent="builder"),
-            PlanState.CHECKING: StateConfig(agent="reviewer"),
-            PlanState.DONE: StateConfig(agent=None),
-            PlanState.REJECTED: StateConfig(agent=None),
-            PlanState.REVIEW: StateConfig(agent="reviewer"),
+            PlanState.INTENT: StateConfig(description="Plans being explored.", agent="planner"),
+            PlanState.PLANNING: StateConfig(description="Plans being drafted.", agent="planner"),
+            PlanState.TODO: StateConfig(description="Plans approved for implementation.", agent=None),
+            PlanState.IMPLEMENTING: StateConfig(description="Plans under active implementation.", agent="builder"),
+            PlanState.CHECKING: StateConfig(
+                description="Implementation complete, review in progress.",
+                agent="reviewer",
+            ),
+            PlanState.DONE: StateConfig(description="Merged to main.", agent=None),
+            PlanState.REJECTED: StateConfig(description="Will not be implemented.", agent=None),
+            PlanState.REVIEW: StateConfig(description="Codebase-wide review tasks.", agent="reviewer"),
         },
     )
 
@@ -109,8 +112,9 @@ def test_check_claude_md_passes_with_matching_hash(tmp_path: Path) -> None:
     repo_path.mkdir()
     claude_md = repo_path / "CLAUDE.md"
     claude_md.write_text("trusted\n", encoding="utf-8")
-    digest = hashlib.sha256(claude_md.read_bytes()).hexdigest()
-    (tmp_path / ".claude_md_hash").write_text(f"{digest}  CLAUDE.md\n", encoding="utf-8")
+    digest = hashlib.sha256(b"trusted\n").hexdigest()
+    config_sha = "a" * 64
+    (tmp_path / ".claude_md_hash").write_text(f"v1 {digest} {config_sha}\n", encoding="utf-8")
 
     result = dc._check_claude_md(repo_path, tmp_path, [])
     assert result.status == "pass"
@@ -121,12 +125,44 @@ def test_check_claude_md_fails_when_file_modified_on_branch(tmp_path: Path) -> N
     repo_path.mkdir()
     claude_md = repo_path / "CLAUDE.md"
     claude_md.write_text("trusted\n", encoding="utf-8")
-    digest = hashlib.sha256(claude_md.read_bytes()).hexdigest()
-    (tmp_path / ".claude_md_hash").write_text(f"{digest}  CLAUDE.md\n", encoding="utf-8")
+    digest = hashlib.sha256(b"trusted\n").hexdigest()
+    config_sha = "a" * 64
+    (tmp_path / ".claude_md_hash").write_text(f"v1 {digest} {config_sha}\n", encoding="utf-8")
 
     result = dc._check_claude_md(repo_path, tmp_path, ["CLAUDE.md"])
     assert result.status == "fail"
     assert result.message == "CLAUDE.md was modified on this branch"
+
+
+def test_check_claude_md_fails_on_hash_mismatch(tmp_path: Path) -> None:
+    repo_path = tmp_path / "planner"
+    repo_path.mkdir()
+    claude_md = repo_path / "CLAUDE.md"
+    claude_md.write_text("modified\n", encoding="utf-8")
+    wrong_digest = "a" * 64
+    config_sha = "b" * 64
+    (tmp_path / ".claude_md_hash").write_text(f"v1 {wrong_digest} {config_sha}\n", encoding="utf-8")
+
+    result = dc._check_claude_md(repo_path, tmp_path, [])
+    assert result.status == "fail"
+    assert "hash does not match" in result.message
+
+
+def test_check_claude_md_suggests_regeneration_when_config_changed(tmp_path: Path) -> None:
+    repo_path = tmp_path / "planner"
+    repo_path.mkdir()
+    claude_md = repo_path / "CLAUDE.md"
+    claude_md.write_text("modified\n", encoding="utf-8")
+    wrong_digest = "a" * 64
+    # config.yaml exists but its sha doesn't match the trusted one
+    config_yaml = tmp_path / "config.yaml"
+    config_yaml.write_text("different: content\n", encoding="utf-8")
+    stale_config_sha = "b" * 64  # deliberately wrong
+    (tmp_path / ".claude_md_hash").write_text(f"v1 {wrong_digest} {stale_config_sha}\n", encoding="utf-8")
+
+    result = dc._check_claude_md(repo_path, tmp_path, [])
+    assert result.status == "fail"
+    assert "workflow claude_md" in result.message
 
 
 def test_validate_wraps_fetch_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

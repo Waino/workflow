@@ -15,7 +15,8 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel
 
-from workflow.exceptions import WorkflowError
+from workflow.claude_md import parse_hash_file
+from workflow.exceptions import ClaudeMdGenerationError, WorkflowError
 from workflow.git_helpers import git_diff_branch, git_fetch
 from workflow.names import RepoName
 
@@ -201,17 +202,26 @@ def _check_claude_md(repo_path: Path, project_dir: Path, changed_files: list[str
     if not claude_md.exists():
         return CheckResult(check_name="claude-md", status="fail", message="CLAUDE.md not found in repo")
 
-    trusted_hash = hash_file.read_text(encoding="utf-8").strip().split()[0]
-    actual_hash = hashlib.sha256(claude_md.read_bytes()).hexdigest()
+    try:
+        trusted = parse_hash_file(hash_file.read_text(encoding="utf-8"))
+    except ClaudeMdGenerationError as exc:
+        return CheckResult(check_name="claude-md", status="fail", message=f"Hash file invalid: {exc}")
 
+    actual_hash = hashlib.sha256(claude_md.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
     claude_modified = "CLAUDE.md" in changed_files
 
-    if actual_hash != trusted_hash:
-        return CheckResult(
-            check_name="claude-md",
-            status="fail",
-            message="CLAUDE.md hash does not match trusted value",
-        )
+    if actual_hash != trusted.claude_md_sha:
+        config_yaml = project_dir / "config.yaml"
+        config_yaml_sha = hashlib.sha256(config_yaml.read_bytes()).hexdigest() if config_yaml.exists() else ""
+        if config_yaml_sha != trusted.config_yaml_sha:
+            message = (
+                "CLAUDE.md hash does not match trusted value; "
+                "config.yaml has changed since CLAUDE.md was last generated — run `workflow claude_md`."
+            )
+        else:
+            message = "CLAUDE.md hash does not match trusted value"
+        return CheckResult(check_name="claude-md", status="fail", message=message)
+
     if claude_modified:
         return CheckResult(
             check_name="claude-md",

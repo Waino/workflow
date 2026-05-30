@@ -24,6 +24,15 @@ class WorkflowStep(BaseModel, ABC):
     """Base class for commands and manual steps."""
 
     name: str
+    description: str
+
+    @model_validator(mode="after")
+    def validate_description_not_blank(self) -> WorkflowStep:
+        """Reject whitespace-only descriptions."""
+        if not self.description.strip():
+            msg = f"description for command {self.name!r} must not be empty or whitespace-only"
+            raise ValueError(msg)
+        return self
 
     @abstractmethod
     def render(self) -> Text:
@@ -84,8 +93,17 @@ Command = Annotated[PromptCommand | ScriptCommand | ManualStep, Field(discrimina
 class StateConfig(BaseModel):
     """Configuration for a single state in the workflow."""
 
+    description: str
     agent: str | None = None
     commands: list[Command] = []
+
+    @model_validator(mode="after")
+    def validate_description_not_blank(self) -> StateConfig:
+        """Reject whitespace-only descriptions."""
+        if not self.description.strip():
+            msg = "StateConfig description must not be empty or whitespace-only"
+            raise ValueError(msg)
+        return self
 
 
 class AgentConfig(BaseModel):

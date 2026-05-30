@@ -26,14 +26,14 @@ def project_dir(tmp_path: Path) -> Path:
             {"name": "builder", "model": "claude-sonnet-4-20250514"},
         ],
         "states": {
-            "intent": {"agent": "planner", "commands": []},
-            "planning": {"agent": "planner", "commands": []},
-            "todo": {"agent": None, "commands": []},
-            "implementing": {"agent": "builder", "commands": []},
-            "checking": {"agent": None, "commands": []},
-            "done": {"agent": None, "commands": []},
-            "rejected": {"agent": None, "commands": []},
-            "review": {"agent": None, "commands": []},
+            "intent": {"description": "Plans being explored.", "agent": "planner", "commands": []},
+            "planning": {"description": "Plans being drafted.", "agent": "planner", "commands": []},
+            "todo": {"description": "Plans approved for implementation.", "agent": None, "commands": []},
+            "implementing": {"description": "Plans under active implementation.", "agent": "builder", "commands": []},
+            "checking": {"description": "Review in progress.", "agent": None, "commands": []},
+            "done": {"description": "Merged to main.", "agent": None, "commands": []},
+            "rejected": {"description": "Will not be implemented.", "agent": None, "commands": []},
+            "review": {"description": "Codebase-wide review tasks.", "agent": None, "commands": []},
         },
     }
     config_path = tmp_path / "config.yaml"
@@ -85,7 +85,7 @@ class TestLoadConfigNoProjectRoot:
         """When no .workflow_root marker exists, project_dir and project_name are None."""
         config = {
             "agents": [{"name": "planner", "model": "test"}],
-            "states": {"intent": {"agent": "planner", "commands": []}},
+            "states": {"intent": {"description": "Plans being explored.", "agent": "planner", "commands": []}},
         }
         config_path = tmp_path / "config.yaml"
         config_path.write_text(yaml.dump(config))
@@ -114,7 +114,7 @@ class TestWorkflowConfigValidation:
                 {"name": "planner", "model": "test"},
                 {"name": "planner", "model": "test2"},
             ],
-            "states": {"intent": {"agent": "planner", "commands": []}},
+            "states": {"intent": {"description": "Plans being explored.", "agent": "planner", "commands": []}},
         }
         (tmp_path / "config.yaml").write_text(yaml.dump(config))
         with pytest.raises(Exception, match="Duplicate agent names"):
@@ -135,17 +135,25 @@ class TestCommandModels:
             "agents": [{"name": "planner", "model": "test"}],
             "states": {
                 "intent": {
+                    "description": "Plans being explored.",
                     "agent": "planner",
                     "commands": [
                         {
                             "command_type": "prompt",
                             "name": "ask",
+                            "description": "Ask clarifying questions.",
                             "prompt": "Ask questions.",
                             "transition": "planning",
                             "reminder": "review",
                         },
-                        {"command_type": "script", "name": "todo", "script": "todo", "transition": "todo"},
-                        {"command_type": "manual", "name": "answer"},
+                        {
+                            "command_type": "script",
+                            "name": "todo",
+                            "description": "Approve for implementation.",
+                            "script": "todo",
+                            "transition": "todo",
+                        },
+                        {"command_type": "manual", "name": "answer", "description": "Human answers questions."},
                     ],
                 },
             },
@@ -173,7 +181,7 @@ class TestTmuxConfig:
         config = {
             "agents": [{"name": "planner", "model": "test"}],
             "tmux": {"session_name": "myproject", "prompt_send_delay": 0.5},
-            "states": {"intent": {"agent": "planner", "commands": []}},
+            "states": {"intent": {"description": "Plans being explored.", "agent": "planner", "commands": []}},
         }
         (tmp_path / "config.yaml").write_text(yaml.dump(config))
         loaded = load_config(project_dir=tmp_path)

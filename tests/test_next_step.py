@@ -31,21 +31,36 @@ class TestFormatNextStepInvocation:
         assert format_next_step_invocation("ask", "005_foo", command=None) == "ask"
 
     def test_manual_command_returns_reminder_as_is(self) -> None:
-        cmd = ManualStep(command_type="manual", name="answer")
+        cmd = ManualStep(command_type="manual", name="answer", description="Human answers questions.")
         assert format_next_step_invocation("answer", "005_foo", command=cmd) == "answer"
 
     def test_script_command_formats_cli_invocation(self) -> None:
-        cmd = ScriptCommand(command_type="script", name="todo", script="todo")
+        cmd = ScriptCommand(
+            command_type="script",
+            name="todo",
+            script="todo",
+            description="Approve for implementation.",
+        )
         result = format_next_step_invocation("todo", "005_foo", command=cmd)
         assert result == "workflow todo 005_foo"
 
     def test_prompt_command_formats_cli_invocation(self) -> None:
-        cmd = PromptCommand(command_type="prompt", name="ask", prompt="Ask about {{ plan.path }}.")
+        cmd = PromptCommand(
+            command_type="prompt",
+            name="ask",
+            prompt="Ask about {{ plan.path }}.",
+            description="Ask clarifying questions.",
+        )
         result = format_next_step_invocation("ask", "005_foo", command=cmd)
         assert result == "workflow ask 005_foo"
 
     def test_multi_word_name_uses_hyphenated_form(self) -> None:
-        cmd = PromptCommand(command_type="prompt", name="full review", prompt="Do a full review.")
+        cmd = PromptCommand(
+            command_type="prompt",
+            name="full review",
+            prompt="Do a full review.",
+            description="Perform a full review.",
+        )
         result = format_next_step_invocation("full review", "005_foo", command=cmd)
         assert result == "workflow full-review 005_foo"
 
