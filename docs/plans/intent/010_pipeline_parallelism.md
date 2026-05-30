@@ -11,6 +11,8 @@ Prefix shows state: i1:intent, p1:planning, tH:todo, b2:implementing, c3:checkin
 
 ```
 A                   B                   C
+i1 - new            --                  --
+i1 - push           --                  --
 i1 @ ask            --                  --
 iH ( answer )       --                  --
 i1 @ critique       --                  --

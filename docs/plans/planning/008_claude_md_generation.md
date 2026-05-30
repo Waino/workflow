@@ -64,7 +64,13 @@ Plans approved for implementation. Available transitions: implement → implemen
 Plans under active implementation. Available transitions: check → checking.
 
 **checking** — agent: reviewer
-Implementation complete, review in progress. Available transitions: accept → done, reject → done.
+Implementation complete, review in progress. Available transitions: accept → done, reject → rejected.
+
+**done** — agent: (human operator)
+Merged to main. Implementation and review complete. No transitions.
+
+**rejected** — agent: (human operator)
+Will not be implemented. No transitions.
 ```
 
 ### Command listing section
@@ -117,6 +123,16 @@ Example output (regenerated against the current `docs/default_config.yaml`):
   - reject       Reject and close out  (→ done)
 ```
 
+## Fields added to config.yaml
+
+### Field added to `StateConfig`
+
+- `description`: agent/human readable description of the state.
+
+### Field added to `WorkflowStep`
+
+- `description`: agent/human readable description of the command.
+
 ## Command
 
 ```python
@@ -126,6 +142,9 @@ Example output (regenerated against the current `docs/default_config.yaml`):
 def generate_claude_md(ctx: click.Context, output: str | None) -> None:
     """Regenerate the auto-generated orientation sections of CLAUDE.md."""
 ```
+
+In addition to the `claude.md` command, the CLAUDE.md file is also generated as part of `workflow init`.
+Keep the implementation DRY: both commands should use the same implementing function.
 
 ## Hash file
 
@@ -138,7 +157,7 @@ is used by `validate` (plan 005) to detect agent tampering.
 
 ## File organization
 
-- `workflow/commands/claude_md.py` — the generate command
+- `workflow/commands/claude_md.py` — the generate command and helper functions
 - `workflow/templates/claude_md_states.md.j2` — jinja2 template for the state machine section
 - `workflow/templates/claude_md_commands.md.j2` — jinja2 template for the command listing section
 - Generation logic is implemented as pure functions that take `WorkflowConfig` and return `str`,
