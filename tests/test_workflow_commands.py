@@ -15,6 +15,7 @@ from workflow import main
 from workflow.audit import read_audit_log, write_audit_log
 from workflow.commands.info import _parse_datetime
 from workflow.config import WORKFLOW_ROOT_MARKER
+from workflow.git_helpers import CommitResult
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.plan_resolver import next_intent_number
 from workflow.validate import CheckResult
@@ -50,14 +51,19 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
     config_path = _make_project(tmp_path, marker=False)
     (tmp_path / "master" / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
-    fake_run_command = MagicMock()
-    monkeypatch.setattr(wc, "run_command", fake_run_command)
+    # Single manager mock so we can assert call ordering across all init steps.
+    manager = MagicMock()
+    monkeypatch.setattr(wc, "generate_and_write_claude_md", manager.generate_and_write_claude_md)
+    monkeypatch.setattr(wc, "git_add", manager.git_add)
+    monkeypatch.setattr(wc, "git_commit_if_changed", manager.git_commit_if_changed)
+    monkeypatch.setattr(wc, "run_command", manager.run_command)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     project_dir = tmp_path.resolve()
-    assert [c.args[0] for c in fake_run_command.call_args_list] == [
+    run_command_calls = [c.args[0] for c in manager.run_command.call_args_list]
+    assert run_command_calls == [
         ["git", "clone", "--bare", "master", "bare"],
         ["git", "clone", "bare", "planner"],
         ["git", "clone", "bare", "builder"],
@@ -73,6 +79,33 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
         ["git", "config", "push.default", "current"],  # master
         ["git", "push", "-u", "origin", "HEAD"],
     ]
+    assert (tmp_path / WORKFLOW_ROOT_MARKER).exists()
+
+    # CLAUDE.md must be generated, added, and committed before the bare clone.
+    method_names = [name for name, _, _ in manager.method_calls]
+    gen_idx = method_names.index("generate_and_write_claude_md")
+    add_idx = method_names.index("git_add")
+    commit_idx = method_names.index("git_commit_if_changed")
+    bare_idx = next(
+        i
+        for i, call in enumerate(manager.method_calls)
+        if call[0] == "run_command" and call.args and call.args[0][:3] == ["git", "clone", "--bare"]
+    )
+    assert gen_idx < add_idx < commit_idx < bare_idx
+
+
+def test_init_succeeds_when_claude_md_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Init must continue past the CLAUDE.md commit step when there's nothing to commit."""
+    config_path = _make_project(tmp_path, marker=False)
+    (tmp_path / "master" / ".git").mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "generate_and_write_claude_md", MagicMock())
+    monkeypatch.setattr(wc, "git_add", MagicMock())
+    monkeypatch.setattr(wc, "git_commit_if_changed", MagicMock(return_value=CommitResult.NOTHING_TO_COMMIT))
+    monkeypatch.setattr(wc, "run_command", MagicMock())
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+    assert result.exit_code == 0, result.output
     assert (tmp_path / WORKFLOW_ROOT_MARKER).exists()
 
 

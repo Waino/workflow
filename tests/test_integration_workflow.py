@@ -15,6 +15,7 @@ import workflow.commands.workflow as wc
 from workflow.audit import read_audit_log
 from workflow.cli import main
 from workflow.config import WORKFLOW_ROOT_MARKER
+from workflow.git_helpers import CommitResult
 from workflow.validate import CheckResult
 
 # ---------------------------------------------------------------------------
@@ -83,11 +84,43 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
         if not dry_run:
             _git(["commit", "-m", msg], cwd=repo_path)
 
+    def _git_commit_if_changed_without_noverify(
+        repo_path: Path,
+        msg: str,
+        *,
+        dry_run: bool = False,
+        no_verify: bool = False,  # noqa: ARG001 — preserves signature
+    ) -> CommitResult:
+        if dry_run:
+            return CommitResult.COMMITTED
+        proc = subprocess.run(  # noqa: S603
+            [_GIT, "commit", "-m", msg],
+            cwd=repo_path,
+            check=False,
+            capture_output=True,
+        )
+        if proc.returncode != 0 and b"nothing to commit" in (proc.stdout + proc.stderr):
+            return CommitResult.NOTHING_TO_COMMIT
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(proc.returncode, proc.args, proc.stdout, proc.stderr)
+        return CommitResult.COMMITTED
+
     monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
+    monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
 
     # Step 2: workflow init (also wires origin remote and push config in all repos)
     result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
     assert result.exit_code == 0, result.output
+
+    # CLAUDE.md must exist in master, contain both markers, and be reachable
+    # via the bare clone — proving the "commit before bare clone" ordering.
+    master_claude_md = master / "CLAUDE.md"
+    assert master_claude_md.exists()
+    claude_md_text = master_claude_md.read_text(encoding="utf-8")
+    assert "<!-- WORKFLOW BEGIN -->" in claude_md_text
+    assert "<!-- WORKFLOW END -->" in claude_md_text
+    bare_blob_type = _git(["cat-file", "-t", "refs/heads/main:CLAUDE.md"], cwd=tmp_path / "bare").stdout
+    assert bare_blob_type.strip() == b"blob"
 
     # Set git user identity in each cloned repo (needed for commits made by the test).
     # push.autoSetupRemote, push.default=current, and the origin remote are set up by init.
@@ -151,3 +184,72 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
     # Entries must be in chronological order
     idx = {cmd: commands.index(cmd) for cmd in ("init", "todo", "implement", "check", "accept")}
     assert idx["init"] < idx["todo"] < idx["implement"] < idx["check"] < idx["accept"]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_check_claude_md_detects_branch_modification(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Validate roundtrip through _check_claude_md after init.
+
+    After init, _check_claude_md must fail when CLAUDE.md is modified on a feature
+    branch and pass once reverted.
+    """
+    from workflow.validate import _check_claude_md  # noqa: PLC0415
+
+    master = tmp_path / "master"
+    master.mkdir()
+    _git(["init", str(master)])
+    _git(["config", "user.email", "test@example.com"], cwd=master)
+    _git(["config", "user.name", "Test"], cwd=master)
+    _git(["checkout", "-b", "main"], cwd=master, check=False)
+    (master / "README.md").write_text("initial\n", encoding="utf-8")
+    _git(["add", "."], cwd=master)
+    _git(["commit", "-m", "initial commit"], cwd=master)
+
+    config_path = _make_integration_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def _git_commit_if_changed_without_noverify(
+        repo_path: Path,
+        msg: str,
+        *,
+        dry_run: bool = False,
+        no_verify: bool = False,  # noqa: ARG001
+    ) -> CommitResult:
+        if dry_run:
+            return CommitResult.COMMITTED
+        proc = subprocess.run(  # noqa: S603
+            [_GIT, "commit", "-m", msg],
+            cwd=repo_path,
+            check=False,
+            capture_output=True,
+        )
+        if proc.returncode != 0 and b"nothing to commit" in (proc.stdout + proc.stderr):
+            return CommitResult.NOTHING_TO_COMMIT
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(proc.returncode, proc.args, proc.stdout, proc.stderr)
+        return CommitResult.COMMITTED
+
+    monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+    assert result.exit_code == 0, result.output
+
+    # Simulate a feature branch in builder modifying CLAUDE.md.
+    builder = tmp_path / "builder"
+    _git(["config", "user.email", "test@example.com"], cwd=builder)
+    _git(["config", "user.name", "Test"], cwd=builder)
+    _git(["checkout", "-b", "feat/touch_claude"], cwd=builder)
+    pristine = (builder / "CLAUDE.md").read_text(encoding="utf-8")
+    (builder / "CLAUDE.md").write_text(pristine + "\nunsanctioned addition\n", encoding="utf-8")
+    _git(["add", "CLAUDE.md"], cwd=builder)
+    _git(["commit", "-m", "tamper"], cwd=builder)
+
+    # Hash mismatch on the modified branch -> fail with the hash-mismatch message.
+    result_fail = _check_claude_md(builder, tmp_path, ["CLAUDE.md"])
+    assert result_fail.status == "fail"
+    assert "hash does not match" in result_fail.message
+
+    # Revert and assert the check passes (same content as master, file not in changed_files).
+    (builder / "CLAUDE.md").write_text(pristine, encoding="utf-8")
+    result_pass = _check_claude_md(builder, tmp_path, [])
+    assert result_pass.status == "pass"

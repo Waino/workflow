@@ -165,6 +165,18 @@ def test_check_claude_md_suggests_regeneration_when_config_changed(tmp_path: Pat
     assert "workflow claude_md" in result.message
 
 
+def test_check_claude_md_fails_on_non_v1_hash_file(tmp_path: Path) -> None:
+    repo_path = tmp_path / "planner"
+    repo_path.mkdir()
+    (repo_path / "CLAUDE.md").write_text("anything\n", encoding="utf-8")
+    (tmp_path / ".claude_md_hash").write_text(f"v2 {'a' * 64} {'b' * 64}\n", encoding="utf-8")
+
+    result = dc._check_claude_md(repo_path, tmp_path, [])
+    assert result.status == "fail"
+    assert "Hash file invalid" in result.message
+    assert "v1" in result.message
+
+
 def test_validate_wraps_fetch_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _config(tmp_path)
     (tmp_path / "planner").mkdir()

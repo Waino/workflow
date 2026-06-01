@@ -128,6 +128,33 @@ class TestLoadConfigMalformedYAML:
             load_config(project_dir=tmp_path)
 
 
+class TestDescriptionValidation:
+    def test_rejects_whitespace_only_state_description(self, project_dir: Path) -> None:
+        config_data = yaml.safe_load((project_dir / "config.yaml").read_text())
+        config_data["states"]["intent"]["description"] = "   \t  "
+        (project_dir / "config.yaml").write_text(yaml.dump(config_data))
+        with pytest.raises(Exception, match="description must not be empty"):
+            load_config(project_dir=project_dir)
+
+    def test_rejects_whitespace_only_command_description(self, tmp_path: Path) -> None:
+        (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+        config = {
+            "agents": [{"name": "planner", "model": "test"}],
+            "states": {
+                "intent": {
+                    "description": "Plans being explored.",
+                    "agent": "planner",
+                    "commands": [
+                        {"command_type": "manual", "name": "noop", "description": "   "},
+                    ],
+                },
+            },
+        }
+        (tmp_path / "config.yaml").write_text(yaml.dump(config))
+        with pytest.raises(Exception, match="description for command 'noop' must not be empty"):
+            load_config(project_dir=tmp_path)
+
+
 class TestCommandModels:
     def test_prompt_command_in_config(self, tmp_path: Path) -> None:
         (tmp_path / WORKFLOW_ROOT_MARKER).touch()

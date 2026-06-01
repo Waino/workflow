@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from shutil import copyfile
@@ -93,6 +94,28 @@ def test_find_managed_section_raises_on_reversed_markers() -> None:
         find_managed_section(text)
 
 
+def test_find_managed_section_raises_on_begin_only() -> None:
+    with pytest.raises(ClaudeMdGenerationError, match="1 BEGIN and 0 END"):
+        find_managed_section(f"{MARKER_BEGIN}\nbody\n")
+
+
+def test_find_managed_section_raises_on_end_only() -> None:
+    with pytest.raises(ClaudeMdGenerationError, match="0 BEGIN and 1 END"):
+        find_managed_section(f"body\n{MARKER_END}\n")
+
+
+def test_find_managed_section_raises_on_two_pairs() -> None:
+    text = f"{MARKER_BEGIN}\na\n{MARKER_END}\n{MARKER_BEGIN}\nb\n{MARKER_END}\n"
+    with pytest.raises(ClaudeMdGenerationError, match="2 BEGIN and 2 END"):
+        find_managed_section(text)
+
+
+def test_find_managed_section_ignores_marker_substrings() -> None:
+    # Markers must equal the line exactly (column-0 rule); substring shouldn't match.
+    text = f"prefix {MARKER_BEGIN} suffix\nfoo {MARKER_END} bar\n"
+    assert find_managed_section(text) is None
+
+
 # ---------------------------------------------------------------------------
 # replace_managed_section and append_managed_section
 # ---------------------------------------------------------------------------
@@ -109,6 +132,15 @@ def test_replace_managed_section_substitutes_content() -> None:
     assert "old content" not in result
     assert "before" in result
     assert "after" in result
+
+
+def test_replace_managed_section_preserves_markers_and_surroundings_byte_for_byte() -> None:
+    # Pin the exact output to catch off-by-one slicing errors.
+    text = f"line 1\nline 2\n{MARKER_BEGIN}\nold\nmore old\n{MARKER_END}\nline 3\nline 4\n"
+    span = find_managed_section(text)
+    assert span is not None
+    result = replace_managed_section(text, span, "new\nnew2\n")
+    assert result == f"line 1\nline 2\n{MARKER_BEGIN}\nnew\nnew2\n{MARKER_END}\nline 3\nline 4\n"
 
 
 def test_append_managed_section_adds_markers_at_eof() -> None:
@@ -177,6 +209,24 @@ def test_render_workflow_section_contains_state_headings(tmp_path: Path) -> None
     assert "### done" in section
 
 
+_GOLDEN_PATH = Path(__file__).parent / "fixtures" / "claude_md_default_section.txt"
+
+
+def test_render_workflow_section_matches_golden(tmp_path: Path) -> None:
+    """Pin the rendered output against a fixture; regenerate with UPDATE_GOLDEN=1."""
+    config = _load_default_config(tmp_path)
+    actual = render_workflow_section(config)
+    if os.environ.get("UPDATE_GOLDEN") == "1":
+        _GOLDEN_PATH.write_text(actual, encoding="utf-8")
+    expected = _GOLDEN_PATH.read_text(encoding="utf-8")
+    assert actual == expected, "rendered section differs from golden fixture; re-run with UPDATE_GOLDEN=1 if intended"
+
+
+def test_render_workflow_section_is_byte_identical_across_calls(tmp_path: Path) -> None:
+    config = _load_default_config(tmp_path)
+    assert render_workflow_section(config) == render_workflow_section(config)
+
+
 # ---------------------------------------------------------------------------
 # generate_and_write_claude_md
 # ---------------------------------------------------------------------------
@@ -186,7 +236,7 @@ def test_generate_and_write_writes_files(tmp_path: Path) -> None:
     config = _load_default_config(tmp_path)
     master = tmp_path / "master"
     master.mkdir()
-    cm_cmd.generate_and_write_claude_md(config, tmp_path)
+    cm_cmd.generate_and_write_claude_md(config)
     claude_md = tmp_path / "master" / "CLAUDE.md"
     assert claude_md.exists()
     assert MARKER_BEGIN in claude_md.read_text(encoding="utf-8")
@@ -197,9 +247,9 @@ def test_generate_and_write_is_idempotent(tmp_path: Path) -> None:
     config = _load_default_config(tmp_path)
     master = tmp_path / "master"
     master.mkdir()
-    cm_cmd.generate_and_write_claude_md(config, tmp_path)
+    cm_cmd.generate_and_write_claude_md(config)
     first_content = (tmp_path / "master" / "CLAUDE.md").read_text(encoding="utf-8")
-    cm_cmd.generate_and_write_claude_md(config, tmp_path)
+    cm_cmd.generate_and_write_claude_md(config)
     second_content = (tmp_path / "master" / "CLAUDE.md").read_text(encoding="utf-8")
     assert first_content == second_content
 
@@ -211,7 +261,15 @@ def test_generate_and_write_raises_on_malformed_markers(tmp_path: Path) -> None:
     bad_text = f"{MARKER_END}\n{MARKER_BEGIN}\n"  # reversed
     (master / "CLAUDE.md").write_text(bad_text, encoding="utf-8")
     with pytest.raises(ClaudeMdGenerationError):
-        cm_cmd.generate_and_write_claude_md(config, tmp_path)
+        cm_cmd.generate_and_write_claude_md(config)
+
+
+def test_generate_and_write_claude_md_is_world_readable(tmp_path: Path) -> None:
+    config = _load_default_config(tmp_path)
+    (tmp_path / "master").mkdir()
+    cm_cmd.generate_and_write_claude_md(config)
+    mode = (tmp_path / "master" / "CLAUDE.md").stat().st_mode & 0o777
+    assert mode == 0o644
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +341,17 @@ def test_claude_md_check_exits_zero_when_current(tmp_path: Path, monkeypatch: py
 
     result = runner.invoke(main, ["--config", str(config_path), "claude_md", "--check"])
     assert result.exit_code == 0
+
+
+def test_claude_md_command_reports_malformed_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    # Reversed markers — find_managed_section raises ClaudeMdGenerationError.
+    (tmp_path / "master" / "CLAUDE.md").write_text(f"{MARKER_END}\n{MARKER_BEGIN}\n", encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "claude_md"])
+    assert result.exit_code == 1
+    assert "Error:" in result.output
 
 
 def test_claude_md_command_outside_project_exits_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
