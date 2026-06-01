@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import os
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -26,6 +27,73 @@ from workflow.exceptions import ClaudeMdGenerationError, WorkflowError
 from workflow.registry import register_script
 
 
+@dataclass
+class _ClaudeMdUpdate:
+    """Result of computing a CLAUDE.md update without writing it to disk."""
+
+    resolved_path: Path
+    hash_file_path: Path
+    new_text: str  # normalised, ready to write
+    new_hash: str
+    claude_md_unchanged: bool  # True when on-disk content already matches new_text
+    hash_unchanged: bool  # True when on-disk hash already matches new_hash
+
+
+def _prepare_claude_md_update(
+    config: WorkflowConfig,
+    claude_md_path: Path | None = None,
+) -> _ClaudeMdUpdate:
+    """Compute the new CLAUDE.md content and hash without writing anything.
+
+    Raises :class:`~workflow.exceptions.ClaudeMdGenerationError` when
+    ``config.project_dir`` is unset, markers are malformed, or the generated
+    output is internally inconsistent.
+    """
+    if config.project_dir is None:
+        msg = "config.project_dir must be set to generate CLAUDE.md."
+        raise ClaudeMdGenerationError(msg)
+    project_dir = config.project_dir
+    resolved_path = claude_md_path or (project_dir / "master" / "CLAUDE.md")
+    config_yaml_path = project_dir / "config.yaml"
+    hash_file_path = project_dir / ".claude_md_hash"
+
+    # Read existing content (or start fresh).
+    existing_text = resolved_path.read_text(encoding="utf-8") if resolved_path.exists() else ""
+
+    # Validate existing markers before generating.
+    span = find_managed_section(existing_text)  # raises ClaudeMdGenerationError on malformed
+
+    # Generate the managed section content and splice into the file.
+    managed = render_workflow_section(config)
+    new_text = (
+        replace_managed_section(existing_text, span, managed)
+        if span is not None
+        else append_managed_section(existing_text, managed)
+    )
+    new_text = normalise(new_text)
+
+    # Sanity-check: the generated file must have exactly one marker pair.
+    if find_managed_section(new_text) is None:
+        msg = "BUG: generated CLAUDE.md has no markers after generation."
+        raise ClaudeMdGenerationError(msg)
+
+    config_yaml_bytes = config_yaml_path.read_bytes() if config_yaml_path.exists() else b""
+    new_hash = compute_hash_file_contents(new_text, config_yaml_bytes)
+
+    existing_hash = hash_file_path.read_text(encoding="utf-8") if hash_file_path.exists() else ""
+    claude_md_unchanged = resolved_path.exists() and resolved_path.read_text(encoding="utf-8") == new_text
+    hash_unchanged = existing_hash == new_hash
+
+    return _ClaudeMdUpdate(
+        resolved_path=resolved_path,
+        hash_file_path=hash_file_path,
+        new_text=new_text,
+        new_hash=new_hash,
+        claude_md_unchanged=claude_md_unchanged,
+        hash_unchanged=hash_unchanged,
+    )
+
+
 def generate_and_write_claude_md(
     config: WorkflowConfig,
     *,
@@ -40,47 +108,12 @@ def generate_and_write_claude_md(
     Performs no git operations. The caller is responsible for any staging,
     committing, or pushing.
     """
-    if config.project_dir is None:
-        msg = "generate_and_write_claude_md: config.project_dir must be set."
-        raise ClaudeMdGenerationError(msg)
-    project_dir = config.project_dir
-    resolved_path = claude_md_path or (project_dir / "master" / "CLAUDE.md")
-    config_yaml_path = project_dir / "config.yaml"
-    hash_file_path = project_dir / ".claude_md_hash"
-
-    # Read existing content (or start fresh).
-    existing_text = resolved_path.read_text(encoding="utf-8") if resolved_path.exists() else ""
-
-    # Validate existing markers before generating.
-    span = find_managed_section(existing_text)  # raises ClaudeMdGenerationError on malformed
-
-    # Generate the managed section content.
-    managed = render_workflow_section(config)
-
-    # Splice into the file.
-    if span is not None:
-        new_text = replace_managed_section(existing_text, span, managed)
-    else:
-        new_text = append_managed_section(existing_text, managed)
-
-    new_text = normalise(new_text)
-
-    # Validate the result has exactly one well-formed marker pair.
-    result_span = find_managed_section(new_text)
-    if result_span is None:
-        msg = "BUG: generated CLAUDE.md has no markers after generation."
-        raise ClaudeMdGenerationError(msg)
-
-    # Compute hash file contents.
-    config_yaml_bytes = config_yaml_path.read_bytes() if config_yaml_path.exists() else b""
-    hash_contents = compute_hash_file_contents(new_text, config_yaml_bytes)
-
+    update = _prepare_claude_md_update(config, claude_md_path)
     # Write atomically. CLAUDE.md is committed to git, so use 0o644;
     # the hash file is a local trust anchor that does not need to be world-readable.
-    _atomic_write(resolved_path, new_text.encode("utf-8"), mode=0o644)
-    _atomic_write(hash_file_path, hash_contents.encode("utf-8"))
-
-    return resolved_path
+    _atomic_write(update.resolved_path, update.new_text.encode("utf-8"), mode=0o644)
+    _atomic_write(update.hash_file_path, update.new_hash.encode("utf-8"))
+    return update.resolved_path
 
 
 def _atomic_write(path: Path, data: bytes, *, mode: int | None = None) -> None:
@@ -114,54 +147,26 @@ def claude_md(ctx: click.Context, check: bool) -> None:  # noqa: FBT001
         ctx.exit(1)
         return
 
-    project_dir = config.project_dir
-    claude_md_path = project_dir / "master" / "CLAUDE.md"
-    hash_file_path = project_dir / ".claude_md_hash"
-    config_yaml_path = project_dir / "config.yaml"
-
     try:
-        existing_text = claude_md_path.read_text(encoding="utf-8") if claude_md_path.exists() else ""
-        span = find_managed_section(existing_text)
-        managed = render_workflow_section(config)
-        new_text = (
-            replace_managed_section(existing_text, span, managed)
-            if span is not None
-            else append_managed_section(existing_text, managed)
-        )
-        new_text = normalise(new_text)
+        update = _prepare_claude_md_update(config)
 
-        config_yaml_bytes = config_yaml_path.read_bytes() if config_yaml_path.exists() else b""
-        new_hash = compute_hash_file_contents(new_text, config_yaml_bytes)
-
-        existing_hash = hash_file_path.read_text(encoding="utf-8") if hash_file_path.exists() else ""
-
-        claude_md_unchanged = claude_md_path.exists() and claude_md_path.read_text(encoding="utf-8") == new_text
-        hash_unchanged = existing_hash == new_hash
-
-        if claude_md_unchanged and hash_unchanged:
+        if update.claude_md_unchanged and update.hash_unchanged:
             click.echo("CLAUDE.md is up to date.")
             ctx.exit(0)
             return
 
         if check:
             parts = []
-            if not claude_md_unchanged:
+            if not update.claude_md_unchanged:
                 parts.append("CLAUDE.md content")
-            if not hash_unchanged:
+            if not update.hash_unchanged:
                 parts.append("hash file")
             click.echo(f"CLAUDE.md is out of date: {' and '.join(parts)} would change.", err=True)
             ctx.exit(1)
             return
 
-        # Validate result markers before writing.
-        result_span = find_managed_section(new_text)
-        if result_span is None:
-            click.echo("Error: BUG: generated CLAUDE.md has no markers.", err=True)
-            ctx.exit(1)
-            return
-
-        _atomic_write(claude_md_path, new_text.encode("utf-8"), mode=0o644)
-        _atomic_write(hash_file_path, new_hash.encode("utf-8"))
+        _atomic_write(update.resolved_path, update.new_text.encode("utf-8"), mode=0o644)
+        _atomic_write(update.hash_file_path, update.new_hash.encode("utf-8"))
         click.echo("CLAUDE.md written. Review with 'git diff' in master, then commit and push.")
 
     except (ClaudeMdGenerationError, WorkflowError) as exc:
