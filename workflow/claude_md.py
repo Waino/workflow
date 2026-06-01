@@ -2,9 +2,7 @@
 
 All functions here are free of side effects except for I/O in
 ``render_workflow_section`` (reads the Jinja template from package
-resources).  They are imported by ``workflow/commands/claude_md.py``
-(orchestrator), ``workflow/validate.py`` (hash-file parsing), and
-``workflow/commands/workflow.py`` (init bootstrap).
+resources).
 """
 
 from __future__ import annotations
