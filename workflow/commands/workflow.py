@@ -28,6 +28,7 @@ from workflow.exceptions import (
 from workflow.git_helpers import (
     git_add,
     git_commit,
+    git_commit_if_changed,
     git_current_branch,
     git_fetch,
     git_merge,
@@ -140,18 +141,17 @@ def init(ctx: click.Context) -> None:
         # Generate CLAUDE.md into master before the bare clone so all agent clones inherit it.
         if not dry_run:
             try:
-                generate_and_write_claude_md(config.model_copy(update={"project_dir": project_dir}), project_dir)
+                generate_and_write_claude_md(config.model_copy(update={"project_dir": project_dir}))
                 master_repo_path = project_dir / RepoName.master
                 git_add(master_repo_path, Path("CLAUDE.md"), dry_run=False)
-                git_commit(
+                # no_verify: at init time the pre-commit hook would run pytest before the
+                # workflow package is even installed in master; bypassing is required here.
+                git_commit_if_changed(
                     master_repo_path,
                     "chore: generate initial CLAUDE.md",
                     dry_run=False,
                     no_verify=True,
                 )
-            except subprocess.CalledProcessError:
-                # Nothing to commit (CLAUDE.md already up to date) — continue.
-                pass
             except ClaudeMdGenerationError as exc:
                 raise WorkflowError(str(exc)) from exc
         run_command(["git", "clone", "--bare", RepoName.master, "bare"], cwd=project_dir, dry_run=dry_run)

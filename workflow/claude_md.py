@@ -99,7 +99,7 @@ def find_managed_section(text: str) -> ManagedSection | None:
         raise ClaudeMdGenerationError(msg)
 
     begin, end = begins[0], ends[0]
-    if end <= begin:
+    if end < begin:
         msg = f"Malformed markers: END marker (line {end}) must come after BEGIN marker (line {begin})."
         raise ClaudeMdGenerationError(msg)
 

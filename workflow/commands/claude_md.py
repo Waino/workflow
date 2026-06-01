@@ -28,7 +28,6 @@ from workflow.registry import register_script
 
 def generate_and_write_claude_md(
     config: WorkflowConfig,
-    project_dir: Path,
     *,
     claude_md_path: Path | None = None,
 ) -> Path:
@@ -41,6 +40,10 @@ def generate_and_write_claude_md(
     Performs no git operations. The caller is responsible for any staging,
     committing, or pushing.
     """
+    if config.project_dir is None:
+        msg = "generate_and_write_claude_md: config.project_dir must be set."
+        raise ClaudeMdGenerationError(msg)
+    project_dir = config.project_dir
     resolved_path = claude_md_path or (project_dir / "master" / "CLAUDE.md")
     config_yaml_path = project_dir / "config.yaml"
     hash_file_path = project_dir / ".claude_md_hash"
@@ -72,20 +75,27 @@ def generate_and_write_claude_md(
     config_yaml_bytes = config_yaml_path.read_bytes() if config_yaml_path.exists() else b""
     hash_contents = compute_hash_file_contents(new_text, config_yaml_bytes)
 
-    # Write atomically.
-    _atomic_write(resolved_path, new_text.encode("utf-8"))
+    # Write atomically. CLAUDE.md is committed to git, so use 0o644;
+    # the hash file is a local trust anchor that does not need to be world-readable.
+    _atomic_write(resolved_path, new_text.encode("utf-8"), mode=0o644)
     _atomic_write(hash_file_path, hash_contents.encode("utf-8"))
 
     return resolved_path
 
 
-def _atomic_write(path: Path, data: bytes) -> None:
-    """Write *data* to *path* atomically via a temporary file in the same directory."""
+def _atomic_write(path: Path, data: bytes, *, mode: int | None = None) -> None:
+    """Write *data* to *path* atomically via a temporary file in the same directory.
+
+    When *mode* is provided, set permissions on the temp file before the rename
+    (``tempfile.mkstemp`` defaults to 0o600).
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp_")
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
+        if mode is not None:
+            Path(tmp).chmod(mode)
         Path(tmp).replace(path)
     except Exception:
         with contextlib.suppress(OSError):
@@ -150,7 +160,7 @@ def claude_md(ctx: click.Context, check: bool) -> None:  # noqa: FBT001
             ctx.exit(1)
             return
 
-        _atomic_write(claude_md_path, new_text.encode("utf-8"))
+        _atomic_write(claude_md_path, new_text.encode("utf-8"), mode=0o644)
         _atomic_write(hash_file_path, new_hash.encode("utf-8"))
         click.echo("CLAUDE.md written. Review with 'git diff' in master, then commit and push.")
 

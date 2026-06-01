@@ -6,6 +6,8 @@ All helpers that run git operations use cwd=repo_path and the remote named 'orig
 
 from __future__ import annotations
 
+import enum
+import subprocess
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -13,6 +15,13 @@ if TYPE_CHECKING:
 
 from workflow.exceptions import WorkflowError
 from workflow.shell import run_command
+
+
+class CommitResult(enum.Enum):
+    """Outcome of :func:`git_commit_if_changed`."""
+
+    COMMITTED = "committed"
+    NOTHING_TO_COMMIT = "nothing_to_commit"
 
 
 def git_pull(repo_path: Path, *, dry_run: bool = False) -> None:
@@ -92,6 +101,38 @@ def git_commit(repo_path: Path, message: str, *, dry_run: bool = False, no_verif
     if no_verify:
         commit_args.append("--no-verify")
     run_command(commit_args, cwd=repo_path, dry_run=dry_run)
+
+
+def git_commit_if_changed(
+    repo_path: Path,
+    message: str,
+    *,
+    dry_run: bool = False,
+    no_verify: bool = False,
+) -> CommitResult:
+    """Commit staged changes in *repo_path*, returning a sentinel when there is nothing to commit.
+
+    Unlike :func:`git_commit`, this distinguishes the "nothing to commit" no-op
+    (git exits 1 with that message on stdout) from genuine git failures, which
+    are re-raised unchanged. Callers should pre-stage their changes (or use the
+    ``git add -u`` performed by :func:`git_commit`).
+    """
+    if dry_run:
+        commit_args = ["git", "commit", "-m", message, *(["--no-verify"] if no_verify else [])]
+        run_command(commit_args, cwd=repo_path, dry_run=True)
+        return CommitResult.COMMITTED
+
+    commit_args = ["git", "commit", "-m", message]
+    if no_verify:
+        commit_args.append("--no-verify")
+    try:
+        subprocess.run(commit_args, cwd=repo_path, check=True, capture_output=True)  # noqa: S603
+    except subprocess.CalledProcessError as exc:
+        output = (exc.stdout or b"") + (exc.stderr or b"")
+        if b"nothing to commit" in output:
+            return CommitResult.NOTHING_TO_COMMIT
+        raise
+    return CommitResult.COMMITTED
 
 
 def git_mv(repo_path: Path, source: Path, target: Path, *, dry_run: bool = False) -> None:
