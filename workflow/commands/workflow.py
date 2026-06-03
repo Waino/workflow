@@ -194,7 +194,7 @@ def start(ctx: click.Context) -> None:
             raise WorkflowError(msg)
         project_name = config.project_name or _require_project_dir(config).name
         first_agent = config.agents[0]
-        first_command = f"echo {project_name} {first_agent.name} {first_agent.model}"
+        first_command = f"echo {project_name} {first_agent.name} {first_agent.model}"  # TODO: placeholder
         run_command(
             ["tmux", "new-session", "-d", "-s", config.tmux.session_name, "-n", first_agent.name, first_command],
             dry_run=dry_run,
