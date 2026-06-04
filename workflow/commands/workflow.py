@@ -16,7 +16,7 @@ import jinja2
 
 from workflow.audit import write_audit_log
 from workflow.commands.claude_md import generate_and_write_claude_md
-from workflow.config import WORKFLOW_ROOT_MARKER, WorkflowConfig
+from workflow.config import WORKFLOW_ROOT_MARKER, AgentConfig, WorkflowConfig
 from workflow.config import ScriptCommand as _ScriptCommand
 from workflow.exceptions import (
     AmbiguousPlanError,
@@ -180,23 +180,61 @@ def init(ctx: click.Context) -> None:
     ctx.exit(0)
 
 
+def _find_docker_script(project_dir: Path) -> str:
+    """Return the path to run_agent_in_docker.sh, or just its name for PATH lookup."""
+    candidate = project_dir / "run_agent_in_docker.sh"
+    if candidate.is_file():
+        return str(candidate)
+    return "run_agent_in_docker.sh"
+
+
+def _agent_docker_command(
+    script: str,
+    project_name: str,
+    project_dir: Path,
+    agent: AgentConfig,
+    *,
+    reset: bool,
+) -> str:
+    """Build the tmux window command string for an agent."""
+    parts = [script, project_name, agent.name, "--project-dir", str(project_dir), "--model", agent.model]
+    if reset:
+        parts.append("--reset")
+    return shlex.join(parts)
+
+
+def _builder_shell_command(script: str, project_name: str, project_dir: Path) -> str:
+    """Build the tmux window command string for the builder-shell window."""
+    return shlex.join([script, project_name, "builder", "--project-dir", str(project_dir), "--shell"])
+
+
 @register_script("start")
+@click.option("--reset", is_flag=True, default=False, help="Remove existing containers instead of restarting.")
 @click.pass_context
-def start(ctx: click.Context) -> None:
+def start(ctx: click.Context, *, reset: bool) -> None:
     """Start tmux windows for all configured agents."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
 
     try:
-        _require_project_dir(config)
+        project_dir = _require_project_dir(config)
         if not config.agents:
             msg = "No agents configured."
             raise WorkflowError(msg)
-        project_name = config.project_name or _require_project_dir(config).name
+        project_name = config.project_name or project_dir.name
+        script = _find_docker_script(project_dir)
         first_agent = config.agents[0]
-        first_command = f"echo {project_name} {first_agent.name} {first_agent.model}"  # TODO: placeholder
         run_command(
-            ["tmux", "new-session", "-d", "-s", config.tmux.session_name, "-n", first_agent.name, first_command],
+            [
+                "tmux",
+                "new-session",
+                "-d",
+                "-s",
+                config.tmux.session_name,
+                "-n",
+                first_agent.name,
+                _agent_docker_command(script, project_name, project_dir, first_agent, reset=reset),
+            ],
             dry_run=dry_run,
         )
         for agent in config.agents[1:]:
@@ -208,7 +246,7 @@ def start(ctx: click.Context) -> None:
                     config.tmux.session_name,
                     "-n",
                     agent.name,
-                    f"echo {project_name} {agent.name} {agent.model}",  # TODO: placeholder
+                    _agent_docker_command(script, project_name, project_dir, agent, reset=reset),
                 ],
                 dry_run=dry_run,
             )
@@ -220,7 +258,7 @@ def start(ctx: click.Context) -> None:
                 config.tmux.session_name,
                 "-n",
                 "builder-shell",
-                f"echo {project_name} builder-shell bash",  # TODO: placeholder
+                _builder_shell_command(script, project_name, project_dir),
             ],
             dry_run=dry_run,
         )

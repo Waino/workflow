@@ -124,6 +124,49 @@ def test_start_runs_tmux_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert [call[5] for call in calls[1:3]] == ["builder", "reviewer"]
     assert calls[3][5] == "builder-shell"
 
+    # Verify the actual command strings passed to tmux.
+    # No run_agent_in_docker.sh in tmp_path, so the bare script name is used.
+    script = "run_agent_in_docker.sh"
+    project = tmp_path.name
+    project_dir = str(tmp_path.resolve())
+    assert calls[0][7] == f"{script} {project} planner --project-dir {project_dir} --model opus4.6"
+    assert calls[1][6] == f"{script} {project} builder --project-dir {project_dir} --model sonnet4.6"
+    assert calls[2][6] == f"{script} {project} reviewer --project-dir {project_dir} --model gpt5.4"
+    assert calls[3][6] == f"{script} {project} builder --project-dir {project_dir} --shell"
+
+
+def test_start_reset_flag_threads_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--reset is appended to each agent command but NOT to the builder-shell command."""
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    fake_run_command = MagicMock()
+    monkeypatch.setattr(wc, "run_command", fake_run_command)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "start", "--reset"])
+
+    assert result.exit_code == 0
+    calls = [c.args[0] for c in fake_run_command.call_args_list]
+    assert calls[0][7].endswith("--reset")  # first agent (new-session)
+    assert calls[1][6].endswith("--reset")  # second agent (new-window)
+    assert calls[2][6].endswith("--reset")  # third agent (new-window)
+    assert "--reset" not in calls[3][6]  # builder-shell must not carry --reset
+
+
+def test_start_uses_project_local_script_when_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Script found in project_dir is used as an absolute path instead of bare name."""
+    config_path = _make_project(tmp_path)
+    local_script = tmp_path / "run_agent_in_docker.sh"
+    local_script.touch()
+    monkeypatch.chdir(tmp_path)
+    fake_run_command = MagicMock()
+    monkeypatch.setattr(wc, "run_command", fake_run_command)
+
+    CliRunner().invoke(main, ["--config", str(config_path), "start"])
+
+    calls = [c.args[0] for c in fake_run_command.call_args_list]
+    # The command string for the first agent window should start with the absolute path.
+    assert calls[0][7].startswith(str(tmp_path.resolve()))
+
 
 def test_new_uses_existing_plans_and_audit_log_for_numbering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
