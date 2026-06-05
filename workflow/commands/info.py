@@ -1,4 +1,4 @@
-"""Informational script commands: status, log, claude.md."""
+"""Informational script commands: status, log."""
 
 from __future__ import annotations
 
@@ -241,9 +241,3 @@ def log(  # noqa: PLR0913
 
     console.print(table)
     ctx.exit(0)
-
-
-@register_script("claude.md")
-def claude_md() -> int:
-    """Regenerate the auto-generated sections of CLAUDE.md from the config."""
-    return 0

@@ -197,8 +197,56 @@ states:
         description: Perform a full review of the current codebase.
         prompt: |
           Perform a full review of the current state of the codebase.
-          Search for dead code, propose integration tests, and review overall architecture.
           Write a report into docs/plans/reviews/full/.
+
+          Check the following categories:
+
+          Architecture:
+          - Overengineered frameworks or unnecessary abstractions
+          - Tangled import dependencies
+          - Duplicated logic across code paths (e.g. dry-run mode that duplicates normal-mode computation)
+          - Heavy reimplementations where a standard dependency would suffice
+
+          Functional correctness:
+          - Review interactions between critical or complex components
+
+          Only considering the happy path:
+          - Error handling: missing entirely, or overbroad catch-all
+          - Missing timeouts/retries on I/O
+          - Weak input validation
+
+          Use of Pydantic:
+          - Pydantic should be used throughout; avoid returning bare tuples or dicts
+          - Types should not be too generic (e.g. `Any` or `dict[str, Any]`)
+          - Are defaults set where appropriate? Is there validation where appropriate?
+          - Fields should have docstrings
+
+          Async misuse:
+          - Blocking calls inside async functions
+          - Fire-and-forget tasks without timeout or cancellation
+          - Race conditions
+
+          Dead code:
+          - Run vulture and analyse the results
+
+          Testing:
+          - Propose integration tests for critical paths
+          - Tests that only cover the happy path
+          - Missing edge cases
+          - Tests that mock the system under test
+          - Tests not asserting anything meaningful
+
+          Documentation:
+          - Developer and user docs: complete and up to date
+          - Comments in the codebase: prefer why over how, with exceptions for unavoidably complex logic
+
+          Misc:
+          - Excessively verbose logging
+          - Inefficient algorithms
+          - Long string literals in code (should be in templates or asset files)
+          - Configuration embedded in code
+          - Logical and consistent naming scheme
+          - Readability and maintainability
       - command_type: prompt
         name: followthrough
         description: Compare done plans against the codebase for unimplemented features.

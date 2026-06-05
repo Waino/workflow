@@ -157,12 +157,6 @@ def test_full_review_works_without_plan_argument(tmp_path: Path, monkeypatch: py
         del dry_run
         prompts.append(prompt)
 
-    expected_prompt = (
-        "Perform a full review of the current state of the codebase.\n"
-        "Search for dead code, propose integration tests, and review overall architecture.\n"
-        "Write a report into docs/plans/reviews/full/."
-    )
-
     monkeypatch.setattr(tmux_dispatch, "git_pull", MagicMock())
     monkeypatch.setattr(tmux_dispatch, "write_audit_log", MagicMock())
     monkeypatch.setattr(tmux_dispatch, "send_prompt_to_agent", fake_send)
@@ -172,7 +166,10 @@ def test_full_review_works_without_plan_argument(tmp_path: Path, monkeypatch: py
     if result.exit_code != 0:
         print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
-    assert prompts == [expected_prompt]
+    assert len(prompts) == 1
+    prompt = prompts[0]
+    assert "Perform a full review of the current state of the codebase." in prompt
+    assert "docs/plans/reviews/full/" in prompt
 
 
 def test_edit_cancellation_skips_dispatch_and_audit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -653,6 +653,7 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
             dry_run=dry_run,
             no_verify=True,
         )
+        git_push(project_dir / target_repo, dry_run=dry_run)
         _write_script_audit_log(config, "reject", dry_run=dry_run, input_plan=plan.name)
     except (
         subprocess.CalledProcessError,
