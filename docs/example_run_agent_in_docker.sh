@@ -92,7 +92,11 @@ fi
 # ---------------------------------------------------------------------------
 # Bring the container up (run / start / no-op depending on state)
 # ---------------------------------------------------------------------------
-CONTAINER_STATUS="$(docker inspect --format '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo "absent")"
+if docker inspect "$CONTAINER" &>/dev/null; then
+    CONTAINER_STATUS="$(docker inspect --format '{{.State.Status}}' "$CONTAINER")"
+else
+    CONTAINER_STATUS="absent"
+fi
 
 case "$CONTAINER_STATUS" in
     running)
