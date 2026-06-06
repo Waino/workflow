@@ -120,6 +120,30 @@ class TestWorkflowConfigValidation:
         with pytest.raises(Exception, match="Duplicate agent names"):
             load_config(project_dir=tmp_path)
 
+    def test_rejects_multiple_manual_shell_agents(self, tmp_path: Path) -> None:
+        config = {
+            "agents": [
+                {"name": "planner", "model": "test", "manual_shell": True},
+                {"name": "builder", "model": "test", "manual_shell": True},
+            ],
+            "states": {"intent": {"description": "Plans being explored.", "agent": "planner", "commands": []}},
+        }
+        (tmp_path / "config.yaml").write_text(yaml.dump(config))
+        with pytest.raises(Exception, match="At most one agent may set manual_shell"):
+            load_config(project_dir=tmp_path)
+
+    def test_accepts_single_manual_shell_agent(self, tmp_path: Path) -> None:
+        config = {
+            "agents": [
+                {"name": "planner", "model": "test"},
+                {"name": "builder", "model": "test", "manual_shell": True},
+            ],
+            "states": {"intent": {"description": "Plans being explored.", "agent": "planner", "commands": []}},
+        }
+        (tmp_path / "config.yaml").write_text(yaml.dump(config))
+        loaded = load_config(project_dir=tmp_path)
+        assert [a.name for a in loaded.agents if a.manual_shell] == ["builder"]
+
 
 class TestLoadConfigMalformedYAML:
     def test_raises_value_error_on_bad_yaml(self, tmp_path: Path) -> None:

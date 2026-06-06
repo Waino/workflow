@@ -8,16 +8,21 @@ tmux windows via libtmux.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 import libtmux
 from jinja2 import Environment, StrictUndefined, UndefinedError
 from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 from workflow.audit import write_audit_log
 from workflow.config import PromptCommand, WorkflowConfig
@@ -32,6 +37,11 @@ from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import RepoName, command_cli_name
 from workflow.plan_resolver import resolve_plan
 from workflow.shell import console, error_console, print_workflow_error
+
+CONTROL_PANE_OPTION = "@workflow_control_pane"
+"""Session user option holding the stable pane id of the docked control pane."""
+
+_TMUX_HINT = "Run 'workflow start' to create the tmux session."
 
 # Reverse map: which workflow repo serves each prompt-eligible plan state.
 _REPO_FOR_PROMPT_STATE: dict[PlanState, RepoName] = {
@@ -319,6 +329,147 @@ def register_prompt_commands(cli: click.Group, config: WorkflowConfig) -> None:
         cli.add_command(prompt_command, name=cli_name)
 
 
+def _preview_tmux(args: list[str]) -> None:
+    """Print an intended tmux command in dry-run mode (matches ``run_command`` formatting)."""
+    console.print(f"[dim]would run:[/dim] {shlex.join(args)}")
+
+
+def _resolve_session(config: WorkflowConfig) -> libtmux.Session:
+    """Return the live workflow tmux session, or raise :class:`WorkflowError` with a 'run start' hint."""
+    server = libtmux.Server()
+    if not server.is_alive():
+        msg = f"tmux server is not running. {_TMUX_HINT}"
+        raise WorkflowError(msg)
+    session = server.sessions.get(session_name=config.tmux.session_name, default=None)
+    if session is None:
+        msg = f"tmux session {config.tmux.session_name!r} not found. {_TMUX_HINT}"
+        raise WorkflowError(msg)
+    return session
+
+
+def assert_in_workflow_session(config: WorkflowConfig) -> None:
+    """Verify the caller is running inside the workflow tmux session.
+
+    Raises :class:`WorkflowError` if ``$TMUX`` is unset (not inside any tmux), the
+    workflow session does not exist, or the current pane belongs to another session.
+    """
+    if not os.environ.get("TMUX"):
+        msg = (
+            "must be run from inside the workflow tmux session "
+            f"(attach with: tmux attach -t {config.tmux.session_name})."
+        )
+        raise WorkflowError(msg)
+    session = _resolve_session(config)
+    pane_id = os.environ.get("TMUX_PANE")
+    if pane_id is None:
+        return
+    pane = session.server.panes.get(pane_id=pane_id, default=None)
+    if pane is None or pane.session_id != session.session_id:
+        msg = f"must be run from inside the {config.tmux.session_name!r} tmux session."
+        raise WorkflowError(msg)
+
+
+def create_workflow_session(
+    config: WorkflowConfig,
+    windows: Sequence[tuple[str, str]],
+    control_window: str,
+    *,
+    dry_run: bool = False,
+) -> None:
+    """Create the workflow tmux session and dock the control pane in *control_window*.
+
+    *windows* is an ordered list of ``(window_name, command)`` pairs: the first is created
+    via ``new-session``, the rest via ``new-window``. A plain shell pane (the control pane)
+    is then split to the left of *control_window*'s pane and its stable id recorded in the
+    :data:`CONTROL_PANE_OPTION` session option for later rotation.
+
+    In dry-run mode prints the intended tmux commands and makes no libtmux calls.
+    """
+    session_name = config.tmux.session_name
+    if dry_run:
+        first_name, first_cmd = windows[0]
+        _preview_tmux(["tmux", "new-session", "-d", "-s", session_name, "-n", first_name, first_cmd])
+        for name, cmd in windows[1:]:
+            _preview_tmux(["tmux", "new-window", "-t", session_name, "-n", name, cmd])
+        _preview_tmux(["tmux", "split-window", "-h", "-b", "-t", f"{session_name}:{control_window}"])
+        _preview_tmux(["tmux", "set-option", "-t", session_name, CONTROL_PANE_OPTION, "<control-pane-id>"])
+        return
+    try:
+        server = libtmux.Server()
+        first_name, first_cmd = windows[0]
+        session = server.new_session(
+            session_name,
+            window_name=first_name,
+            window_command=first_cmd,
+            attach=False,
+        )
+        for name, cmd in windows[1:]:
+            session.new_window(window_name=name, window_shell=cmd, attach=False)
+        host = session.windows.get(window_name=control_window, default=None)
+        if host is None:
+            msg = f"control window {control_window!r} not found after session creation."
+            raise WorkflowError(msg)
+        control_pane = host.split(direction=libtmux.pane.PaneDirection.Left, attach=True)
+        if control_pane.pane_id is None:
+            msg = "the split control pane has no id."
+            raise WorkflowError(msg)
+        session.set_option(CONTROL_PANE_OPTION, control_pane.pane_id)
+        host.select()
+    except (OSError, libtmux.exc.LibTmuxException) as exc:
+        msg = f"failed to create tmux session {session_name!r}: {exc}"
+        raise WorkflowError(msg) from exc
+
+
+def rotate_control_pane(config: WorkflowConfig, target_window: str, *, dry_run: bool = False) -> None:
+    """Move the recorded control pane next to *target_window*'s pane and select that window.
+
+    Locates the control pane by the id recorded in :data:`CONTROL_PANE_OPTION` (so it works
+    regardless of focus or ``pane-base-index``). A no-op if the control pane is already in
+    *target_window*. In dry-run mode prints the intended ``join-pane`` command only.
+
+    Raises :class:`WorkflowError` if no control pane is recorded, the recorded pane is stale,
+    the target window is missing, or any tmux call fails.
+    """
+    if dry_run:
+        _preview_tmux(
+            [
+                "tmux",
+                "join-pane",
+                "-h",
+                "-b",
+                "-s",
+                "<control-pane>",
+                "-t",
+                f"{config.tmux.session_name}:{target_window}",
+            ],
+        )
+        return
+    try:
+        session = _resolve_session(config)
+        control_pane_id = session.show_option(CONTROL_PANE_OPTION)
+        if not control_pane_id:
+            msg = f"no control pane recorded in {CONTROL_PANE_OPTION}. {_TMUX_HINT}"
+            raise WorkflowError(msg)
+        control_pane_id = str(control_pane_id)
+        control_pane = session.server.panes.get(pane_id=control_pane_id, default=None)
+        if control_pane is None:
+            msg = f"recorded control pane {control_pane_id} no longer exists. {_TMUX_HINT}"
+            raise WorkflowError(msg)
+        if control_pane.window.name == target_window:
+            return
+        target = session.windows.get(window_name=target_window, default=None)
+        if target is None:
+            msg = f"no tmux window named {target_window!r} in session {config.tmux.session_name!r}."
+            raise WorkflowError(msg)
+        res = session.cmd("join-pane", "-h", "-b", "-s", control_pane_id, "-t", f":{target_window}")
+        if res.stderr:
+            raise WorkflowError("; ".join(res.stderr))
+        target.select()
+    except (OSError, libtmux.exc.LibTmuxException) as exc:
+        msg = f"tmux rotation failed: {exc}"
+        raise WorkflowError(msg) from exc
+
+
 def send_prompt_to_agent(
     agent_name: str,
     prompt: str,
@@ -342,20 +493,10 @@ def send_prompt_to_agent(
         console.print(prompt)
         return
 
-    hint = "Run 'workflow start' to create the tmux session."
-    server = libtmux.Server()
-    if not server.is_alive():
-        msg = f"tmux server is not running. {hint}"
-        raise WorkflowError(msg)
-
-    session = server.sessions.get(session_name=config.tmux.session_name, default=None)
-    if session is None:
-        msg = f"tmux session {config.tmux.session_name!r} not found. {hint}"
-        raise WorkflowError(msg)
-
+    session = _resolve_session(config)
     window = session.windows.get(window_name=agent_name, default=None)
     if window is None:
-        msg = f"No tmux window named {agent_name!r} in session {config.tmux.session_name!r}. {hint}"
+        msg = f"No tmux window named {agent_name!r} in session {config.tmux.session_name!r}. {_TMUX_HINT}"
         raise WorkflowError(msg)
 
     window.select()

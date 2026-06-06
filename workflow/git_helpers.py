@@ -68,6 +68,42 @@ def git_fetch(repo_path: Path, *, dry_run: bool = False) -> None:
     run_command(["git", "fetch", "origin"], cwd=repo_path, dry_run=dry_run)
 
 
+def git_status(repo_path: Path, *, dry_run: bool = False) -> None:
+    """Print ``git status`` (short, with branch header) for *repo_path*."""
+    run_command(["git", "status", "--short", "--branch"], cwd=repo_path, dry_run=dry_run)
+
+
+def git_status_porcelain(repo_path: Path, *, dry_run: bool = False) -> str:
+    """Return ``git status --porcelain`` output for *repo_path* (empty == clean tree).
+
+    In dry-run mode prints the command and returns an empty string (treated as clean).
+    """
+    if dry_run:
+        run_command(["git", "status", "--porcelain"], cwd=repo_path, dry_run=True)
+        return ""
+    result = run_command(["git", "status", "--porcelain"], cwd=repo_path, capture_output=True, text=True)
+    assert result is not None
+    stdout = result.stdout.decode() if isinstance(result.stdout, bytes) else result.stdout
+    return stdout.strip()
+
+
+def git_branch_exists(repo_path: Path, branch: str, *, dry_run: bool = False) -> bool:
+    """Return whether *branch* exists locally in *repo_path*.
+
+    In dry-run mode prints the command and returns ``False`` (treated as absent).
+    """
+    if dry_run:
+        run_command(["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=repo_path, dry_run=True)
+        return False
+    result = subprocess.run(  # noqa: S603
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def git_merge(repo_path: Path, branch: str, *, dry_run: bool = False) -> None:
     """Merge *branch* into the current branch in *repo_path*."""
     run_command(["git", "merge", "--", branch], cwd=repo_path, dry_run=dry_run)

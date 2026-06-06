@@ -15,6 +15,7 @@ from workflow import main
 from workflow.audit import read_audit_log, write_audit_log
 from workflow.commands.info import _parse_datetime
 from workflow.config import WORKFLOW_ROOT_MARKER
+from workflow.exceptions import WorkflowError
 from workflow.git_helpers import CommitResult
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.plan_resolver import next_intent_number
@@ -112,44 +113,44 @@ def test_init_succeeds_when_claude_md_unchanged(tmp_path: Path, monkeypatch: pyt
 def test_start_runs_tmux_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)
-    fake_run_command = MagicMock()
-    monkeypatch.setattr(wc, "run_command", fake_run_command)
+    fake_create = MagicMock()
+    monkeypatch.setattr(wc, "create_workflow_session", fake_create)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "start"])
 
-    assert result.exit_code == 0
-    calls = [c.args[0] for c in fake_run_command.call_args_list]
-    assert calls[0][:6] == ["tmux", "new-session", "-d", "-s", "workflow", "-n"]
-    assert calls[0][6] == "planner"
-    assert [call[5] for call in calls[1:3]] == ["builder", "reviewer"]
-    assert calls[3][5] == "builder-shell"
+    assert result.exit_code == 0, result.output
+    _config, windows, control_window = fake_create.call_args.args
+    assert control_window == "planner"
+    assert [name for name, _cmd in windows] == ["planner", "builder", "reviewer", "builder-shell"]
 
-    # Verify the actual command strings passed to tmux.
+    # Verify the actual command strings passed for each window.
     # No run_agent_in_docker.sh in tmp_path, so the bare script name is used.
     script = "run_agent_in_docker.sh"
     project = tmp_path.name
     project_dir = str(tmp_path.resolve())
-    assert calls[0][7] == f"{script} {project} planner --project-dir {project_dir} --model opus4.6"
-    assert calls[1][6] == f"{script} {project} builder --project-dir {project_dir} --model sonnet4.6"
-    assert calls[2][6] == f"{script} {project} reviewer --project-dir {project_dir} --model gpt5.4"
-    assert calls[3][6] == f"{script} {project} builder --project-dir {project_dir} --shell"
+    cmds = dict(windows)
+    assert cmds["planner"] == f"{script} {project} planner --project-dir {project_dir} --model opus4.6"
+    assert cmds["builder"] == f"{script} {project} builder --project-dir {project_dir} --model sonnet4.6"
+    assert cmds["reviewer"] == f"{script} {project} reviewer --project-dir {project_dir} --model gpt5.4"
+    assert cmds["builder-shell"] == f"{script} {project} builder --project-dir {project_dir} --shell"
 
 
 def test_start_reset_flag_threads_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """--reset is appended to each agent command but NOT to the builder-shell command."""
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)
-    fake_run_command = MagicMock()
-    monkeypatch.setattr(wc, "run_command", fake_run_command)
+    fake_create = MagicMock()
+    monkeypatch.setattr(wc, "create_workflow_session", fake_create)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "start", "--reset"])
 
     assert result.exit_code == 0
-    calls = [c.args[0] for c in fake_run_command.call_args_list]
-    assert calls[0][7].endswith("--reset")  # first agent (new-session)
-    assert calls[1][6].endswith("--reset")  # second agent (new-window)
-    assert calls[2][6].endswith("--reset")  # third agent (new-window)
-    assert "--reset" not in calls[3][6]  # builder-shell must not carry --reset
+    _config, windows, _control = fake_create.call_args.args
+    cmds = dict(windows)
+    assert cmds["planner"].endswith("--reset")
+    assert cmds["builder"].endswith("--reset")
+    assert cmds["reviewer"].endswith("--reset")
+    assert "--reset" not in cmds["builder-shell"]  # builder-shell must not carry --reset
 
 
 def test_start_uses_project_local_script_when_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -158,14 +159,14 @@ def test_start_uses_project_local_script_when_present(tmp_path: Path, monkeypatc
     local_script = tmp_path / "run_agent_in_docker.sh"
     local_script.touch()
     monkeypatch.chdir(tmp_path)
-    fake_run_command = MagicMock()
-    monkeypatch.setattr(wc, "run_command", fake_run_command)
+    fake_create = MagicMock()
+    monkeypatch.setattr(wc, "create_workflow_session", fake_create)
 
     CliRunner().invoke(main, ["--config", str(config_path), "start"])
 
-    calls = [c.args[0] for c in fake_run_command.call_args_list]
+    _config, windows, _control = fake_create.call_args.args
     # The command string for the first agent window should start with the absolute path.
-    assert calls[0][7].startswith(str(tmp_path.resolve()))
+    assert dict(windows)["planner"].startswith(str(tmp_path.resolve()))
 
 
 def test_new_uses_existing_plans_and_audit_log_for_numbering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -218,6 +219,16 @@ def test_todo_transitions_and_prints_implement_reminder(tmp_path: Path, monkeypa
     assert call_order == ["transfer", "commit", "push"]
 
 
+def _stub_implement_builder_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the builder-side git/tmux work so implement tests stay repo-free."""
+    monkeypatch.setattr(wc, "git_status_porcelain", MagicMock(return_value=""))
+    monkeypatch.setattr(wc, "git_branch_exists", MagicMock(return_value=False))
+    monkeypatch.setattr(wc, "git_fetch", MagicMock())
+    monkeypatch.setattr(wc, "git_checkout", MagicMock())
+    monkeypatch.setattr(wc, "git_pull", MagicMock())
+    monkeypatch.setattr(wc, "rotate_control_pane", MagicMock())
+
+
 def test_implement_prints_explicit_ask_reminder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "master", "todo", "005_foo.md")
@@ -225,12 +236,47 @@ def test_implement_prints_explicit_ask_reminder(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr(wc, "transition_plan", MagicMock(return_value=_plan("master", PlanState.IMPLEMENTING)))
     monkeypatch.setattr(wc, "git_commit", MagicMock())
     monkeypatch.setattr(wc, "git_push", MagicMock())
+    _stub_implement_builder_setup(monkeypatch)
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005"])
 
     assert result.exit_code == 0
     assert "workflow ask 005_foo" in result.output
+
+
+def test_implement_rejects_dirty_builder_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dirty builder working tree aborts implement before any state transition."""
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "master", "todo", "005_foo.md")
+    monkeypatch.chdir(tmp_path)
+    fake_transition = MagicMock()
+    monkeypatch.setattr(wc, "transition_plan", fake_transition)
+    monkeypatch.setattr(wc, "git_status_porcelain", MagicMock(return_value=" M file.py"))
+    monkeypatch.setattr(wc, "git_branch_exists", MagicMock(return_value=False))
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005"])
+
+    assert result.exit_code == 1
+    assert "dirty" in result.output
+    fake_transition.assert_not_called()
+
+
+def test_implement_rejects_existing_feature_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pre-existing feat/<plan> branch aborts implement before any state transition."""
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "master", "todo", "005_foo.md")
+    monkeypatch.chdir(tmp_path)
+    fake_transition = MagicMock()
+    monkeypatch.setattr(wc, "transition_plan", fake_transition)
+    monkeypatch.setattr(wc, "git_status_porcelain", MagicMock(return_value=""))
+    monkeypatch.setattr(wc, "git_branch_exists", MagicMock(return_value=True))
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005"])
+
+    assert result.exit_code == 1
+    assert "already exists" in result.output
+    fake_transition.assert_not_called()
 
 
 def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -248,6 +294,9 @@ def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkey
     monkeypatch.setattr(wc, "git_commit", MagicMock())
     monkeypatch.setattr(wc, "git_push", MagicMock())
     monkeypatch.setattr(wc, "git_fetch", MagicMock())
+    fake_rotate = MagicMock()
+    monkeypatch.setattr(wc, "rotate_control_pane", fake_rotate)
+    monkeypatch.setattr(wc.time, "sleep", MagicMock())
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005"])
 
@@ -256,6 +305,8 @@ def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkey
     assert first_call_args[:2] == ["docker", "exec"]
     assert first_call_args[2].endswith("-builder")
     assert "Next step: review" in result.output
+    # The reviewer window is rotated into view after the handoff.
+    assert fake_rotate.call_args.args[1] == "reviewer"
 
 
 def test_push_pushes_resolved_repo_without_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -703,6 +754,7 @@ def test_implement_from_planning_branch_transfers_and_transitions(
     )
     monkeypatch.setattr(wc, "git_commit", fake_commit)
     monkeypatch.setattr(wc, "git_push", fake_push)
+    _stub_implement_builder_setup(monkeypatch)
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005"])
@@ -799,3 +851,103 @@ def test_push_master_on_main_succeeds(tmp_path: Path, monkeypatch: pytest.Monkey
     result = CliRunner().invoke(main, ["--config", str(config_path), "push", "005"])
 
     assert result.exit_code == 0
+
+
+def test_go_agent_rotates_and_prints_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "assert_in_workflow_session", MagicMock())
+    fake_rotate = MagicMock()
+    fake_status = MagicMock()
+    monkeypatch.setattr(wc, "rotate_control_pane", fake_rotate)
+    monkeypatch.setattr(wc, "git_status", fake_status)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "go", "builder"])
+
+    assert result.exit_code == 0, result.output
+    assert fake_rotate.call_args.args[1] == "builder"
+    assert fake_status.call_args.args[0] == tmp_path / "builder"
+
+
+def test_go_manual_resolves_manual_shell_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`go manual` rotates to builder-shell and shows the manual_shell agent's repo."""
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "assert_in_workflow_session", MagicMock())
+    fake_rotate = MagicMock()
+    fake_status = MagicMock()
+    monkeypatch.setattr(wc, "rotate_control_pane", fake_rotate)
+    monkeypatch.setattr(wc, "git_status", fake_status)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "go", "manual"])
+
+    assert result.exit_code == 0, result.output
+    assert fake_rotate.call_args.args[1] == "builder-shell"
+    # Default config marks the builder as the manual-shell agent.
+    assert fake_status.call_args.args[0] == tmp_path / "builder"
+
+
+def test_go_rejects_invalid_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "assert_in_workflow_session", MagicMock())
+    monkeypatch.setattr(wc, "rotate_control_pane", MagicMock())
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "go", "nope"])
+
+    assert result.exit_code == 1
+    assert "invalid go target" in result.output
+
+
+def test_go_dry_run_skips_session_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    fake_guard = MagicMock()
+    monkeypatch.setattr(wc, "assert_in_workflow_session", fake_guard)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "go", "builder"])
+
+    assert result.exit_code == 0, result.output
+    fake_guard.assert_not_called()
+    assert "join-pane" in result.output
+
+
+def test_go_writes_no_audit_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "assert_in_workflow_session", MagicMock())
+    monkeypatch.setattr(wc, "rotate_control_pane", MagicMock())
+    monkeypatch.setattr(wc, "git_status", MagicMock())
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "go", "reviewer"])
+
+    assert result.exit_code == 0, result.output
+    assert all(entry.command != "go" for entry in read_audit_log(tmp_path))
+
+
+def test_rotate_best_effort_downgrades_error_to_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rotation failure in implement/check is warned about, not fatal."""
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "builder", "implementing", "005_foo.md")
+    monkeypatch.chdir(tmp_path)
+    fake_run_command = MagicMock()
+    monkeypatch.setattr(wc, "run_command", fake_run_command)
+    monkeypatch.setattr(
+        wc,
+        "run_validate",
+        MagicMock(return_value=[CheckResult(check_name="x", status="pass", message="ok")]),
+    )
+    monkeypatch.setattr(wc, "transition_plan", lambda _p, ts, *_a, **_kw: _plan("builder", ts))
+    monkeypatch.setattr(wc, "git_commit", MagicMock())
+    monkeypatch.setattr(wc, "git_push", MagicMock())
+    monkeypatch.setattr(wc, "git_fetch", MagicMock())
+    monkeypatch.setattr(wc.time, "sleep", MagicMock())
+    monkeypatch.setattr(wc, "rotate_control_pane", MagicMock(side_effect=WorkflowError("boom")))
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005"])
+
+    assert result.exit_code == 0, result.output
+    assert "tmux rotation skipped" in result.output

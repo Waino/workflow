@@ -3,6 +3,7 @@ agents:
     model: opus4.6
   - name: builder
     model: sonnet4.6
+    manual_shell: true
   - name: reviewer
     model: gpt5.4
 

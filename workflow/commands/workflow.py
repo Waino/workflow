@@ -27,6 +27,8 @@ from workflow.exceptions import (
 )
 from workflow.git_helpers import (
     git_add,
+    git_branch_exists,
+    git_checkout,
     git_commit,
     git_commit_if_changed,
     git_current_branch,
@@ -34,6 +36,8 @@ from workflow.git_helpers import (
     git_merge,
     git_pull,
     git_push,
+    git_status,
+    git_status_porcelain,
     transfer_branch_to_main,
 )
 from workflow.models import AuditLogEntry, Plan, PlanState
@@ -43,6 +47,11 @@ from workflow.plan_resolver import next_intent_number, resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console, error_console, print_workflow_error, run_command
 from workflow.state import transition_plan
+from workflow.tmux_dispatch import (
+    assert_in_workflow_session,
+    create_workflow_session,
+    rotate_control_pane,
+)
 from workflow.validate import CHECK_NAMES, CheckResult, infer_target_repo
 from workflow.validate import validate as run_validate
 
@@ -124,6 +133,26 @@ def _run_pre_commit_in_sandbox(config: WorkflowConfig, repo_name: str, *, dry_ru
 
 def _transition_commit_message(plan: Plan, target_state: PlanState) -> str:
     return f"Transition {plan.name} to {target_state.value}"
+
+
+def _rotate_best_effort(config: WorkflowConfig, target_window: str, *, dry_run: bool) -> None:
+    """Rotate the control pane, downgrading tmux failures to a warning.
+
+    Used by ``implement``/``check``, where the cross-repo git handoff has already
+    committed/pushed, so a cosmetic tmux failure must not fail the command.
+    """
+    try:
+        rotate_control_pane(config, target_window, dry_run=dry_run)
+    except WorkflowError as exc:
+        error_console.print(f"[yellow]tmux rotation skipped:[/yellow] {exc}")
+
+
+def _manual_shell_repo(config: WorkflowConfig) -> RepoName | None:
+    """Return the repo backing the manual shell window, or ``None`` if no agent sets it."""
+    for agent in config.agents:
+        if agent.manual_shell and agent.name in RepoName.__members__:
+            return RepoName(agent.name)
+    return None
 
 
 @register_script("init")
@@ -224,44 +253,12 @@ def start(ctx: click.Context, *, reset: bool) -> None:
         project_name = config.project_name or project_dir.name
         script = _find_docker_script(project_dir)
         first_agent = config.agents[0]
-        run_command(
-            [
-                "tmux",
-                "new-session",
-                "-d",
-                "-s",
-                config.tmux.session_name,
-                "-n",
-                first_agent.name,
-                _agent_docker_command(script, project_name, project_dir, first_agent, reset=reset),
-            ],
-            dry_run=dry_run,
-        )
-        for agent in config.agents[1:]:
-            run_command(
-                [
-                    "tmux",
-                    "new-window",
-                    "-t",
-                    config.tmux.session_name,
-                    "-n",
-                    agent.name,
-                    _agent_docker_command(script, project_name, project_dir, agent, reset=reset),
-                ],
-                dry_run=dry_run,
-            )
-        run_command(
-            [
-                "tmux",
-                "new-window",
-                "-t",
-                config.tmux.session_name,
-                "-n",
-                "builder-shell",
-                _builder_shell_command(script, project_name, project_dir),
-            ],
-            dry_run=dry_run,
-        )
+        windows = [
+            (agent.name, _agent_docker_command(script, project_name, project_dir, agent, reset=reset))
+            for agent in config.agents
+        ]
+        windows.append(("builder-shell", _builder_shell_command(script, project_name, project_dir)))
+        create_workflow_session(config, windows, first_agent.name, dry_run=dry_run)
         _write_script_audit_log(config, "start", dry_run=dry_run)
     except (subprocess.CalledProcessError, WorkflowError) as exc:
         print_workflow_error(exc)
@@ -367,6 +364,15 @@ def implement(ctx: click.Context, plan_path: str) -> None:
         project_dir = _require_project_dir(config)
         plan = resolve_plan(plan_path, project_dir, config=config, command_name="implement")
         _enforce_expected_state(plan, "implement")
+        # Preconditions (checked before any state change, so a failure leaves no state change).
+        builder_repo = project_dir / RepoName.builder
+        feature_branch = f"feat/{plan.name}"
+        if git_status_porcelain(builder_repo, dry_run=dry_run):
+            msg = "builder working tree is dirty; commit or discard changes before implement"
+            raise WorkflowError(msg)
+        if git_branch_exists(builder_repo, feature_branch, dry_run=dry_run):
+            msg = f"branch {feature_branch} already exists in builder"
+            raise WorkflowError(msg)
         if plan.state == PlanState.PLANNING:
             transfer_branch_to_main(
                 project_dir / RepoName.planner,
@@ -388,11 +394,16 @@ def implement(ctx: click.Context, plan_path: str) -> None:
             no_verify=True,
         )
         git_push(project_dir / RepoName.master, dry_run=dry_run)
+        # Leave the builder ready on its feature branch, freshly synced from main (D5).
+        git_fetch(builder_repo, dry_run=dry_run)
+        git_checkout(builder_repo, "main", dry_run=dry_run)
+        git_pull(builder_repo, dry_run=dry_run)
+        git_checkout(builder_repo, feature_branch, create=True, dry_run=dry_run)
         _write_script_audit_log(config, "implement", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.TODO, "implement", new_plan.name)
         if not dry_run:
-            time.sleep(1.0)
-        # TODO: switch to the builder tmux window.
+            time.sleep(config.tmux.prompt_send_delay)
+        _rotate_best_effort(config, AgentName.builder, dry_run=dry_run)
     except (
         subprocess.CalledProcessError,
         PlanNotFoundError,
@@ -522,6 +533,9 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName) -> None:
         git_fetch(project_dir / RepoName.reviewer, dry_run=dry_run)
         _write_script_audit_log(config, "check", dry_run=dry_run, input_plan=new_plan.name)
         _print_command_reminder(config, PlanState.IMPLEMENTING, "check", new_plan.name)
+        if not dry_run:
+            time.sleep(config.tmux.prompt_send_delay)
+        _rotate_best_effort(config, AgentName.reviewer, dry_run=dry_run)
     except (
         subprocess.CalledProcessError,
         PlanNotFoundError,
@@ -662,6 +676,38 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
         PlanCollisionError,
         WorkflowError,
     ) as exc:
+        print_workflow_error(exc)
+        ctx.exit(1)
+        return
+    ctx.exit(0)
+
+
+@register_script("go")
+@click.argument("target")
+@click.pass_context
+def go(ctx: click.Context, target: str) -> None:
+    """Rotate the control pane to a window and print the target repo's git status."""
+    config: WorkflowConfig = ctx.obj["config"]
+    dry_run: bool = ctx.obj["dry_run"]
+
+    try:
+        project_dir = _require_project_dir(config)
+        if not dry_run:
+            assert_in_workflow_session(config)
+        valid = {agent.name for agent in config.agents} | {"manual"}
+        if target not in valid:
+            msg = f"invalid go target {target!r}; choose from {sorted(valid)}"
+            raise WorkflowError(msg)
+        if target == "manual":
+            window = "builder-shell"
+            repo = _manual_shell_repo(config)
+        else:
+            window = target
+            repo = RepoName(target)
+        rotate_control_pane(config, window, dry_run=dry_run)
+        if repo is not None:
+            git_status(project_dir / repo, dry_run=dry_run)
+    except (subprocess.CalledProcessError, WorkflowError) as exc:
         print_workflow_error(exc)
         ctx.exit(1)
         return

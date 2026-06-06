@@ -146,12 +146,12 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
     result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005_foo"])
     assert result.exit_code == 0, result.output
 
-    # Step 6: simulate builder edit - fetch from bare, branch from main,
-    # do real work, and commit. Leave the plan in implementing/ — the `check`
-    # script is responsible for the implementing -> checking transition.
+    # Step 6: simulate builder edit - `implement` already left the builder on
+    # feat/005_foo (branched from a freshly-pulled main), so just do real work
+    # and commit. Leave the plan in implementing/ — the `check` script is
+    # responsible for the implementing -> checking transition.
     builder = tmp_path / "builder"
-    _git(["fetch", "origin"], cwd=builder)
-    _git(["checkout", "-b", "feat/005_foo", "origin/main"], cwd=builder)
+    assert _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=builder).stdout.strip() == b"feat/005_foo"
     (builder / "README.md").write_text("builder work\n", encoding="utf-8")
     _git(["add", "."], cwd=builder)
     _git(["commit", "-m", "builder work on 005"], cwd=builder)

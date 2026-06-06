@@ -6,8 +6,9 @@ import sys
 from pathlib import Path
 from shutil import copyfile
 from typing import TYPE_CHECKING
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 from click.testing import CliRunner
 
 import workflow.commands.workflow as workflow_commands
@@ -17,8 +18,7 @@ from workflow.exceptions import WorkflowError
 from workflow.validate import CheckResult
 
 if TYPE_CHECKING:
-    import pytest
-
+    from workflow.config import WorkflowConfig
     from workflow.models import AuditLogEntry
 
 
@@ -60,6 +60,7 @@ def test_help_lists_dynamic_prompt_and_script_commands(tmp_path: Path, monkeypat
     assert "start" in result.output
     assert "new" in result.output
     assert "reject" in result.output
+    assert "go" in result.output
 
 
 def test_script_commands_are_invokable_once_registered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -294,3 +295,101 @@ def test_validate_prints_results_and_next_step(tmp_path: Path, monkeypatch: pyte
     assert "# noqa" in result.output
     assert "Next step: workflow todo 005_plan_state_and_git" in result.output
     assert "workflow reject" in result.output
+
+
+def _load_config(tmp_path: Path) -> WorkflowConfig:
+    from workflow.config import load_config  # noqa: PLC0415
+
+    _make_project(tmp_path)
+    return load_config(project_dir=tmp_path)
+
+
+def _rotation_server(*, recorded: str | None = "%3", source_window: str = "planner") -> MagicMock:
+    server = MagicMock()
+    server.is_alive.return_value = True
+    session = MagicMock()
+    session.server = server
+    server.sessions.get.return_value = session
+    session.show_option.return_value = recorded
+    control_pane = MagicMock()
+    control_pane.window.name = source_window
+    server.panes.get.return_value = control_pane
+    session.cmd.return_value = MagicMock(stderr=[])
+    return server
+
+
+class TestRotateControlPane:
+    def test_joins_and_selects_target(self, tmp_path: Path) -> None:
+        config = _load_config(tmp_path)
+        server = _rotation_server()
+        session = server.sessions.get.return_value
+        target_window = MagicMock()
+        session.windows.get.return_value = target_window
+        with patch("workflow.tmux_dispatch.libtmux.Server", return_value=server):
+            tmux_dispatch.rotate_control_pane(config, "builder")
+        session.cmd.assert_called_once_with("join-pane", "-h", "-b", "-s", "%3", "-t", ":builder")
+        target_window.select.assert_called_once()
+
+    def test_noop_when_already_in_target(self, tmp_path: Path) -> None:
+        config = _load_config(tmp_path)
+        server = _rotation_server(source_window="builder")
+        session = server.sessions.get.return_value
+        with patch("workflow.tmux_dispatch.libtmux.Server", return_value=server):
+            tmux_dispatch.rotate_control_pane(config, "builder")
+        session.cmd.assert_not_called()
+
+    def test_raises_when_no_control_pane_recorded(self, tmp_path: Path) -> None:
+        config = _load_config(tmp_path)
+        server = _rotation_server(recorded=None)
+        with (
+            patch("workflow.tmux_dispatch.libtmux.Server", return_value=server),
+            pytest.raises(
+                WorkflowError,
+                match="no control pane recorded",
+            ),
+        ):
+            tmux_dispatch.rotate_control_pane(config, "builder")
+
+    def test_raises_when_target_window_missing(self, tmp_path: Path) -> None:
+        config = _load_config(tmp_path)
+        server = _rotation_server()
+        session = server.sessions.get.return_value
+        session.windows.get.return_value = None
+        with (
+            patch("workflow.tmux_dispatch.libtmux.Server", return_value=server),
+            pytest.raises(
+                WorkflowError,
+                match="no tmux window named",
+            ),
+        ):
+            tmux_dispatch.rotate_control_pane(config, "builder")
+
+    def test_dry_run_previews_join_pane_only(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        config = _load_config(tmp_path)
+        with patch("workflow.tmux_dispatch.libtmux.Server") as fake_server:
+            tmux_dispatch.rotate_control_pane(config, "builder", dry_run=True)
+        fake_server.assert_not_called()
+        assert "join-pane" in capsys.readouterr().out
+
+
+def test_create_workflow_session_dry_run_previews_commands(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = _load_config(tmp_path)
+    windows = [("planner", "cmd-a"), ("builder", "cmd-b")]
+    with patch("workflow.tmux_dispatch.libtmux.Server") as fake_server:
+        tmux_dispatch.create_workflow_session(config, windows, "planner", dry_run=True)
+    fake_server.assert_not_called()
+    out = capsys.readouterr().out
+    assert "new-session" in out
+    assert "new-window" in out
+    assert "split-window" in out
+    assert "@workflow_control_pane" in out
+
+
+def test_assert_in_workflow_session_requires_tmux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _load_config(tmp_path)
+    monkeypatch.delenv("TMUX", raising=False)
+    with pytest.raises(WorkflowError, match="inside the workflow tmux session"):
+        tmux_dispatch.assert_in_workflow_session(config)

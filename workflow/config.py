@@ -111,6 +111,8 @@ class AgentConfig(BaseModel):
 
     name: str
     model: str
+    manual_shell: bool = False
+    """Whether this agent's repo backs the ``builder-shell`` window targeted by ``go manual``."""
 
 
 class TmuxConfig(BaseModel):
@@ -169,6 +171,15 @@ class WorkflowConfig(BaseModel):
         if len(names) != len(set(names)):
             duplicates = {n for n in names if names.count(n) > 1}
             msg = f"Duplicate agent names: {sorted(duplicates)}"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_manual_shell_at_most_once(self) -> WorkflowConfig:
+        """Check that at most one agent is marked as the manual-shell agent."""
+        manual_agents = [a.name for a in self.agents if a.manual_shell]
+        if len(manual_agents) > 1:
+            msg = f"At most one agent may set manual_shell; got: {sorted(manual_agents)}"
             raise ValueError(msg)
         return self
 
