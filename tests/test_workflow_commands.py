@@ -115,6 +115,7 @@ def test_start_runs_tmux_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.chdir(tmp_path)
     fake_create = MagicMock()
     monkeypatch.setattr(wc, "create_workflow_session", fake_create)
+    monkeypatch.setattr(wc, "attach_workflow_session", MagicMock())
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "start"])
 
@@ -141,6 +142,7 @@ def test_start_reset_flag_threads_through(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.chdir(tmp_path)
     fake_create = MagicMock()
     monkeypatch.setattr(wc, "create_workflow_session", fake_create)
+    monkeypatch.setattr(wc, "attach_workflow_session", MagicMock())
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "start", "--reset"])
 
@@ -161,6 +163,7 @@ def test_start_uses_project_local_script_when_present(tmp_path: Path, monkeypatc
     monkeypatch.chdir(tmp_path)
     fake_create = MagicMock()
     monkeypatch.setattr(wc, "create_workflow_session", fake_create)
+    monkeypatch.setattr(wc, "attach_workflow_session", MagicMock())
 
     CliRunner().invoke(main, ["--config", str(config_path), "start"])
 

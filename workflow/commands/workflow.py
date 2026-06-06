@@ -49,6 +49,7 @@ from workflow.shell import console, error_console, print_workflow_error, run_com
 from workflow.state import transition_plan
 from workflow.tmux_dispatch import (
     assert_in_workflow_session,
+    attach_workflow_session,
     create_workflow_session,
     rotate_control_pane,
 )
@@ -260,6 +261,7 @@ def start(ctx: click.Context, *, reset: bool) -> None:
         windows.append(("builder-shell", _builder_shell_command(script, project_name, project_dir)))
         create_workflow_session(config, windows, first_agent.name, dry_run=dry_run)
         _write_script_audit_log(config, "start", dry_run=dry_run)
+        attach_workflow_session(config, dry_run=dry_run)
     except (subprocess.CalledProcessError, WorkflowError) as exc:
         print_workflow_error(exc)
         ctx.exit(1)

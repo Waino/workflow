@@ -434,6 +434,29 @@ def create_workflow_session(
         raise WorkflowError(msg) from exc
 
 
+def attach_workflow_session(config: WorkflowConfig, *, dry_run: bool = False) -> None:
+    """Attach to (or switch to) the workflow tmux session.
+
+    Uses ``switch-client`` when already inside a tmux session (``$TMUX`` is set),
+    and ``attach-session`` otherwise. In dry-run mode prints the intended command.
+
+    Raises :class:`WorkflowError` if the attach/switch call fails.
+    """
+    session_name = config.tmux.session_name
+    if os.environ.get("TMUX"):
+        cmd = ["tmux", "switch-client", "-t", session_name]
+    else:
+        cmd = ["tmux", "attach-session", "-t", session_name]
+    if dry_run:
+        _preview_tmux(cmd)
+        return
+    try:
+        subprocess.run(cmd, check=True)  # noqa: S603
+    except subprocess.CalledProcessError as exc:
+        msg = f"failed to attach to tmux session {session_name!r}: {exc}"
+        raise WorkflowError(msg) from exc
+
+
 def rotate_control_pane(config: WorkflowConfig, target_window: str, *, dry_run: bool = False) -> None:
     """Move the recorded control pane next to *target_window*'s pane and select that window.
 
