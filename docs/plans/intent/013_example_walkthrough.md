@@ -33,6 +33,8 @@
     - Commit, merge `plan/001_idea` into main.
     - Push main, pull to planner and builder.
         - It is ok for `implement` to check out builder to main and pull: no work should be ongoing.
+        - In builder, `implement` then creates branch `feat/002.1_some_foo` from main and leaves the
+          builder checked out on it, ready for `build`.
     - master, planner, and builder now have:
         - 002, 002.2 and 003 in state planning on main
         - 002.1 in state implementing on main
@@ -46,7 +48,7 @@
         - Another solution is to use git history instead of the file system.
 - `workflow build 002.1`
     - 002.1 is resolved to `builder/docs/plans/implementing/002.1_some_foo.md`.
-    - Builder branches `feat/002.1_some_foo` from main.
+    - Builder is already on `feat/002.1_some_foo` (created by `implement`); it does not branch itself.
     - Builder starts working. This step takes a long time, so we'll not wait for it.
 - `workflow go planner`
     - The human rotates the tmux panes to make planner visible.

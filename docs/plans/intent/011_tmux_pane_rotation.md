@@ -12,6 +12,12 @@ import libtmux
 server = libtmux.Server()
 SESSION_NAME = "panerot-demo"
 
+# Modification vs original POC: record the control pane's id in a session user option at setup,
+# then locate the control pane by that id in `go` (instead of assuming it is the active pane
+# at index 0 of the active window). Pane ids are stable across join-pane, so the recorded id
+# stays valid across rotations.
+CONTROL_PANE_OPTION = "@workflow_control_pane"
+
 
 @click.group()
 def cli():
@@ -41,6 +47,10 @@ def setup():
     )
     pane.send_keys('echo "This is the control"', enter=True)
 
+    # Modification: remember which pane is the control pane.
+    session.set_option(CONTROL_PANE_OPTION, pane.pane_id)
+    print(f"Recorded control pane {pane.pane_id} in option {CONTROL_PANE_OPTION}")
+
     session.attach()
     # cleanup demo
     try:
@@ -56,27 +66,26 @@ def go(target):
         print(f"No session {SESSION_NAME}")
         return 1
     session = server.sessions.get(session_name__exact=SESSION_NAME)
-    source_window = session.active_window
-    pane = source_window.active_pane
 
-    if not len(source_window.panes) == 2:
-        print(f"Expecting source window to have 2 panes, found {len(source_window.panes)}")
+    # Modification: locate the control pane by its recorded id instead of by active-pane/index.
+    control_pane_id = session.show_option(CONTROL_PANE_OPTION)
+    if not control_pane_id:
+        print(f"No control pane recorded in {CONTROL_PANE_OPTION}; run setup first")
         return 1
-    if not source_window.panes[0] == pane:
-        print("Expecting the first pane to be active")
+    control_pane = server.panes.get(pane_id=control_pane_id, default=None)
+    if control_pane is None:
+        print(f"Recorded control pane {control_pane_id} no longer exists")
         return 1
+    source_window = control_pane.window
 
     target_window = session.windows.get(window_name__exact=target)
     if source_window == target_window:
-        print("Source and target are the same")
-        return 1
-    if not len(target_window.panes) == 1:
-        print(f"Expecting target window to have 1 pane, found {len(target_window.panes)}")
-        return 1
+        print("Control pane already in target window")
+        return 0
 
-    print(f"Everything ok, moving from {source_window.name} to {target_window.name}")
-    # join horizontally (-h), before (-b)
-    cmd = ["join-pane", "-h", "-b", "-s", f":{source_window.name}.0", "-t", f":{target_window.name}"]
+    print(f"Everything ok, moving control pane {control_pane_id} to {target_window.name}")
+    # join horizontally (-h), before (-b); source is the control pane id (stable across moves)
+    cmd = ["join-pane", "-h", "-b", "-s", control_pane_id, "-t", f":{target_window.name}"]
     print(cmd)
     res = session.cmd(*cmd)
     print(res.stdout)
