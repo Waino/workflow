@@ -396,15 +396,19 @@ def create_workflow_session(
         return
     try:
         server = libtmux.Server()
-        first_name, first_cmd = windows[0]
+        # Create the session with a plain shell placeholder so the server stays
+        # alive even if the real window commands exit before we finish setup.
+        # Once all real windows are added we kill the placeholder.
         session = server.new_session(
             session_name,
-            window_name=first_name,
-            window_command=first_cmd,
+            window_name="_setup",
             attach=False,
         )
-        for name, cmd in windows[1:]:
+        for name, cmd in windows:
             session.new_window(window_name=name, window_shell=cmd, attach=False)
+        setup_window = session.windows.get(window_name="_setup", default=None)
+        if setup_window is not None:
+            setup_window.kill()
         host = session.windows.get(window_name=control_window, default=None)
         if host is None:
             msg = f"control window {control_window!r} not found after session creation."
