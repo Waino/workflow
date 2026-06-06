@@ -378,8 +378,9 @@ def create_workflow_session(
 ) -> None:
     """Create the workflow tmux session and dock the control pane in *control_window*.
 
-    *windows* is an ordered list of ``(window_name, command)`` pairs: the first is created
-    via ``new-session``, the rest via ``new-window``. A plain shell pane (the control pane)
+    *windows* is an ordered list of ``(window_name, command)`` pairs. Each window is created
+    as a plain shell and its *command* is then sent with ``send-keys`` so the window survives
+    the command exiting (e.g. a docker container shell). A plain shell pane (the control pane)
     is then split to the left of *control_window*'s pane and its stable id recorded in the
     :data:`CONTROL_PANE_OPTION` session option for later rotation.
 
@@ -387,10 +388,11 @@ def create_workflow_session(
     """
     session_name = config.tmux.session_name
     if dry_run:
-        first_name, first_cmd = windows[0]
-        _preview_tmux(["tmux", "new-session", "-d", "-s", session_name, "-n", first_name, first_cmd])
-        for name, cmd in windows[1:]:
-            _preview_tmux(["tmux", "new-window", "-t", session_name, "-n", name, cmd])
+        _preview_tmux(["tmux", "new-session", "-d", "-s", session_name, "-n", "_setup"])
+        for name, cmd in windows:
+            _preview_tmux(["tmux", "new-window", "-t", session_name, "-n", name])
+            _preview_tmux(["tmux", "send-keys", "-t", f"{session_name}:{name}", cmd, "Enter"])
+        _preview_tmux(["tmux", "kill-window", "-t", f"{session_name}:_setup"])
         _preview_tmux(["tmux", "split-window", "-h", "-b", "-t", f"{session_name}:{control_window}"])
         _preview_tmux(["tmux", "set-option", "-t", session_name, CONTROL_PANE_OPTION, "<control-pane-id>"])
         return
@@ -404,8 +406,16 @@ def create_workflow_session(
             window_name="_setup",
             attach=False,
         )
+        # Each window is a plain shell into which we type the command. This keeps
+        # the window alive even if the command exits immediately, avoiding a race
+        # where libtmux cannot fetch a window whose process has already gone.
         for name, cmd in windows:
-            session.new_window(window_name=name, window_shell=cmd, attach=False)
+            window = session.new_window(window_name=name, attach=False)
+            pane = window.active_pane
+            if pane is None:
+                msg = f"window {name!r} has no active pane."
+                raise WorkflowError(msg)
+            pane.send_keys(cmd, enter=True, suppress_history=False, literal=True)
         setup_window = session.windows.get(window_name="_setup", default=None)
         if setup_window is not None:
             setup_window.kill()
