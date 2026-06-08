@@ -391,6 +391,7 @@ def create_workflow_session(
         _preview_tmux(["tmux", "new-session", "-d", "-s", session_name, "-n", "_setup"])
         for name, cmd in windows:
             _preview_tmux(["tmux", "new-window", "-t", session_name, "-n", name])
+            _preview_tmux(["tmux", "set-option", "-t", session_name, f"@workflow_{name}_pane", f"<{name}-pane-id>"])
             _preview_tmux(["tmux", "send-keys", "-t", f"{session_name}:{name}", cmd, "Enter"])
         _preview_tmux(["tmux", "kill-window", "-t", f"{session_name}:_setup"])
         _preview_tmux(["tmux", "split-window", "-h", "-b", "-t", f"{session_name}:{control_window}"])
@@ -415,6 +416,10 @@ def create_workflow_session(
             if pane is None:
                 msg = f"window {name!r} has no active pane."
                 raise WorkflowError(msg)
+            if pane.pane_id is None:
+                msg = "the agent pane has no id."
+                raise WorkflowError(msg)
+            session.set_option(f"@workflow_{name}_pane", pane.pane_id)
             pane.send_keys(cmd, enter=True, suppress_history=False, literal=True)
         setup_window = session.windows.get(window_name="_setup", default=None)
         if setup_window is not None:
@@ -531,16 +536,20 @@ def send_prompt_to_agent(
         return
 
     session = _resolve_session(config)
-    window = session.windows.get(window_name=agent_name, default=None)
-    if window is None:
-        msg = f"No tmux window named {agent_name!r} in session {config.tmux.session_name!r}. {_TMUX_HINT}"
+
+    pane_option = f"@workflow_{agent_name}_pane"
+    agent_pane_id = session.show_option(pane_option)
+    if not agent_pane_id:
+        msg = f"no agent pane recorded in {pane_option}. {_TMUX_HINT}"
+        raise WorkflowError(msg)
+    agent_pane_id = str(agent_pane_id)
+    agent_pane = session.server.panes.get(pane_id=agent_pane_id, default=None)
+    if agent_pane is None:
+        msg = f"recorded agent pane {agent_pane_id} no longer exists. {_TMUX_HINT}"
+        raise WorkflowError(msg)
+    if agent_pane.window.name != agent_name:
+        msg = f"agent pane {agent_pane_id} is in unexpected window {agent_pane.window.name}. {_TMUX_HINT}"
         raise WorkflowError(msg)
 
-    window.select()
     time.sleep(config.tmux.prompt_send_delay)
-
-    pane = window.active_pane
-    if pane is None:
-        msg = f"No active pane in window {agent_name!r}."
-        raise WorkflowError(msg)
-    pane.send_keys(prompt, enter=True, suppress_history=False, literal=True)
+    agent_pane.send_keys(prompt, enter=True, suppress_history=False, literal=True)
