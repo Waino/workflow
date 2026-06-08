@@ -115,7 +115,7 @@ class WorkflowGroup(click.Group):
 
 
 @click.group(cls=WorkflowGroup)
-@click.option("--dry-run", is_flag=True, help="Print commands without executing them.")
+@click.option("-n", "--dry-run", is_flag=True, help="Print commands without executing them.")
 @click.option(
     "--config",
     "config_path",
