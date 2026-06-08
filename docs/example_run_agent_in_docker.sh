@@ -82,7 +82,7 @@ CONTAINER="auggie-${PROJECT}-${AGENT}"
 # ---------------------------------------------------------------------------
 # Reset: remove the existing container if requested
 # ---------------------------------------------------------------------------
-if [[ "$RESET" == true ]]; then
+if [[ "$RESET" == true && "$SHELL_MODE" != true ]]; then
     if docker inspect "$CONTAINER" &>/dev/null; then
         echo "Removing container ${CONTAINER}..."
         docker rm -f "$CONTAINER"
@@ -92,6 +92,11 @@ fi
 # ---------------------------------------------------------------------------
 # Bring the container up (run / start / no-op depending on state)
 # ---------------------------------------------------------------------------
+if [[ "$SHELL_MODE" == true ]]; then
+    # Wait for container to come up
+    sleep 8
+fi
+
 if docker inspect "$CONTAINER" &>/dev/null; then
     CONTAINER_STATUS="$(docker inspect --format '{{.State.Status}}' "$CONTAINER")"
 else
@@ -107,18 +112,24 @@ case "$CONTAINER_STATUS" in
         docker start "$CONTAINER"
         ;;
     absent)
-        echo "Creating container ${CONTAINER}..."
-        # NOTE: Add any additional --env flags here for secrets that should not
-        # live in env.list (e.g. per-agent API keys):
-        #   --env ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
-        docker run \
-            --name "$CONTAINER" \
-            --env-file "$ENV_LIST" \
-            --env PROJECT="$PROJECT" \
-            --env AGENT="$AGENT" \
-            -v "${PROJECT_DIR}/projects/${PROJECT}/${AGENT}:/home/auggie/projects/${PROJECT}/${AGENT}" \
-            --detach \
-            gronsti-auggie
+        if [[ "$SHELL_MODE" == true ]]; then
+            echo "Error: Shell mode expects container $CONTAINER to exist"
+            exit 1
+        else
+            echo "Creating container ${CONTAINER}..."
+            # NOTE: Add any additional --env flags here for secrets that should not
+            # live in env.list (e.g. per-agent API keys):
+            #   --env ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
+            docker run \
+                --name "$CONTAINER" \
+                --env-file "$ENV_LIST" \
+                --env PROJECT="$PROJECT" \
+                --env AGENT="$AGENT" \
+                -v "${PROJECT_DIR}/${AGENT}:/home/auggie/projects/${PROJECT}/${AGENT}" \
+                --workdir "/home/auggie/projects/${PROJECT}/${AGENT}" \
+                --detach \
+                gronsti-auggie
+        fi
         ;;
     *)
         echo "Error: container ${CONTAINER} is in unexpected state: ${CONTAINER_STATUS}" >&2
