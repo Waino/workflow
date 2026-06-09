@@ -38,6 +38,9 @@ def _git(
 def _make_integration_config(tmp_path: Path) -> Path:
     """Write a minimal workflow config derived from the default, return its path."""
     (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+    with (tmp_path / "run_agent_in_docker.sh").open("w") as dummy_script:
+        dummy_script.write("#!/bin/bash")
+    (tmp_path / "run_agent_in_docker.sh").chmod(0o755)
     src = Path(__file__).parent.parent / "docs" / "default_config.yaml"
     dest = tmp_path / "config.yaml"
     dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
@@ -193,7 +196,7 @@ def test_check_claude_md_detects_branch_modification(tmp_path: Path, monkeypatch
     After init, _check_claude_md must fail when CLAUDE.md is modified on a feature
     branch and pass once reverted.
     """
-    from workflow.validate import _check_claude_md  # noqa: PLC0415
+    from workflow.validate import _check_claude_md
 
     master = tmp_path / "master"
     master.mkdir()

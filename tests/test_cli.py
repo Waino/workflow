@@ -298,7 +298,7 @@ def test_validate_prints_results_and_next_step(tmp_path: Path, monkeypatch: pyte
 
 
 def _load_config(tmp_path: Path) -> WorkflowConfig:
-    from workflow.config import load_config  # noqa: PLC0415
+    from workflow.config import load_config
 
     _make_project(tmp_path)
     return load_config(project_dir=tmp_path)

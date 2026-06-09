@@ -79,6 +79,33 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
         ["git", "config", "push.autoSetupRemote", "true"],  # master
         ["git", "config", "push.default", "current"],  # master
         ["git", "push", "-u", "origin", "HEAD"],
+        [
+            "run_agent_in_docker.sh",
+            "test_init_runs_clone_commands_0",
+            "planner",
+            "--project-dir",
+            str(project_dir),
+            "--venv",
+            "--reset",
+        ],
+        [
+            "run_agent_in_docker.sh",
+            "test_init_runs_clone_commands_0",
+            "builder",
+            "--project-dir",
+            str(project_dir),
+            "--venv",
+            "--reset",
+        ],
+        [
+            "run_agent_in_docker.sh",
+            "test_init_runs_clone_commands_0",
+            "reviewer",
+            "--project-dir",
+            str(project_dir),
+            "--venv",
+            "--reset",
+        ],
     ]
     assert (tmp_path / WORKFLOW_ROOT_MARKER).exists()
 

@@ -202,6 +202,16 @@ def init(ctx: click.Context) -> None:
         run_command(["git", "push", "-u", "origin", "HEAD"], cwd=master_repo, dry_run=dry_run)
         if not dry_run:
             (project_dir / WORKFLOW_ROOT_MARKER).touch()
+
+        # Create venvs
+        script = _find_docker_script(project_dir)
+        project_name = config.project_name or project_dir.name
+        for agent in config.agents:
+            run_command(
+                _create_venv_command(script, project_name, project_dir, agent),
+                cwd=project_dir,
+                dry_run=dry_run,
+            )
         _write_script_audit_log(config.model_copy(update={"project_dir": project_dir}), "init", dry_run=dry_run)
     except (subprocess.CalledProcessError, WorkflowError) as exc:
         print_workflow_error(exc)
@@ -236,6 +246,11 @@ def _agent_docker_command(
 def _builder_shell_command(script: str, project_name: str, project_dir: Path) -> str:
     """Build the tmux window command string for the builder-shell window."""
     return shlex.join([script, project_name, "builder", "--project-dir", str(project_dir), "--shell"])
+
+
+def _create_venv_command(script: str, project_name: str, project_dir: Path, agent: AgentConfig) -> list[str]:
+    """Build the command string for creating the agent-specific virtual env."""
+    return [script, project_name, agent.name, "--project-dir", str(project_dir), "--venv", "--reset"]
 
 
 @register_script("start")

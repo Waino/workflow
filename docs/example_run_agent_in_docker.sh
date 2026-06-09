@@ -2,7 +2,7 @@
 # Example run_agent_in_docker.sh
 # Copy this file to the project root (or anywhere on PATH) and customise it.
 #
-# Usage: run_agent_in_docker.sh PROJECT AGENT --project-dir DIR [--model MODEL] [--reset] [--shell]
+# Usage: run_agent_in_docker.sh PROJECT AGENT --project-dir DIR [--model MODEL] [--reset] [--shell] [--venv]
 #
 # PROJECT       - project name (used in container name and volume path)
 # AGENT         - agent name  (used in container name and volume path)
@@ -10,6 +10,7 @@
 # --model       - model id forwarded to the agent CLI (required for agent windows)
 # --reset       - remove the existing container before starting a fresh one
 # --shell       - open an interactive bash shell instead of running the agent CLI
+# --venv        - create a virtual env instead of running the agent CLI
 
 set -euo pipefail
 
@@ -17,7 +18,7 @@ set -euo pipefail
 # Argument parsing
 # ---------------------------------------------------------------------------
 usage() {
-    echo "Usage: $(basename "$0") PROJECT AGENT --project-dir DIR [--model MODEL] [--reset] [--shell]" >&2
+    echo "Usage: $(basename "$0") PROJECT AGENT --project-dir DIR [--model MODEL] [--reset] [--shell] [--venv]" >&2
     exit 1
 }
 
@@ -31,6 +32,7 @@ PROJECT_DIR=""
 MODEL=""
 RESET=false
 SHELL_MODE=false
+VENV_MODE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -50,6 +52,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --shell)
             SHELL_MODE=true
+            shift
+            ;;
+        --venv)
+            VENV_MODE=true
             shift
             ;;
         *)
@@ -74,6 +80,11 @@ if [[ ! -f "$ENV_LIST" ]]; then
     exit 1
 fi
 
+if [[ "$SHELL_MODE" == true && "$VENV_MODE" == true ]]; then
+    echo "Error: Can not use both --shell and --venv"
+    exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # Derived variables
 # ---------------------------------------------------------------------------
@@ -93,7 +104,7 @@ fi
 # Bring the container up (run / start / no-op depending on state)
 # ---------------------------------------------------------------------------
 if [[ "$SHELL_MODE" == true ]]; then
-    # Wait for container to come up
+    # Wait for container to come up (brought up by starting agent)
     sleep 8
 fi
 
@@ -126,9 +137,10 @@ case "$CONTAINER_STATUS" in
                 --env PROJECT="$PROJECT" \
                 --env AGENT="$AGENT" \
                 -v "${PROJECT_DIR}/${AGENT}:/home/auggie/projects/${PROJECT}/${AGENT}" \
-                --workdir "/home/auggie/projects/${PROJECT}/${AGENT}" \
+                --workdir "/home/auggie/projects/${PROJECT}" \
                 --detach \
-                gronsti-auggie
+                gronsti-auggie \
+                sleep infinity
         fi
         ;;
     *)
@@ -143,10 +155,20 @@ esac
 if [[ "$SHELL_MODE" == true ]]; then
     exec docker exec -it \
         --user auggie \
+        --workdir "/home/auggie/projects/${PROJECT}/${AGENT}" \
         "$CONTAINER" \
         bash
+elif [[ "$VENV_MODE" == true ]]; then
+    [[ -d "${PROJECT_DIR}/${AGENT}/.venv" ]] && rm -r "${PROJECT_DIR}/${AGENT}/.venv"
+    exec docker exec -it \
+        --user auggie \
+        --workdir "/home/auggie/projects/${PROJECT}/${AGENT}" \
+        --env UV_VENV_CLEAR=1 \
+        --env UV_LINK_MODE=copy \
+        "$CONTAINER" \
+        bash -c "uv venv --seed && source .venv/bin/activate && uv pip install -e ."
 else
-    EXEC_CMD=(docker exec -it --user auggie "$CONTAINER" auggie)
+    EXEC_CMD=(docker exec -it --user auggie --workdir "/home/auggie/projects/${PROJECT}/${AGENT}" "$CONTAINER" auggie)
     [[ -n "$MODEL" ]] && EXEC_CMD+=(--model "$MODEL")
     exec "${EXEC_CMD[@]}"
 fi
