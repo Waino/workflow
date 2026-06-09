@@ -23,7 +23,7 @@ states:
         name: new
         description: Create a new intent file.
         script: new
-        reminder: push
+        reminder: "git commit, then workflow push"
       - command_type: script
         name: push
         description: Push pending content to master.

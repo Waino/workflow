@@ -304,6 +304,7 @@ def new(ctx: click.Context, slug: str) -> None:
             dry_run=dry_run,
         )
         _write_script_audit_log(config, "new", dry_run=dry_run, output_plans=[intent_path.stem])
+        _print_command_reminder(config, PlanState.INTENT, "new", intent_path.name)
     except (subprocess.CalledProcessError, WorkflowError) as exc:
         print_workflow_error(exc)
         ctx.exit(1)
@@ -467,7 +468,7 @@ def validate(
     _print_results(results)
     has_failures = any(result.status == "fail" for result in results)
     if not has_failures:
-        _print_next_step(plan)
+        _print_validate_next_step(plan)
     ctx.exit(1 if has_failures else 0)
 
 
@@ -485,7 +486,7 @@ def _print_results(results: list[CheckResult]) -> None:
                 console.print(f"    {detail}")
 
 
-def _print_next_step(plan: object) -> None:
+def _print_validate_next_step(plan: object) -> None:
     if not isinstance(plan, Plan):
         return
     if plan.state == PlanState.PLANNING:
