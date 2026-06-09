@@ -433,6 +433,8 @@ def create_workflow_session(
             msg = "the split control pane has no id."
             raise WorkflowError(msg)
         session.set_option(CONTROL_PANE_OPTION, control_pane.pane_id)
+        cmd = "workflow cheat --width 128 --height 50"
+        control_pane.send_keys(cmd, enter=True, suppress_history=False, literal=True)
         host.select()
     except (OSError, libtmux.exc.LibTmuxException) as exc:
         msg = f"failed to create tmux session {session_name!r}: {exc}"

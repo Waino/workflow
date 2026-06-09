@@ -81,8 +81,10 @@ def _format_state(state: str) -> Text:
 
 
 @register_script("cheat")
+@click.option("--width", type=int, default=None, help="Override term width")
+@click.option("--height", type=int, default=None, help="Override term height")
 @click.pass_context
-def cheat(ctx: click.Context) -> int:
+def cheat(ctx: click.Context, width: int | None = None, height: int | None = None) -> int:
     """Print the workflow cheat sheet."""
     config: WorkflowConfig = ctx.obj["config"]
     columns: list[Column] = []
@@ -100,6 +102,6 @@ def cheat(ctx: click.Context) -> int:
             ),
         )
     table = CheatsheetTable(columns=columns)
-    console = Console()
+    console = Console(width=width, height=height)
     console.print(table.render())
     return 0
