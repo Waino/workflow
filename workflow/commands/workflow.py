@@ -102,6 +102,7 @@ def _write_script_audit_log(
             input_plan=input_plan,
             output_plans=output_plans or [],
         ),
+        dry_run=dry_run,
     )
 
 
@@ -187,12 +188,18 @@ def init(ctx: click.Context) -> None:
         run_command(["git", "clone", "--bare", RepoName.master, "bare"], cwd=project_dir, dry_run=dry_run)
         for agent in config.agents:
             run_command(["git", "clone", "bare", agent.name], cwd=project_dir, dry_run=dry_run)
-        # Configure push behaviour in each agent clone so feature branches push
-        # to a same-named remote branch without requiring a pre-existing upstream.
         for agent in config.agents:
+            # Configure push behaviour in each agent clone so feature branches push
+            # to a same-named remote branch without requiring a pre-existing upstream.
             agent_repo = project_dir / agent.name
             run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=agent_repo, dry_run=dry_run)
             run_command(["git", "config", "push.default", "current"], cwd=agent_repo, dry_run=dry_run)
+            # Install pre-commit hook
+            run_command(
+                ["ln", "-s", "../../.git-pre-commit-hook", ".git/hooks/pre-commit"],
+                cwd=agent_repo,
+                dry_run=dry_run,
+            )
         # Wire master to bare so git pull/push work in place.
         bare_path = project_dir / "bare"
         master_repo = project_dir / RepoName.master

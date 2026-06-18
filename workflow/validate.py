@@ -169,7 +169,7 @@ def _check_git_hooks(repo_path: Path, config: WorkflowConfig) -> CheckResult:
         hook_path = hooks_dir / hook_name
         expected = (repo_path / hook_source).resolve()
         if not hook_path.is_symlink():
-            issues.append(f"{hook_name}: not a symlink")
+            issues.append(f"{hook_name}: not a symlink (expected {expected})")
         elif hook_path.resolve() != expected:
             issues.append(f"{hook_name}: symlink points to wrong target (expected {expected})")
 

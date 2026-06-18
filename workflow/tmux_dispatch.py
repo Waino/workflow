@@ -293,6 +293,7 @@ def _dispatch_prompt(
             command=cmd_name,
             input_plan=audit_input_plan,
         ),
+        dry_run=dry_run,
     )
     return 0
 

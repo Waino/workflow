@@ -71,10 +71,28 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
         ["git", "clone", "bare", "reviewer"],
         ["git", "config", "push.autoSetupRemote", "true"],  # planner
         ["git", "config", "push.default", "current"],  # planner
+        [
+            "ln",
+            "-s",
+            "../../.git-pre-commit-hook",
+            ".git/hooks/pre-commit",
+        ],  # planner
         ["git", "config", "push.autoSetupRemote", "true"],  # builder
         ["git", "config", "push.default", "current"],  # builder
+        [
+            "ln",
+            "-s",
+            "../../.git-pre-commit-hook",
+            ".git/hooks/pre-commit",
+        ],  # builder
         ["git", "config", "push.autoSetupRemote", "true"],  # reviewer
         ["git", "config", "push.default", "current"],  # reviewer
+        [
+            "ln",
+            "-s",
+            "../../.git-pre-commit-hook",
+            ".git/hooks/pre-commit",
+        ],  # reviewer
         ["git", "remote", "add", "origin", str(project_dir / "bare")],
         ["git", "config", "push.autoSetupRemote", "true"],  # master
         ["git", "config", "push.default", "current"],  # master

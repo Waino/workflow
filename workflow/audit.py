@@ -57,12 +57,15 @@ def build_audit_command_repo_state(config: WorkflowConfig) -> dict[str, tuple[Re
 _console = Console(stderr=True)
 
 
-def write_audit_log(project_dir: Path, entry: AuditLogEntry) -> None:
+def write_audit_log(project_dir: Path, entry: AuditLogEntry, *, dry_run: bool = False) -> None:
     """Append one entry to the JSONL audit log.
 
     Creates the file if it does not exist.
     Each line is a complete JSON object terminated by a newline.
     """
+    if dry_run:
+        _console.print(f"[dim]{entry.model_dump_json()}[/dim]")
+        return
     log_path = project_dir / AUDIT_LOG_FILENAME
     with log_path.open("a", encoding="utf-8") as f:
         f.write(entry.model_dump_json() + "\n")
