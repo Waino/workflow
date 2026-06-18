@@ -34,7 +34,7 @@ def build_audit_command_repo_state(config: WorkflowConfig) -> dict[str, tuple[Re
     appearances do not constrain the resolver.
     """
     # Lazy import to avoid a hard dependency from audit.py to config.py at import time.
-    from workflow.config import PromptCommand, ScriptCommand
+    from workflow.config import PromptCommand, ScriptCommand  # noqa: PLC0415
 
     mapping: dict[str, tuple[RepoName, PlanState]] = {}
     for state_config in config.states.values():

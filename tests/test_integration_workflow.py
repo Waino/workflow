@@ -16,7 +16,7 @@ from workflow.audit import read_audit_log
 from workflow.cli import main
 from workflow.config import WORKFLOW_ROOT_MARKER
 from workflow.git_helpers import CommitResult
-from workflow.validate import CheckResult
+from workflow.validate import CheckResult, _check_claude_md
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -196,8 +196,6 @@ def test_check_claude_md_detects_branch_modification(tmp_path: Path, monkeypatch
     After init, _check_claude_md must fail when CLAUDE.md is modified on a feature
     branch and pass once reverted.
     """
-    from workflow.validate import _check_claude_md
-
     master = tmp_path / "master"
     master.mkdir()
     _git(["init", str(master)])

@@ -157,9 +157,9 @@ def test_start_runs_tmux_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     project = tmp_path.name
     project_dir = str(tmp_path.resolve())
     cmds = dict(windows)
-    assert cmds["planner"] == f"{script} {project} planner --project-dir {project_dir} --model opus4.6"
-    assert cmds["builder"] == f"{script} {project} builder --project-dir {project_dir} --model sonnet4.6"
-    assert cmds["reviewer"] == f"{script} {project} reviewer --project-dir {project_dir} --model gpt5.4"
+    assert cmds["planner"] == f"{script} {project} planner --project-dir {project_dir}"
+    assert cmds["builder"] == f"{script} {project} builder --project-dir {project_dir}"
+    assert cmds["reviewer"] == f"{script} {project} reviewer --project-dir {project_dir}"
     assert cmds["builder-shell"] == f"{script} {project} builder --project-dir {project_dir} --shell"
 
 

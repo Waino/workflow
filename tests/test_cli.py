@@ -13,7 +13,7 @@ from click.testing import CliRunner
 
 import workflow.commands.workflow as workflow_commands
 from workflow import main, registry, tmux_dispatch
-from workflow.config import WORKFLOW_ROOT_MARKER
+from workflow.config import WORKFLOW_ROOT_MARKER, load_config
 from workflow.exceptions import WorkflowError
 from workflow.validate import CheckResult
 
@@ -159,6 +159,8 @@ def test_full_review_works_without_plan_argument(tmp_path: Path, monkeypatch: py
         prompts.append(prompt)
 
     monkeypatch.setattr(tmux_dispatch, "git_pull", MagicMock())
+    monkeypatch.setattr(tmux_dispatch, "git_current_branch", MagicMock(return_value="main"))
+    monkeypatch.setattr(tmux_dispatch, "git_commit_hash", MagicMock(return_value="abc1234"))
     monkeypatch.setattr(tmux_dispatch, "write_audit_log", MagicMock())
     monkeypatch.setattr(tmux_dispatch, "send_prompt_to_agent", fake_send)
 
@@ -298,8 +300,6 @@ def test_validate_prints_results_and_next_step(tmp_path: Path, monkeypatch: pyte
 
 
 def _load_config(tmp_path: Path) -> WorkflowConfig:
-    from workflow.config import load_config
-
     _make_project(tmp_path)
     return load_config(project_dir=tmp_path)
 

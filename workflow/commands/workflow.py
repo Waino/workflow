@@ -237,7 +237,9 @@ def _agent_docker_command(
     reset: bool,
 ) -> str:
     """Build the tmux window command string for an agent."""
-    parts = [script, project_name, agent.name, "--project-dir", str(project_dir), "--model", agent.model]
+    parts = [script, project_name, agent.name, "--project-dir", str(project_dir)]
+    if agent.model:
+        parts.extend(["--model", agent.model])
     if reset:
         parts.append("--reset")
     return shlex.join(parts)

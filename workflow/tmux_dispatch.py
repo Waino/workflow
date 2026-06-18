@@ -193,7 +193,8 @@ def _setup_has_plan(
         return None
     try:
         branch, commit = _git_metadata(target, config, dry_run=dry_run)
-        rendered = _render_prompt(target.command.prompt, plan=plan, branch=branch, commit=commit)
+        today = datetime.now(tz=UTC).date().isoformat()
+        rendered = _render_prompt(target.command.prompt, plan=plan, branch=branch, commit=commit, today=today)
     except WorkflowError as exc:
         error_console.print(f"Plan resolved to: {plan.path}")
         print_workflow_error(exc)
@@ -209,6 +210,8 @@ def _setup_has_plan(
 def _setup_stateless(
     config: WorkflowConfig,
     cmd_name: str,
+    *,
+    dry_run: bool,
 ) -> _PromptContext | None:
     """Resolve agent and render prompt for state-less commands (no plan argument).
 
@@ -224,7 +227,9 @@ def _setup_stateless(
         error_console.print("[red]No agent configured for review state.[/red]")
         return None
     try:
-        rendered = _render_prompt(target.command.prompt)
+        branch, commit = _git_metadata(target, config, dry_run=dry_run)
+        today = datetime.now(tz=UTC).date().isoformat()
+        rendered = _render_prompt(target.command.prompt, branch=branch, commit=commit, today=today)
     except WorkflowError as exc:
         print_workflow_error(exc)
         return None
@@ -251,7 +256,7 @@ def _dispatch_prompt(
         assert plan_path_str is not None  # Click enforces required=True when has_plan
         result = _setup_has_plan(config, cmd_name, plan_path_str, dry_run=dry_run)
     else:
-        result = _setup_stateless(config, cmd_name)
+        result = _setup_stateless(config, cmd_name, dry_run=dry_run)
 
     if result is None:
         return 1

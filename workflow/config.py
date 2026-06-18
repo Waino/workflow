@@ -110,7 +110,7 @@ class AgentConfig(BaseModel):
     """Configuration for a single agent."""
 
     name: str
-    model: str
+    model: str | None = None
     manual_shell: bool = False
     """Whether this agent's repo backs the ``builder-shell`` window targeted by ``go manual``."""
 
@@ -149,13 +149,13 @@ class WorkflowConfig(BaseModel):
     def validate_script_references(self) -> WorkflowConfig:
         """Fail fast if config references a script name not in the registry.
 
-        Uses a lazy import to avoid a circular dependency between config.py and
-        registry.py (registry.py imports ScriptCommand from config.py).
-
         All script command modules must be imported before load_config is called
         so that the registry is fully populated when this validator runs.
         """
-        from workflow.registry import _SCRIPT_REGISTRY, ConfigError
+        # lazy import to avoid a circular dependency between config.py and
+        # registry.py (registry.py imports ScriptCommand from config.py).
+
+        from workflow.registry import _SCRIPT_REGISTRY, ConfigError  # noqa: PLC0415
 
         for state_config in self.states.values():
             for cmd in state_config.commands:
