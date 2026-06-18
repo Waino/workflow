@@ -88,7 +88,7 @@ fi
 # ---------------------------------------------------------------------------
 # Derived variables
 # ---------------------------------------------------------------------------
-CONTAINER="auggie-${PROJECT}-${AGENT}"
+CONTAINER="pi-${PROJECT}-${AGENT}"
 
 # ---------------------------------------------------------------------------
 # Reset: remove the existing container if requested
@@ -139,7 +139,7 @@ case "$CONTAINER_STATUS" in
                 -v "${PROJECT_DIR}/${AGENT}:/home/auggie/projects/${PROJECT}/${AGENT}" \
                 --workdir "/home/auggie/projects/${PROJECT}" \
                 --detach \
-                gronsti-auggie \
+                gronsti-pi \
                 sleep infinity
         fi
         ;;
@@ -168,7 +168,7 @@ elif [[ "$VENV_MODE" == true ]]; then
         "$CONTAINER" \
         bash -c "uv venv --seed && source .venv/bin/activate && uv pip install -e ."
 else
-    EXEC_CMD=(docker exec -it --user auggie --workdir "/home/auggie/projects/${PROJECT}/${AGENT}" "$CONTAINER" auggie)
+    EXEC_CMD=(docker exec -it --user auggie --workdir "/home/auggie/projects/${PROJECT}/${AGENT}" "$CONTAINER" pi)
     [[ -n "$MODEL" ]] && EXEC_CMD+=(--model "$MODEL")
     exec "${EXEC_CMD[@]}"
 fi

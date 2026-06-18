@@ -26,7 +26,7 @@ Agents run in separate docker execs, which are attached.
 
 ### Derived variables
 
-- CONTAINER: `auggie-${PROJECT}-${AGENT}`
+- CONTAINER: `pi-${PROJECT}-${AGENT}`
 
 ### Steps
 
@@ -51,7 +51,7 @@ Agents run in separate docker execs, which are attached.
     docker exec -it \
         --user auggie \
         ${CONTAINER} \
-        auggie --model ${MODEL}
+        pi --model ${MODEL}
     ```
 
 ## Docker run
@@ -66,7 +66,7 @@ docker run \
     --env AGENT=${AGENT} \
     -v $(pwd)/projects/${PROJECT}/${AGENT}:/home/auggie/projects/${PROJECT}/${AGENT} \
     --detach \
-    gronsti-auggie
+    gronsti-pi
 ```
 
 ## Python Integration: `workflow start`

@@ -125,7 +125,7 @@ def _run_pre_commit_in_sandbox(config: WorkflowConfig, repo_name: str, *, dry_ru
         msg = "Target repo 'master' has no sandbox container."
         raise WorkflowError(msg)
     project_name = config.project_name or _require_project_dir(config).name
-    container_name = f"auggie-{project_name}-{repo_name}"
+    container_name = f"pi-{project_name}-{repo_name}"
     repo_path = shlex.quote(f"/home/auggie/projects/{project_name}")
     run_command(
         ["docker", "exec", container_name, "bash", "-lc", f"cd {repo_path} && ./.git-pre-commit-hook"],
