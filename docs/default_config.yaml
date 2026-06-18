@@ -195,7 +195,7 @@ states:
     commands: []
 
   review:
-    description: Codebase-wide review and audit tasks unrelated to a specific plan.
+    description: Special state for all reviews. Commands are codebase-wide review and audit tasks unrelated to a specific plan.
     agent: reviewer
     commands:
       - command_type: prompt
