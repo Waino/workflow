@@ -116,7 +116,7 @@ def git_branch_exists(repo_path: Path, branch: str, *, dry_run: bool = False) ->
 
 def git_merge(repo_path: Path, branch: str, *, dry_run: bool = False) -> None:
     """Merge *branch* into the current branch in *repo_path*."""
-    run_command(["git", "merge", "--", branch], cwd=repo_path, dry_run=dry_run)
+    run_command(["git", "merge", "--ff-only", "--", branch], cwd=repo_path, dry_run=dry_run)
 
 
 def git_checkout(repo_path: Path, branch: str, *, create: bool = False, dry_run: bool = False) -> None:

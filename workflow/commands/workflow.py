@@ -338,8 +338,9 @@ def new(ctx: click.Context, slug: str) -> None:
 
 @register_script("todo")
 @click.argument("plan_path")
+@click.option("--force", is_flag=True, help="Continue even when validation fails")
 @click.pass_context
-def todo(ctx: click.Context, plan_path: str) -> None:
+def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
     """Approve a ticket: push from planner, pull to master, transition to todo."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
@@ -351,7 +352,7 @@ def todo(ctx: click.Context, plan_path: str) -> None:
         results = run_validate(plan, project_dir, config, target_repo_override="planner", dry_run=dry_run)
         if not dry_run:
             _print_results(results)
-            if any(result.status == "fail" for result in results):
+            if not force and any(result.status == "fail" for result in results):
                 ctx.exit(1)
                 return
 
@@ -531,9 +532,10 @@ def _print_validate_next_step(plan: object) -> None:
     show_default=True,
     help="Repo whose sandbox and branch should be pushed.",
 )
+@click.option("--force", is_flag=True, help="Continue even when validation fails")
 @click.argument("plan_path")
 @click.pass_context
-def check(ctx: click.Context, plan_path: str, target_repo: AgentName) -> None:
+def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force: bool) -> None:
     """Hand off a ticket from builder to reviewer: push branch, fetch in reviewer."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
@@ -546,7 +548,7 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName) -> None:
         results = run_validate(plan, project_dir, config, target_repo_override=target_repo, dry_run=dry_run)
         if not dry_run:
             _print_results(results)
-            if any(result.status == "fail" for result in results):
+            if not force and any(result.status == "fail" for result in results):
                 ctx.exit(1)
                 return
         new_plan = transition_plan(plan, PlanState.CHECKING, project_dir, dry_run=dry_run)
