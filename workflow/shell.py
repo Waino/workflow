@@ -49,3 +49,21 @@ def run_command(
         console.print(f"[dim]would run:[/dim] {shlex.join(args)}")
         return None
     return subprocess.run(args, check=True, **kwargs)  # noqa: S603
+
+
+def run_condition_command(
+    args: list[str],
+    **kwargs: Any,
+) -> int:
+    """Run a shell command, for use as a condition.
+
+    Passes ``**kwargs`` through to :func:`subprocess.run`
+    (e.g. ``cwd``, ``env``).
+
+    Returns the return value of the command.
+
+    NOTE: the command MUST be safe to run in dry-run mode.
+    """
+    result = subprocess.run(args, check=False, **kwargs)  # noqa: S603
+    assert result is not None
+    return result.returncode

@@ -85,11 +85,11 @@ def test_ask_resolves_planner_plan_and_dispatches_prompt(tmp_path: Path, monkeyp
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "planner", "planning", "004_cli_framework.md")
     monkeypatch.chdir(tmp_path)
-    pulls: list[tuple[Path, bool]] = []
+    pulls: list[tuple[Path, bool, bool]] = []
     sends: list[tuple[str, str, bool]] = []
 
-    def fake_pull(repo_path: Path, *, dry_run: bool = False) -> None:
-        pulls.append((repo_path, dry_run))
+    def fake_pull(repo_path: Path, *, dry_run: bool = False, skip_if_no_upstream: bool = False) -> None:
+        pulls.append((repo_path, dry_run, skip_if_no_upstream))
 
     def fake_send(agent_name: str, prompt: str, _config: object, *, dry_run: bool = False) -> None:
         sends.append((agent_name, prompt, dry_run))
@@ -110,7 +110,7 @@ def test_ask_resolves_planner_plan_and_dispatches_prompt(tmp_path: Path, monkeyp
     if result.exit_code != 0:
         print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
-    assert pulls == [(tmp_path / "planner", False)]
+    assert pulls == [(tmp_path / "planner", False, True)]
     assert sends == [("planner", expected_prompt, False)]
 
 
@@ -122,11 +122,11 @@ def test_pr_uses_reviewer_repo_and_renders_branch_commit_and_plan(
     _make_plan(tmp_path, "master", "checking", "004_cli_framework.md")
     _make_plan(tmp_path, "reviewer", "checking", "004_cli_framework.md")
     monkeypatch.chdir(tmp_path)
-    pulls: list[tuple[Path, bool]] = []
+    pulls: list[tuple[Path, bool, bool]] = []
     prompts: list[str] = []
 
-    def fake_pull(repo_path: Path, *, dry_run: bool = False) -> None:
-        pulls.append((repo_path, dry_run))
+    def fake_pull(repo_path: Path, *, dry_run: bool = False, skip_if_no_upstream: bool = False) -> None:
+        pulls.append((repo_path, dry_run, skip_if_no_upstream))
 
     def fake_send(_agent_name: str, prompt: str, _config: object, *, dry_run: bool = False) -> None:
         del dry_run
@@ -143,7 +143,7 @@ def test_pr_uses_reviewer_repo_and_renders_branch_commit_and_plan(
     if result.exit_code != 0:
         print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
-    assert pulls == [(tmp_path / "reviewer", False)]
+    assert pulls == [(tmp_path / "reviewer", False, True)]
     assert "feat/004_cli_framework" in prompts[0]
     assert "reviewer/docs/plans/checking/004_cli_framework.md" in prompts[0]
     assert "docs/plans/reviews/pr/004_cli_framework_1e84d3a.md" in prompts[0]

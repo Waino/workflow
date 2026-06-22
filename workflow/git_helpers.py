@@ -14,7 +14,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from workflow.exceptions import WorkflowError
-from workflow.shell import run_command
+from workflow.shell import error_console, run_command, run_condition_command
+
+GIT_REVPARSE_NO_UPSTREAM = 128
 
 
 class CommitResult(enum.Enum):
@@ -24,12 +26,20 @@ class CommitResult(enum.Enum):
     NOTHING_TO_COMMIT = "nothing_to_commit"
 
 
-def git_pull(repo_path: Path, *, dry_run: bool = False) -> None:
+def git_pull(repo_path: Path, *, dry_run: bool = False, skip_if_no_upstream: bool = False) -> None:
     """Run ``git pull`` in *repo_path*.
 
     In dry-run mode prints the command without executing it.
     Raises :class:`subprocess.CalledProcessError` on non-zero exit.
     """
+    if skip_if_no_upstream:
+        returncode = run_condition_command(
+            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            cwd=repo_path,
+        )
+        if returncode == GIT_REVPARSE_NO_UPSTREAM:
+            error_console.print("[yellow]\\[!] Branch has no upstream, skipping pull.[/yellow]")
+            return
     run_command(["git", "pull"], cwd=repo_path, dry_run=dry_run)
 
 

@@ -267,7 +267,7 @@ def _dispatch_prompt(
     audit_input_plan = result.audit_input_plan
 
     try:
-        git_pull(config.project_dir / repo_name, dry_run=dry_run)
+        git_pull(config.project_dir / repo_name, dry_run=dry_run, skip_if_no_upstream=True)
     except subprocess.CalledProcessError as exc:
         error_console.print(f"[red]git pull failed in {config.project_dir / repo_name}: {exc}[/red]")
         return 1
