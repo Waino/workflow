@@ -13,8 +13,8 @@ from pathlib import Path
 import click
 from pydantic import BaseModel, ConfigDict
 
+import workflow.commands.agents_md
 import workflow.commands.cheat
-import workflow.commands.claude_md
 import workflow.commands.info
 import workflow.commands.workflow  # noqa: F401  — registers workflow commands
 from workflow.config import ScriptCommand, WorkflowConfig, load_config

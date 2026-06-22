@@ -107,71 +107,71 @@ def test_check_git_hooks_fails_for_unexpected_executable(tmp_path: Path) -> None
     assert "unexpected executable hook: post-commit" in result.details
 
 
-def test_check_claude_md_passes_with_matching_hash(tmp_path: Path) -> None:
+def test_check_agents_md_passes_with_matching_hash(tmp_path: Path) -> None:
     repo_path = tmp_path / "planner"
     repo_path.mkdir()
-    claude_md = repo_path / "CLAUDE.md"
-    claude_md.write_text("trusted\n", encoding="utf-8")
+    agents_md = repo_path / "AGENTS.md"
+    agents_md.write_text("trusted\n", encoding="utf-8")
     digest = hashlib.sha256(b"trusted\n").hexdigest()
     config_sha = "a" * 64
-    (tmp_path / ".claude_md_hash").write_text(f"v1 {digest} {config_sha}\n", encoding="utf-8")
+    (tmp_path / ".agents_md_hash").write_text(f"v1 {digest} {config_sha}\n", encoding="utf-8")
 
-    result = dc._check_claude_md(repo_path, tmp_path, [])
+    result = dc._check_agents_md(repo_path, tmp_path, [])
     assert result.status == "pass"
 
 
-def test_check_claude_md_fails_when_file_modified_on_branch(tmp_path: Path) -> None:
+def test_check_agents_md_fails_when_file_modified_on_branch(tmp_path: Path) -> None:
     repo_path = tmp_path / "planner"
     repo_path.mkdir()
-    claude_md = repo_path / "CLAUDE.md"
-    claude_md.write_text("trusted\n", encoding="utf-8")
+    agents_md = repo_path / "AGENTS.md"
+    agents_md.write_text("trusted\n", encoding="utf-8")
     digest = hashlib.sha256(b"trusted\n").hexdigest()
     config_sha = "a" * 64
-    (tmp_path / ".claude_md_hash").write_text(f"v1 {digest} {config_sha}\n", encoding="utf-8")
+    (tmp_path / ".agents_md_hash").write_text(f"v1 {digest} {config_sha}\n", encoding="utf-8")
 
-    result = dc._check_claude_md(repo_path, tmp_path, ["CLAUDE.md"])
+    result = dc._check_agents_md(repo_path, tmp_path, ["AGENTS.md"])
     assert result.status == "fail"
-    assert result.message == "CLAUDE.md was modified on this branch"
+    assert result.message == "AGENTS.md was modified on this branch"
 
 
-def test_check_claude_md_fails_on_hash_mismatch(tmp_path: Path) -> None:
+def test_check_agents_md_fails_on_hash_mismatch(tmp_path: Path) -> None:
     repo_path = tmp_path / "planner"
     repo_path.mkdir()
-    claude_md = repo_path / "CLAUDE.md"
-    claude_md.write_text("modified\n", encoding="utf-8")
+    agents_md = repo_path / "AGENTS.md"
+    agents_md.write_text("modified\n", encoding="utf-8")
     wrong_digest = "a" * 64
     config_sha = "b" * 64
-    (tmp_path / ".claude_md_hash").write_text(f"v1 {wrong_digest} {config_sha}\n", encoding="utf-8")
+    (tmp_path / ".agents_md_hash").write_text(f"v1 {wrong_digest} {config_sha}\n", encoding="utf-8")
 
-    result = dc._check_claude_md(repo_path, tmp_path, [])
+    result = dc._check_agents_md(repo_path, tmp_path, [])
     assert result.status == "fail"
     assert "hash does not match" in result.message
 
 
-def test_check_claude_md_suggests_regeneration_when_config_changed(tmp_path: Path) -> None:
+def test_check_agents_md_suggests_regeneration_when_config_changed(tmp_path: Path) -> None:
     repo_path = tmp_path / "planner"
     repo_path.mkdir()
-    claude_md = repo_path / "CLAUDE.md"
-    claude_md.write_text("modified\n", encoding="utf-8")
+    agents_md = repo_path / "AGENTS.md"
+    agents_md.write_text("modified\n", encoding="utf-8")
     wrong_digest = "a" * 64
     # config.yaml exists but its sha doesn't match the trusted one
     config_yaml = tmp_path / "config.yaml"
     config_yaml.write_text("different: content\n", encoding="utf-8")
     stale_config_sha = "b" * 64  # deliberately wrong
-    (tmp_path / ".claude_md_hash").write_text(f"v1 {wrong_digest} {stale_config_sha}\n", encoding="utf-8")
+    (tmp_path / ".agents_md_hash").write_text(f"v1 {wrong_digest} {stale_config_sha}\n", encoding="utf-8")
 
-    result = dc._check_claude_md(repo_path, tmp_path, [])
+    result = dc._check_agents_md(repo_path, tmp_path, [])
     assert result.status == "fail"
-    assert "workflow claude_md" in result.message
+    assert "workflow agents_md" in result.message
 
 
-def test_check_claude_md_fails_on_non_v1_hash_file(tmp_path: Path) -> None:
+def test_check_agents_md_fails_on_non_v1_hash_file(tmp_path: Path) -> None:
     repo_path = tmp_path / "planner"
     repo_path.mkdir()
-    (repo_path / "CLAUDE.md").write_text("anything\n", encoding="utf-8")
-    (tmp_path / ".claude_md_hash").write_text(f"v2 {'a' * 64} {'b' * 64}\n", encoding="utf-8")
+    (repo_path / "AGENTS.md").write_text("anything\n", encoding="utf-8")
+    (tmp_path / ".agents_md_hash").write_text(f"v2 {'a' * 64} {'b' * 64}\n", encoding="utf-8")
 
-    result = dc._check_claude_md(repo_path, tmp_path, [])
+    result = dc._check_agents_md(repo_path, tmp_path, [])
     assert result.status == "fail"
     assert "Hash file invalid" in result.message
     assert "v1" in result.message

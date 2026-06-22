@@ -1,33 +1,33 @@
-# 008: CLAUDE.md Generation
+# 008: AGENTS.md Generation
 
 Input: `intent/001_idea`
 
 ## Goal
 
-Generate the workflow orientation section of CLAUDE.md from configuration so
+Generate the workflow orientation section of AGENTS.md from configuration so
 that agents have accurate, up-to-date awareness of the plan state machine and
 available commands before they act. Full prompt texts live in config and are
-sent directly to agents via libtmux dispatch (plan 004.2); CLAUDE.md is not
+sent directly to agents via libtmux dispatch (plan 004.2); AGENTS.md is not
 the source of prompts.
 
 ## Scope
 
-- One `workflow claude_md` command updates a single auto-generated section of
-  `master/CLAUDE.md`. It writes the file and prints a reminder; it does
+- One `workflow agents_md` command updates a single auto-generated section of
+  `master/AGENTS.md`. It writes the file and prints a reminder; it does
   not stage, commit, or push. The operator reviews with `git diff` and
   commits when satisfied.
 - The same generation function is called by `workflow init` to seed
-  CLAUDE.md *before* the bare clone, so all agent clones inherit it.
+  AGENTS.md *before* the bare clone, so all agent clones inherit it.
   Init does auto-commit (one-time bootstrap).
-- Static CLAUDE.md content (git branch strategy, coding standards, general
+- Static AGENTS.md content (git branch strategy, coding standards, general
   orientation) lives outside the marker pair and is never touched.
-- A hash file (`.claude_md_hash`) records the CLAUDE.md sha and the
+- A hash file (`.agents_md_hash`) records the AGENTS.md sha and the
   config.yaml sha for `validate` integrity verification (plan 005) and for
   idempotency checks in the command itself.
 
 ## Audience and tone
 
-CLAUDE.md is read by agents, not humans, so the generated content is
+AGENTS.md is read by agents, not humans, so the generated content is
 deliberately semi-structured (tagged bullet lines per state) rather than
 prose or a human-friendly table. The format prioritises unambiguous parsing
 by an LLM: every command line carries an explicit `[type]` tag, every
@@ -59,10 +59,10 @@ around it.
 |---------------------------------------------------------|----------------------------------------------------|
 | 0 markers (BEGIN absent and END absent)                 | Append a fresh marker pair + content at EOF.       |
 | Exactly one BEGIN and one END, BEGIN strictly before END| Replace the content between them.                  |
-| Any other state (count mismatch, wrong order, dupes)    | Raise `ClaudeMdGenerationError`; write nothing.    |
+| Any other state (count mismatch, wrong order, dupes)    | Raise `AgentsMdGenerationError`; write nothing.    |
 
 The "0 markers → append" path is intentional: it lets a user author the
-static parts of CLAUDE.md, run `workflow claude_md` once to drop the
+static parts of AGENTS.md, run `workflow agents_md` once to drop the
 managed block at EOF, and then move the block to the preferred location
 with their editor before the next run.
 
@@ -219,28 +219,28 @@ The generation function normalises output deterministically:
 - Stable iteration order: `config.states` order for states; per-state
   command list order for commands.
 
-Two consecutive `workflow claude_md` runs against the same config must
+Two consecutive `workflow agents_md` runs against the same config must
 produce a byte-identical file. This is asserted by a unit test.
 
 ## Command
 
 ```python
-@cli.command("claude_md")
+@cli.command("agents_md")
 @click.option("--check", is_flag=True,
-              help="Exit 1 if regeneration would change CLAUDE.md or the hash file; never writes.")
+              help="Exit 1 if regeneration would change AGENTS.md or the hash file; never writes.")
 @click.pass_context
-def claude_md(ctx: click.Context, check: bool) -> None:
-    """Regenerate the auto-generated workflow section of CLAUDE.md."""
+def agents_md(ctx: click.Context, check: bool) -> None:
+    """Regenerate the auto-generated workflow section of AGENTS.md."""
 ```
 
 Behaviour:
 
 - Resolve `project_dir` from `WorkflowConfig`; error if outside a workflow project.
-- Compute the would-be CLAUDE.md content and the would-be hash file
+- Compute the would-be AGENTS.md content and the would-be hash file
   content in memory.
-- **Idempotency check**: if the existing CLAUDE.md is byte-identical to
-  the would-be content **and** the existing `.claude_md_hash` matches
-  the would-be hash file, print `CLAUDE.md is up to date.` and exit 0
+- **Idempotency check**: if the existing AGENTS.md is byte-identical to
+  the would-be content **and** the existing `.agents_md_hash` matches
+  the would-be hash file, print `AGENTS.md is up to date.` and exit 0
   without writing anything.
 - `--check` mode: if not idempotent, print a one-line summary of what
   would change (file content, config hash, or both) and exit 1. Never
@@ -248,36 +248,36 @@ Behaviour:
   (exit code only matters) and local dev (the one-line summary is
   enough to know what to look for in `git diff`).
 - Default mode (writing):
-  - Write `master/CLAUDE.md` and `{project_dir}/.claude_md_hash`
+  - Write `master/AGENTS.md` and `{project_dir}/.agents_md_hash`
     atomically (write to temp files, then rename).
-  - Print: `CLAUDE.md written. Review with 'git diff' in master, then commit and push.`
+  - Print: `AGENTS.md written. Review with 'git diff' in master, then commit and push.`
   - The command does **not** stage, commit, or push. That is left to
     the operator, who reviews the diff and may decide to revert.
 
 The standalone command performs no git operations. This is the
 deliberate choice: `git diff` is the right tool for inspecting and
-reverting changes to CLAUDE.md, and an automatic commit would compete
+reverting changes to AGENTS.md, and an automatic commit would compete
 with that workflow. The one exception is `workflow init` (see
 [Integration with `workflow init`](#integration-with-workflow-init)),
 which does commit because init runs once at project bootstrap and the
-bare clone must already contain CLAUDE.md.
+bare clone must already contain AGENTS.md.
 
 ## Public function signature
 
 ```python
-def generate_and_write_claude_md(
+def generate_and_write_agents_md(
     config: WorkflowConfig,
     project_dir: Path,
     *,
-    claude_md_path: Path | None = None,
+    agents_md_path: Path | None = None,
 ) -> Path:
-    """Regenerate CLAUDE.md and refresh the trusted hash file.
+    """Regenerate AGENTS.md and refresh the trusted hash file.
 
     Returns the path that was (or would be) written.
-    Raises ClaudeMdGenerationError when markers are malformed,
+    Raises AgentsMdGenerationError when markers are malformed,
     or when generation cannot proceed safely.
 
-    Performs no git operations. The caller (the `claude_md` command or
+    Performs no git operations. The caller (the `agents_md` command or
     `workflow init`) is responsible for any staging/commit/push.
     """
 ```
@@ -291,49 +291,49 @@ Pure helpers (no I/O), tested in isolation:
   for the marker pair using the column-0 rule. Returns a
   `ManagedSection(begin_line, end_line)` when exactly one well-ordered
   pair is found, `None` when no markers are present, and raises
-  `ClaudeMdGenerationError` on any malformed marker state.
+  `AgentsMdGenerationError` on any malformed marker state.
 - `replace_managed_section(text: str, span: ManagedSection, managed: str) -> str` —
   substitutes the content between the marker lines (markers preserved).
 - `append_managed_section(text: str, managed: str) -> str` — appends a
   fresh marker pair plus content at EOF, with a single blank-line
   separator from any prior content.
 - `normalise(text: str) -> str` — applies the output normalisation rules.
-- `compute_hash_file_contents(claude_md_text: str, config_yaml_bytes: bytes) -> str`
+- `compute_hash_file_contents(agents_md_text: str, config_yaml_bytes: bytes) -> str`
   — formats the `v1 ...` line.
 - `parse_hash_file(text: str) -> HashFileV1` — returns a pydantic
   `HashFileV1` model with fields `version: Literal["v1"]`,
-  `claude_md_sha: str`, `config_yaml_sha: str`. Raises on malformed
+  `agents_md_sha: str`, `config_yaml_sha: str`. Raises on malformed
   input or wrong version tag.
 
 ## Hash file
 
-Path: `{project_dir}/.claude_md_hash` (next to `.workflow_root`, *not*
-inside any repo). One hash file covers CLAUDE.md across all repos.
+Path: `{project_dir}/.agents_md_hash` (next to `.workflow_root`, *not*
+inside any repo). One hash file covers AGENTS.md across all repos.
 
 ### Trust model
 
-`.claude_md_hash` is read and written **only by script commands run by
-the human operator** (`workflow claude_md`, `workflow init`,
+`.agents_md_hash` is read and written **only by script commands run by
+the human operator** (`workflow agents_md`, `workflow init`,
 `workflow validate`). It is not mounted into agent containers and no
 prompt command reads or writes it. The file therefore lives somewhere
 agents structurally cannot reach, which is what makes it usable as a
-tamper signal: an agent that modifies CLAUDE.md inside its own clone
+tamper signal: an agent that modifies AGENTS.md inside its own clone
 has no way to also update the trusted hash.
 
 This trust property must not be eroded:
 
-- Do not surface `.claude_md_hash` in CLAUDE.md or any prompt template.
+- Do not surface `.agents_md_hash` in AGENTS.md or any prompt template.
 - Do not read or write it from any prompt command.
 - Do not copy it into any agent-visible location.
 
 Format (single line, space-separated, single trailing newline):
 
 ```
-v1 <claude_md_sha256> <config_yaml_sha256>
+v1 <agents_md_sha256> <config_yaml_sha256>
 ```
 
 - `v1` is a literal version tag. Future format changes bump this.
-- `<claude_md_sha256>` is the SHA-256 of the on-disk CLAUDE.md bytes
+- `<agents_md_sha256>` is the SHA-256 of the on-disk AGENTS.md bytes
   after normalisation.
 - `<config_yaml_sha256>` is the SHA-256 of the on-disk `config.yaml`
   bytes (raw, no normalisation).
@@ -343,23 +343,23 @@ Parsed as a pydantic model:
 ```python
 class HashFileV1(BaseModel):
     version: Literal["v1"]
-    claude_md_sha: str
+    agents_md_sha: str
     config_yaml_sha: str
 ```
 
-### `_check_claude_md` update (in `workflow/validate.py`)
+### `_check_agents_md` update (in `workflow/validate.py`)
 
 The existing check already reads the first whitespace-separated token of
-`.claude_md_hash` as the trusted CLAUDE.md sha. Update it to:
+`.agents_md_hash` as the trusted AGENTS.md sha. Update it to:
 
 - Parse via `parse_hash_file` (returns `HashFileV1`). Fail if the
   version tag is not `v1`.
-- Compare `claude_md_sha` to the on-disk file as today.
-- When `claude_md_sha` mismatches, additionally compare
+- Compare `agents_md_sha` to the on-disk file as today.
+- When `agents_md_sha` mismatches, additionally compare
   `config_yaml_sha` against the on-disk `config.yaml`. If that also
   mismatches, include this in the failure message:
-  "`config.yaml` has changed since CLAUDE.md was last generated; run
-  `workflow claude_md`."
+  "`config.yaml` has changed since AGENTS.md was last generated; run
+  `workflow agents_md`."
 
 ## Integration with `workflow init`
 
@@ -372,61 +372,61 @@ Init currently does, in order:
 5. `git push -u origin HEAD` from master.
 6. Touch `.workflow_root`.
 
-Updated init flow inserts CLAUDE.md generation **before the bare clone**
+Updated init flow inserts AGENTS.md generation **before the bare clone**
 so all agent clones inherit it. Init is a one-time bootstrap and does
-auto-commit (unlike the standalone `claude_md` command):
+auto-commit (unlike the standalone `agents_md` command):
 
 1. Assert `master/` is a git repo.
-2. **New**: `generate_and_write_claude_md(config, project_dir)` writes
-   `master/CLAUDE.md` and `.claude_md_hash`.
-3. **New**: in master, `git add CLAUDE.md && git commit -m "chore: generate initial CLAUDE.md"`
+2. **New**: `generate_and_write_agents_md(config, project_dir)` writes
+   `master/AGENTS.md` and `.agents_md_hash`.
+3. **New**: in master, `git add AGENTS.md && git commit -m "chore: generate initial AGENTS.md"`
    (skipped if there is nothing to commit, i.e. master already had a
-   byte-identical CLAUDE.md).
+   byte-identical AGENTS.md).
 4. `git clone --bare master bare` — the bare clone now contains the
-   committed CLAUDE.md.
+   committed AGENTS.md.
 5. Clone bare into each agent.
 6. Configure remotes / push settings.
 7. `git push -u origin HEAD` from master.
 8. Touch `.workflow_root`.
 
-`.claude_md_hash` is written in step 2 and is never committed (it lives
+`.agents_md_hash` is written in step 2 and is never committed (it lives
 outside any repo).
 
 There is no dirty-tree guard. The operator is expected to use
 `git status` / `git diff` to manage the state of master, and to avoid
-running `workflow claude_md` while agents are mid-task (see Risks).
+running `workflow agents_md` while agents are mid-task (see Risks).
 
 ## Exceptions
 
 Add a new exception in `workflow/exceptions.py`:
 
 ```python
-class ClaudeMdGenerationError(WorkflowError):
-    """Raised when CLAUDE.md cannot be safely (re)generated."""
+class AgentsMdGenerationError(WorkflowError):
+    """Raised when AGENTS.md cannot be safely (re)generated."""
 ```
 
 Raised on:
 
 - Malformed markers (count mismatch, wrong order, duplicate pairs,
   marker line that is not at column 0).
-- Malformed `.claude_md_hash` (consumed by validate).
+- Malformed `.agents_md_hash` (consumed by validate).
 
 ## File organisation
 
-- `workflow/claude_md.py` — pure generation functions
+- `workflow/agents_md.py` — pure generation functions
   (`render_workflow_section`, `find_managed_section`,
   `replace_managed_section`, `append_managed_section`, `normalise`,
   `compute_hash_file_contents`, `parse_hash_file`, `HashFileV1`,
   `ManagedSection`). Lives outside `workflow/commands/` so it can be
   imported from `validate.py` and `commands/workflow.py` (init)
   without circular imports.
-- `workflow/commands/claude_md.py` — the `claude_md` Click command and
-  the `generate_and_write_claude_md` orchestrator (idempotency check,
+- `workflow/commands/agents_md.py` — the `agents_md` Click command and
+  the `generate_and_write_agents_md` orchestrator (idempotency check,
   atomic writes, reminder print). No git operations.
-- `workflow/templates/claude_md_workflow.md.j2` — single Jinja2
+- `workflow/templates/agents_md_workflow.md.j2` — single Jinja2
   template producing the managed section (static intro paragraph baked
   into the template + per-state blocks).
-- `tests/test_claude_md.py` — unit and CLI tests.
+- `tests/test_agents_md.py` — unit and CLI tests.
 
 ## Tests
 
@@ -438,7 +438,7 @@ Pure-function tests (no filesystem, no subprocess):
 - `find_managed_section`:
   - 0 markers → returns `None`.
   - 1 BEGIN + 1 END in order → returns the `ManagedSection` span.
-  - 2 BEGIN + 2 END → raises `ClaudeMdGenerationError`.
+  - 2 BEGIN + 2 END → raises `AgentsMdGenerationError`.
   - 1 BEGIN + 0 END → raises.
   - 0 BEGIN + 1 END → raises.
   - END strictly before BEGIN → raises.
@@ -459,38 +459,38 @@ Pure-function tests (no filesystem, no subprocess):
 
 Command tests (CliRunner):
 
-- Idempotent run prints `CLAUDE.md is up to date.` and exits 0; no
+- Idempotent run prints `AGENTS.md is up to date.` and exits 0; no
   writes occur.
 - `--check` exits 1 with a one-line "would change" summary when
-  CLAUDE.md is stale; exits 0 silently when current. Never writes.
-- Stale CLAUDE.md → writes the file and `.claude_md_hash`, prints
-  `CLAUDE.md written. Review with 'git diff' in master, then commit and push.`,
+  AGENTS.md is stale; exits 0 silently when current. Never writes.
+- Stale AGENTS.md → writes the file and `.agents_md_hash`, prints
+  `AGENTS.md written. Review with 'git diff' in master, then commit and push.`,
   exits 0. No git commands are invoked.
 - Missing or empty `description` field anywhere in the config → config
   load raises a Pydantic validation error.
 
 Init tests:
 
-- `workflow init` invokes `generate_and_write_claude_md` and commits
-  CLAUDE.md **before** the `git clone --bare` call (asserted via
+- `workflow init` invokes `generate_and_write_agents_md` and commits
+  AGENTS.md **before** the `git clone --bare` call (asserted via
   call-order on a mocked `run_command`).
-- Init's CLAUDE.md commit is skipped when `master/CLAUDE.md` is already
+- Init's AGENTS.md commit is skipped when `master/AGENTS.md` is already
   byte-identical to the generated content.
 
 Validate tests:
 
-- `.claude_md_hash` with a non-`v1` version tag → `_check_claude_md`
+- `.agents_md_hash` with a non-`v1` version tag → `_check_agents_md`
   fails with a clear message.
-- CLAUDE.md sha mismatch + config sha mismatch → failure message
+- AGENTS.md sha mismatch + config sha mismatch → failure message
   mentions config has changed since last generation.
-- CLAUDE.md sha mismatch + config sha match → failure message does not
+- AGENTS.md sha mismatch + config sha match → failure message does not
   mention config drift.
 
 ## Dependencies
 
 - Plan 002 (models): `WorkflowConfig`, `PromptCommand`, `ScriptCommand`, `ManualStep`.
 - Plan 004.1 (CLI and registry): cli group.
-- Plan 005 (`validate`): `_check_claude_md` integration.
+- Plan 005 (`validate`): `_check_agents_md` integration.
 - Plan 007 (`workflow init`): insertion point for the generation step.
 - jinja2 (already a project dependency).
 
@@ -503,22 +503,22 @@ Validate tests:
   fence analysis.
 - The "append on 0 markers" path is the only way the command will add
   content outside an existing managed block. It is intentional: it
-  lets a user bootstrap CLAUDE.md without first hand-writing markers.
-- `workflow claude_md` and `config.yaml` edits must not run
-  concurrently with active agent work. CLAUDE.md and config define the
+  lets a user bootstrap AGENTS.md without first hand-writing markers.
+- `workflow agents_md` and `config.yaml` edits must not run
+  concurrently with active agent work. AGENTS.md and config define the
   contract the agent is acting under; modifying them mid-task
   invalidates that contract. The system does not enforce this — the
   operator is expected to schedule regenerations between agent tasks.
-  Agent clones receive CLAUDE.md updates via the `git pull` that every
+  Agent clones receive AGENTS.md updates via the `git pull` that every
   prompt command already runs in the target repo.
 - `repo_override`, `pull_target`, `also_valid_in_states`, and
-  `reminder` are not surfaced in CLAUDE.md. They are runtime behaviour
+  `reminder` are not surfaced in AGENTS.md. They are runtime behaviour
   details that do not change what an agent should/should not do at a
   given state. If agent confusion emerges in practice, revisit.
 - The generated content's clarity for agents is empirically
   determined; the format may need iteration based on observed agent
   behaviour.
-- `.claude_md_hash` lives outside any git repo. If the file is lost
-  (machine wipe, accidental delete), rerunning `workflow claude_md`
+- `.agents_md_hash` lives outside any git repo. If the file is lost
+  (machine wipe, accidental delete), rerunning `workflow agents_md`
   regenerates it. There is no backup story; this is acceptable because
   the hash file is a derived artefact.

@@ -16,7 +16,7 @@ from workflow.audit import read_audit_log
 from workflow.cli import main
 from workflow.config import WORKFLOW_ROOT_MARKER
 from workflow.git_helpers import CommitResult
-from workflow.validate import CheckResult, _check_claude_md
+from workflow.validate import CheckResult, _check_agents_md
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -115,14 +115,14 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
     result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
     assert result.exit_code == 0, result.output
 
-    # CLAUDE.md must exist in master, contain both markers, and be reachable
+    # AGENTS.md must exist in master, contain both markers, and be reachable
     # via the bare clone — proving the "commit before bare clone" ordering.
-    master_claude_md = master / "CLAUDE.md"
-    assert master_claude_md.exists()
-    claude_md_text = master_claude_md.read_text(encoding="utf-8")
-    assert "<!-- WORKFLOW BEGIN -->" in claude_md_text
-    assert "<!-- WORKFLOW END -->" in claude_md_text
-    bare_blob_type = _git(["cat-file", "-t", "refs/heads/main:CLAUDE.md"], cwd=tmp_path / "bare").stdout
+    master_agents_md = master / "AGENTS.md"
+    assert master_agents_md.exists()
+    agents_md_text = master_agents_md.read_text(encoding="utf-8")
+    assert "<!-- WORKFLOW BEGIN -->" in agents_md_text
+    assert "<!-- WORKFLOW END -->" in agents_md_text
+    bare_blob_type = _git(["cat-file", "-t", "refs/heads/main:AGENTS.md"], cwd=tmp_path / "bare").stdout
     assert bare_blob_type.strip() == b"blob"
 
     # Set git user identity in each cloned repo (needed for commits made by the test).
@@ -190,10 +190,10 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-def test_check_claude_md_detects_branch_modification(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Validate roundtrip through _check_claude_md after init.
+def test_check_agents_md_detects_branch_modification(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Validate roundtrip through _check_agents_md after init.
 
-    After init, _check_claude_md must fail when CLAUDE.md is modified on a feature
+    After init, _check_agents_md must fail when AGENTS.md is modified on a feature
     branch and pass once reverted.
     """
     master = tmp_path / "master"
@@ -235,22 +235,22 @@ def test_check_claude_md_detects_branch_modification(tmp_path: Path, monkeypatch
     result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
     assert result.exit_code == 0, result.output
 
-    # Simulate a feature branch in builder modifying CLAUDE.md.
+    # Simulate a feature branch in builder modifying AGENTS.md.
     builder = tmp_path / "builder"
     _git(["config", "user.email", "test@example.com"], cwd=builder)
     _git(["config", "user.name", "Test"], cwd=builder)
-    _git(["checkout", "-b", "feat/touch_claude"], cwd=builder)
-    pristine = (builder / "CLAUDE.md").read_text(encoding="utf-8")
-    (builder / "CLAUDE.md").write_text(pristine + "\nunsanctioned addition\n", encoding="utf-8")
-    _git(["add", "CLAUDE.md"], cwd=builder)
+    _git(["checkout", "-b", "feat/touch_agents_md"], cwd=builder)
+    pristine = (builder / "AGENTS.md").read_text(encoding="utf-8")
+    (builder / "AGENTS.md").write_text(pristine + "\nunsanctioned addition\n", encoding="utf-8")
+    _git(["add", "AGENTS.md"], cwd=builder)
     _git(["commit", "-m", "tamper"], cwd=builder)
 
     # Hash mismatch on the modified branch -> fail with the hash-mismatch message.
-    result_fail = _check_claude_md(builder, tmp_path, ["CLAUDE.md"])
+    result_fail = _check_agents_md(builder, tmp_path, ["AGENTS.md"])
     assert result_fail.status == "fail"
     assert "hash does not match" in result_fail.message
 
     # Revert and assert the check passes (same content as master, file not in changed_files).
-    (builder / "CLAUDE.md").write_text(pristine, encoding="utf-8")
-    result_pass = _check_claude_md(builder, tmp_path, [])
+    (builder / "AGENTS.md").write_text(pristine, encoding="utf-8")
+    result_pass = _check_agents_md(builder, tmp_path, [])
     assert result_pass.status == "pass"

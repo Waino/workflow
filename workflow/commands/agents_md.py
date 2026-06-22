@@ -1,7 +1,7 @@
-"""CLI command for regenerating the CLAUDE.md workflow section.
+"""CLI command for regenerating the AGENTS.md workflow section.
 
-This module registers the ``claude_md`` script command and exposes the
-``generate_and_write_claude_md`` orchestrator for use by ``workflow init``.
+This module registers the ``agents_md`` script command and exposes the
+``generate_and_write_agents_md`` orchestrator for use by ``workflow init``.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import click
 
-from workflow.claude_md import (
+from workflow.agents_md import (
     append_managed_section,
     compute_hash_file_contents,
     find_managed_section,
@@ -23,45 +23,45 @@ from workflow.claude_md import (
     replace_managed_section,
 )
 from workflow.config import WorkflowConfig
-from workflow.exceptions import ClaudeMdGenerationError, WorkflowError
+from workflow.exceptions import AgentsMdGenerationError, WorkflowError
 from workflow.registry import register_script
 
 
 @dataclass
-class _ClaudeMdUpdate:
-    """Result of computing a CLAUDE.md update without writing it to disk."""
+class _AgentsMdUpdate:
+    """Result of computing a AGENTS.md update without writing it to disk."""
 
     resolved_path: Path
     hash_file_path: Path
     new_text: str  # normalised, ready to write
     new_hash: str
-    claude_md_unchanged: bool  # True when on-disk content already matches new_text
+    agents_md_unchanged: bool  # True when on-disk content already matches new_text
     hash_unchanged: bool  # True when on-disk hash already matches new_hash
 
 
-def _prepare_claude_md_update(
+def _prepare_agents_md_update(
     config: WorkflowConfig,
-    claude_md_path: Path | None = None,
-) -> _ClaudeMdUpdate:
-    """Compute the new CLAUDE.md content and hash without writing anything.
+    agents_md_path: Path | None = None,
+) -> _AgentsMdUpdate:
+    """Compute the new AGENTS.md content and hash without writing anything.
 
-    Raises :class:`~workflow.exceptions.ClaudeMdGenerationError` when
+    Raises :class:`~workflow.exceptions.AgentsMdGenerationError` when
     ``config.project_dir`` is unset, markers are malformed, or the generated
     output is internally inconsistent.
     """
     if config.project_dir is None:
-        msg = "config.project_dir must be set to generate CLAUDE.md."
-        raise ClaudeMdGenerationError(msg)
+        msg = "config.project_dir must be set to generate AGENTS.md."
+        raise AgentsMdGenerationError(msg)
     project_dir = config.project_dir
-    resolved_path = claude_md_path or (project_dir / "master" / "CLAUDE.md")
+    resolved_path = agents_md_path or (project_dir / "master" / "AGENTS.md")
     config_yaml_path = project_dir / "config.yaml"
-    hash_file_path = project_dir / ".claude_md_hash"
+    hash_file_path = project_dir / ".agents_md_hash"
 
     # Read existing content (or start fresh).
     existing_text = resolved_path.read_text(encoding="utf-8") if resolved_path.exists() else ""
 
     # Validate existing markers before generating.
-    span = find_managed_section(existing_text)  # raises ClaudeMdGenerationError on malformed
+    span = find_managed_section(existing_text)  # raises AgentsMdGenerationError on malformed
 
     # Generate the managed section content and splice into the file.
     managed = render_workflow_section(config)
@@ -74,42 +74,42 @@ def _prepare_claude_md_update(
 
     # Sanity-check: the generated file must have exactly one marker pair.
     if find_managed_section(new_text) is None:
-        msg = "BUG: generated CLAUDE.md has no markers after generation."
-        raise ClaudeMdGenerationError(msg)
+        msg = "BUG: generated AGENTS.md has no markers after generation."
+        raise AgentsMdGenerationError(msg)
 
     config_yaml_bytes = config_yaml_path.read_bytes() if config_yaml_path.exists() else b""
     new_hash = compute_hash_file_contents(new_text, config_yaml_bytes)
 
     existing_hash = hash_file_path.read_text(encoding="utf-8") if hash_file_path.exists() else ""
-    claude_md_unchanged = resolved_path.exists() and resolved_path.read_text(encoding="utf-8") == new_text
+    agents_md_unchanged = resolved_path.exists() and resolved_path.read_text(encoding="utf-8") == new_text
     hash_unchanged = existing_hash == new_hash
 
-    return _ClaudeMdUpdate(
+    return _AgentsMdUpdate(
         resolved_path=resolved_path,
         hash_file_path=hash_file_path,
         new_text=new_text,
         new_hash=new_hash,
-        claude_md_unchanged=claude_md_unchanged,
+        agents_md_unchanged=agents_md_unchanged,
         hash_unchanged=hash_unchanged,
     )
 
 
-def generate_and_write_claude_md(
+def generate_and_write_agents_md(
     config: WorkflowConfig,
     *,
-    claude_md_path: Path | None = None,
+    agents_md_path: Path | None = None,
 ) -> Path:
-    """Regenerate CLAUDE.md and refresh the trusted hash file.
+    """Regenerate AGENTS.md and refresh the trusted hash file.
 
     Returns the path that was written.
-    Raises :class:`~workflow.exceptions.ClaudeMdGenerationError` when markers
+    Raises :class:`~workflow.exceptions.AgentsMdGenerationError` when markers
     are malformed or generation cannot proceed safely.
 
     Performs no git operations. The caller is responsible for any staging,
     committing, or pushing.
     """
-    update = _prepare_claude_md_update(config, claude_md_path)
-    # Write atomically. CLAUDE.md is committed to git, so use 0o644;
+    update = _prepare_agents_md_update(config, agents_md_path)
+    # Write atomically. AGENTS.md is committed to git, so use 0o644;
     # the hash file is a local trust anchor that does not need to be world-readable.
     _atomic_write(update.resolved_path, update.new_text.encode("utf-8"), mode=0o644)
     _atomic_write(update.hash_file_path, update.new_hash.encode("utf-8"))
@@ -136,11 +136,11 @@ def _atomic_write(path: Path, data: bytes, *, mode: int | None = None) -> None:
         raise
 
 
-@register_script("claude_md")
-@click.option("--check", is_flag=True, help="Exit 1 if CLAUDE.md or hash would change; never writes.")
+@register_script("agents_md")
+@click.option("--check", is_flag=True, help="Exit 1 if AGENTS.md or hash would change; never writes.")
 @click.pass_context
-def claude_md(ctx: click.Context, check: bool) -> None:  # noqa: FBT001
-    """Regenerate the auto-generated workflow section of CLAUDE.md."""
+def agents_md(ctx: click.Context, check: bool) -> None:  # noqa: FBT001
+    """Regenerate the auto-generated workflow section of AGENTS.md."""
     config: WorkflowConfig = ctx.obj["config"]
     if config.project_dir is None:
         click.echo("Error: not inside a workflow project directory.", err=True)
@@ -148,28 +148,28 @@ def claude_md(ctx: click.Context, check: bool) -> None:  # noqa: FBT001
         return
 
     try:
-        update = _prepare_claude_md_update(config)
+        update = _prepare_agents_md_update(config)
 
-        if update.claude_md_unchanged and update.hash_unchanged:
-            click.echo("CLAUDE.md is up to date.")
+        if update.agents_md_unchanged and update.hash_unchanged:
+            click.echo("AGENTS.md is up to date.")
             ctx.exit(0)
             return
 
         if check:
             parts = []
-            if not update.claude_md_unchanged:
-                parts.append("CLAUDE.md content")
+            if not update.agents_md_unchanged:
+                parts.append("AGENTS.md content")
             if not update.hash_unchanged:
                 parts.append("hash file")
-            click.echo(f"CLAUDE.md is out of date: {' and '.join(parts)} would change.", err=True)
+            click.echo(f"AGENTS.md is out of date: {' and '.join(parts)} would change.", err=True)
             ctx.exit(1)
             return
 
         _atomic_write(update.resolved_path, update.new_text.encode("utf-8"), mode=0o644)
         _atomic_write(update.hash_file_path, update.new_hash.encode("utf-8"))
-        click.echo("CLAUDE.md written. Review with 'git diff' in master, then commit and push.")
+        click.echo("AGENTS.md written. Review with 'git diff' in master, then commit and push.")
 
-    except (ClaudeMdGenerationError, WorkflowError) as exc:
+    except (AgentsMdGenerationError, WorkflowError) as exc:
         click.echo(f"Error: {exc}", err=True)
         ctx.exit(1)
         return

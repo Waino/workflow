@@ -1,4 +1,4 @@
-"""Pure generation functions for the CLAUDE.md workflow section.
+"""Pure generation functions for the AGENTS.md workflow section.
 
 All functions here are free of side effects except for I/O in
 ``render_workflow_section`` (reads the Jinja template from package
@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Literal
 import jinja2
 from pydantic import BaseModel
 
-from workflow.exceptions import ClaudeMdGenerationError
+from workflow.exceptions import AgentsMdGenerationError
 
 if TYPE_CHECKING:
     from workflow.config import WorkflowConfig
@@ -41,7 +41,7 @@ class HashFileV1(BaseModel):
     """Parsed representation of the v1 trusted hash file."""
 
     version: Literal["v1"]
-    claude_md_sha: str
+    agents_md_sha: str
     config_yaml_sha: str
 
 
@@ -79,7 +79,7 @@ def find_managed_section(text: str) -> ManagedSection | None:
     string (column-0 rule, no surrounding whitespace).
 
     Returns ``None`` when no markers are present.
-    Raises :class:`~workflow.exceptions.ClaudeMdGenerationError` for any
+    Raises :class:`~workflow.exceptions.AgentsMdGenerationError` for any
     other marker state (mismatched counts, wrong order, duplicates).
     """
     lines = text.split("\n")
@@ -94,12 +94,12 @@ def find_managed_section(text: str) -> ManagedSection | None:
             f"Malformed markers: found {len(begins)} BEGIN and {len(ends)} END marker(s). "
             "Expected exactly one of each, or zero of both."
         )
-        raise ClaudeMdGenerationError(msg)
+        raise AgentsMdGenerationError(msg)
 
     begin, end = begins[0], ends[0]
     if end < begin:
         msg = f"Malformed markers: END marker (line {end}) must come after BEGIN marker (line {begin})."
-        raise ClaudeMdGenerationError(msg)
+        raise AgentsMdGenerationError(msg)
 
     return ManagedSection(begin_line=begin, end_line=end)
 
@@ -137,10 +137,10 @@ def render_workflow_section(config: WorkflowConfig) -> str:
     """Render the managed workflow section from *config* using the Jinja2 template.
 
     Returns the rendered text (without markers, without trailing markers).
-    The caller is responsible for splicing into the full CLAUDE.md.
+    The caller is responsible for splicing into the full AGENTS.md.
     """
     template_text = (
-        importlib.resources.files("workflow.templates").joinpath("claude_md_workflow.md.j2").read_text(encoding="utf-8")
+        importlib.resources.files("workflow.templates").joinpath("agents_md_workflow.md.j2").read_text(encoding="utf-8")
     )
 
     # Build inbound transition index: target_state -> list of {name, source, type}
@@ -212,28 +212,28 @@ def render_workflow_section(config: WorkflowConfig) -> str:
 # ---------------------------------------------------------------------------
 
 
-def compute_hash_file_contents(claude_md_text: str, config_yaml_bytes: bytes) -> str:
+def compute_hash_file_contents(agents_md_text: str, config_yaml_bytes: bytes) -> str:
     r"""Return the ``v1 <sha> <sha>\n`` hash file contents.
 
-    *claude_md_text* must already be normalised before calling.
+    *agents_md_text* must already be normalised before calling.
     """
-    claude_md_sha = hashlib.sha256(claude_md_text.encode("utf-8")).hexdigest()
+    agents_md_sha = hashlib.sha256(agents_md_text.encode("utf-8")).hexdigest()
     config_yaml_sha = hashlib.sha256(config_yaml_bytes).hexdigest()
-    return f"v1 {claude_md_sha} {config_yaml_sha}\n"
+    return f"v1 {agents_md_sha} {config_yaml_sha}\n"
 
 
 def parse_hash_file(text: str) -> HashFileV1:
     """Parse the hash file *text* and return a :class:`HashFileV1`.
 
-    Raises :class:`~workflow.exceptions.ClaudeMdGenerationError` on malformed
+    Raises :class:`~workflow.exceptions.AgentsMdGenerationError` on malformed
     input or an unsupported version tag.
     """
     tokens = text.strip().split()
     if len(tokens) != 3:  # noqa: PLR2004
         msg = f"Malformed hash file: expected 3 space-separated tokens, got {len(tokens)}."
-        raise ClaudeMdGenerationError(msg)
-    version, claude_md_sha, config_yaml_sha = tokens
+        raise AgentsMdGenerationError(msg)
+    version, agents_md_sha, config_yaml_sha = tokens
     if version != "v1":
         msg = f"Unsupported hash file version: {version!r} (expected 'v1')."
-        raise ClaudeMdGenerationError(msg)
-    return HashFileV1(version="v1", claude_md_sha=claude_md_sha, config_yaml_sha=config_yaml_sha)
+        raise AgentsMdGenerationError(msg)
+    return HashFileV1(version="v1", agents_md_sha=agents_md_sha, config_yaml_sha=config_yaml_sha)

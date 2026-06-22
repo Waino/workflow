@@ -282,7 +282,7 @@ def test_validate_prints_results_and_next_step(tmp_path: Path, monkeypatch: pyte
             CheckResult(check_name="file-scope", status="pass", message="ok"),
             CheckResult(check_name="noqa-nosec", status="warn", message="1 found", details=["# noqa"]),
             CheckResult(check_name="git-hooks", status="pass", message="ok"),
-            CheckResult(check_name="claude-md", status="pass", message="ok"),
+            CheckResult(check_name="agents-md", status="pass", message="ok"),
         ]
 
     monkeypatch.setattr(workflow_commands, "run_validate", fake_validate)

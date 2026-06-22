@@ -20,8 +20,8 @@
       the CLI resolves the plan path, runs any mandatory pre-steps (e.g. `git pull`),
       renders the prompt template from the config, and sends it to the appropriate agent's tmux window via libtmux.
     - Always run outside the sandboxes, but may `docker exec` commands inside the sandboxes.
-- CLAUDE.md: static instructions for agents (git branch strategy, coding standards, workflow orientation).
-    - Auto-generated sections (plan state machine, command listing) are kept in sync by `workflow claude.md`.
+- AGENTS.md: static instructions for agents (git branch strategy, coding standards, workflow orientation).
+    - Auto-generated sections (plan state machine, command listing) are kept in sync by `workflow agents_md`.
     - Does not contain prompt command text; full prompts are rendered from the config and sent directly by the CLI.
 - Changes to project cookiecutter
 
@@ -109,7 +109,7 @@ then save and close; the modified text is sent to the reviewer.
 - Use click for the CLI
 - Use rich for color and tabular layouts
 - Use pydantic v2 for schemas and for validation of the yaml config
-- Use jinja2 for templating (intent file creation, CLAUDE.md generation, prompt rendering)
+- Use jinja2 for templating (intent file creation, AGENTS.md generation, prompt rendering)
 - Use libtmux for sending rendered prompts to agent tmux windows
 - Use pathlib for path handling and globs
 - Can call out to shell tools rather than implementing heavy custom components or adding complex dependencies
@@ -417,7 +417,7 @@ Commit your changes. Do not modify the code.
     - make sure that the git hooks are in the correct state
         - pre-commit hook is a symlink to the version-controlled .git-pre-commit-hook
         - no other hooks are active
-    - verify that CLAUDE.md has not been tampered with
+    - verify that AGENTS.md has not been tampered with
 - Print workflow reminder: `next step is: workflow [todo|accept] or reject`.
   Print todo or accept based on current state.
 
@@ -494,15 +494,15 @@ Commit your changes. Do not modify the code.
 - Pretty-prints the single JSONL audit log in chronological order, with rich formatting.
 - Filtering options: by actor, by plan, by time range, by command.
 
-### Generate CLAUDE.md
+### Generate AGENTS.md
 
-- script: workflow claude.md
-- Regenerate the auto-generated sections of CLAUDE.md from the current configuration:
+- script: workflow agents_md
+- Regenerate the auto-generated sections of AGENTS.md from the current configuration:
     - **Plan state machine**: which states exist, which agent works in each, available transitions.
       Agent-friendly prose/table format. Not the tabular cheat-sheet diagram.
     - **Command listing**: commands available in each state, with type markers (`-` script, `@` prompt, `( )` manual).
 - Static sections (git branch strategy, coding standards) are outside the auto-generated markers and are not touched.
-- Prompt command text is **not** included in CLAUDE.md; full prompts live in the config and are rendered at dispatch time.
+- Prompt command text is **not** included in AGENTS.md; full prompts live in the config and are rendered at dispatch time.
 
 ## Audit log
 
@@ -536,7 +536,7 @@ Example row:
 
 ### Configurability
 
-Hardcoding the workflow steps in code and CLAUDE.md is too inflexible: making any changes would be tricky.
+Hardcoding the workflow steps in code and AGENTS.md is too inflexible: making any changes would be tricky.
 The opposite extreme of making all steps fully defined in configuration is not optimal either,
 as the configuration would become quite complex due to needing to represent multi-step scripts.
 Let's aim for a sweet spot where

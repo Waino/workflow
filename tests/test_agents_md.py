@@ -1,4 +1,4 @@
-"""Tests for workflow.claude_md and workflow.commands.claude_md."""
+"""Tests for workflow.agents_md and workflow.commands.agents_md."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-import workflow.commands.claude_md as cm_cmd
+import workflow.commands.agents_md as cm_cmd
 from workflow import main
-from workflow.claude_md import (
+from workflow.agents_md import (
     MARKER_BEGIN,
     MARKER_END,
     HashFileV1,
@@ -28,7 +28,7 @@ from workflow.claude_md import (
     replace_managed_section,
 )
 from workflow.config import WORKFLOW_ROOT_MARKER, WorkflowConfig, load_config
-from workflow.exceptions import ClaudeMdGenerationError
+from workflow.exceptions import AgentsMdGenerationError
 
 # ---------------------------------------------------------------------------
 # normalise
@@ -84,29 +84,29 @@ def test_find_managed_section_ignores_indented_markers() -> None:
 
 def test_find_managed_section_raises_on_duplicate_begin() -> None:
     text = f"{MARKER_BEGIN}\n{MARKER_BEGIN}\n{MARKER_END}\n"
-    with pytest.raises(ClaudeMdGenerationError, match="2 BEGIN"):
+    with pytest.raises(AgentsMdGenerationError, match="2 BEGIN"):
         find_managed_section(text)
 
 
 def test_find_managed_section_raises_on_reversed_markers() -> None:
     text = f"{MARKER_END}\n{MARKER_BEGIN}\n"
-    with pytest.raises(ClaudeMdGenerationError, match="END marker"):
+    with pytest.raises(AgentsMdGenerationError, match="END marker"):
         find_managed_section(text)
 
 
 def test_find_managed_section_raises_on_begin_only() -> None:
-    with pytest.raises(ClaudeMdGenerationError, match="1 BEGIN and 0 END"):
+    with pytest.raises(AgentsMdGenerationError, match="1 BEGIN and 0 END"):
         find_managed_section(f"{MARKER_BEGIN}\nbody\n")
 
 
 def test_find_managed_section_raises_on_end_only() -> None:
-    with pytest.raises(ClaudeMdGenerationError, match="0 BEGIN and 1 END"):
+    with pytest.raises(AgentsMdGenerationError, match="0 BEGIN and 1 END"):
         find_managed_section(f"body\n{MARKER_END}\n")
 
 
 def test_find_managed_section_raises_on_two_pairs() -> None:
     text = f"{MARKER_BEGIN}\na\n{MARKER_END}\n{MARKER_BEGIN}\nb\n{MARKER_END}\n"
-    with pytest.raises(ClaudeMdGenerationError, match="2 BEGIN and 2 END"):
+    with pytest.raises(AgentsMdGenerationError, match="2 BEGIN and 2 END"):
         find_managed_section(text)
 
 
@@ -177,17 +177,17 @@ def test_parse_hash_file_returns_model() -> None:
     result = parse_hash_file(f"v1 {sha} {cfg}\n")
     assert isinstance(result, HashFileV1)
     assert result.version == "v1"
-    assert result.claude_md_sha == sha
+    assert result.agents_md_sha == sha
     assert result.config_yaml_sha == cfg
 
 
 def test_parse_hash_file_raises_on_wrong_version() -> None:
-    with pytest.raises(ClaudeMdGenerationError, match="v1"):
+    with pytest.raises(AgentsMdGenerationError, match="v1"):
         parse_hash_file(f"v2 {'a' * 64} {'b' * 64}\n")
 
 
 def test_parse_hash_file_raises_on_malformed() -> None:
-    with pytest.raises(ClaudeMdGenerationError, match="3 space-separated tokens"):
+    with pytest.raises(AgentsMdGenerationError, match="3 space-separated tokens"):
         parse_hash_file("v1 onlytwo\n")
 
 
@@ -209,7 +209,7 @@ def test_render_workflow_section_contains_state_headings(tmp_path: Path) -> None
     assert "### done" in section
 
 
-_GOLDEN_PATH = Path(__file__).parent / "fixtures" / "claude_md_default_section.txt"
+_GOLDEN_PATH = Path(__file__).parent / "fixtures" / "agents_md_default_section.txt"
 
 
 def test_render_workflow_section_matches_golden(tmp_path: Path) -> None:
@@ -228,7 +228,7 @@ def test_render_workflow_section_is_byte_identical_across_calls(tmp_path: Path) 
 
 
 # ---------------------------------------------------------------------------
-# generate_and_write_claude_md
+# generate_and_write_agents_md
 # ---------------------------------------------------------------------------
 
 
@@ -236,21 +236,21 @@ def test_generate_and_write_writes_files(tmp_path: Path) -> None:
     config = _load_default_config(tmp_path)
     master = tmp_path / "master"
     master.mkdir()
-    cm_cmd.generate_and_write_claude_md(config)
-    claude_md = tmp_path / "master" / "CLAUDE.md"
-    assert claude_md.exists()
-    assert MARKER_BEGIN in claude_md.read_text(encoding="utf-8")
-    assert (tmp_path / ".claude_md_hash").exists()
+    cm_cmd.generate_and_write_agents_md(config)
+    agents_md = tmp_path / "master" / "AGENTS.md"
+    assert agents_md.exists()
+    assert MARKER_BEGIN in agents_md.read_text(encoding="utf-8")
+    assert (tmp_path / ".agents_md_hash").exists()
 
 
 def test_generate_and_write_is_idempotent(tmp_path: Path) -> None:
     config = _load_default_config(tmp_path)
     master = tmp_path / "master"
     master.mkdir()
-    cm_cmd.generate_and_write_claude_md(config)
-    first_content = (tmp_path / "master" / "CLAUDE.md").read_text(encoding="utf-8")
-    cm_cmd.generate_and_write_claude_md(config)
-    second_content = (tmp_path / "master" / "CLAUDE.md").read_text(encoding="utf-8")
+    cm_cmd.generate_and_write_agents_md(config)
+    first_content = (tmp_path / "master" / "AGENTS.md").read_text(encoding="utf-8")
+    cm_cmd.generate_and_write_agents_md(config)
+    second_content = (tmp_path / "master" / "AGENTS.md").read_text(encoding="utf-8")
     assert first_content == second_content
 
 
@@ -259,21 +259,21 @@ def test_generate_and_write_raises_on_malformed_markers(tmp_path: Path) -> None:
     master = tmp_path / "master"
     master.mkdir()
     bad_text = f"{MARKER_END}\n{MARKER_BEGIN}\n"  # reversed
-    (master / "CLAUDE.md").write_text(bad_text, encoding="utf-8")
-    with pytest.raises(ClaudeMdGenerationError):
-        cm_cmd.generate_and_write_claude_md(config)
+    (master / "AGENTS.md").write_text(bad_text, encoding="utf-8")
+    with pytest.raises(AgentsMdGenerationError):
+        cm_cmd.generate_and_write_agents_md(config)
 
 
-def test_generate_and_write_claude_md_is_world_readable(tmp_path: Path) -> None:
+def test_generate_and_write_agents_md_is_world_readable(tmp_path: Path) -> None:
     config = _load_default_config(tmp_path)
     (tmp_path / "master").mkdir()
-    cm_cmd.generate_and_write_claude_md(config)
-    mode = (tmp_path / "master" / "CLAUDE.md").stat().st_mode & 0o777
+    cm_cmd.generate_and_write_agents_md(config)
+    mode = (tmp_path / "master" / "AGENTS.md").stat().st_mode & 0o777
     assert mode == 0o644
 
 
 # ---------------------------------------------------------------------------
-# CLI: workflow claude_md
+# CLI: workflow agents_md
 # ---------------------------------------------------------------------------
 
 
@@ -285,76 +285,76 @@ def _make_project(tmp_path: Path) -> Path:
     return tmp_path / "config.yaml"
 
 
-def test_claude_md_command_writes_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agents_md_command_writes_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)
 
-    result = CliRunner().invoke(main, ["--config", str(config_path), "claude_md"])
+    result = CliRunner().invoke(main, ["--config", str(config_path), "agents_md"])
 
     assert result.exit_code == 0
-    claude_md = tmp_path / "master" / "CLAUDE.md"
-    assert claude_md.exists()
-    assert "CLAUDE.md written." in result.output
+    agents_md = tmp_path / "master" / "AGENTS.md"
+    assert agents_md.exists()
+    assert "AGENTS.md written." in result.output
     assert "git diff" in result.output
 
 
-def test_claude_md_command_no_git_invocations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agents_md_command_no_git_invocations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)
 
     with patch.object(subprocess, "run") as mock_run:
-        CliRunner().invoke(main, ["--config", str(config_path), "claude_md"])
-        # No git commands should be run by the standalone claude_md command
+        CliRunner().invoke(main, ["--config", str(config_path), "agents_md"])
+        # No git commands should be run by the standalone agents_md command
         for call in mock_run.call_args_list:
             args = call.args[0] if call.args else []
             assert not (args and args[0] == "git"), f"Unexpected git call: {args}"
 
 
-def test_claude_md_command_idempotent_prints_up_to_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agents_md_command_idempotent_prints_up_to_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
-    runner.invoke(main, ["--config", str(config_path), "claude_md"])
+    runner.invoke(main, ["--config", str(config_path), "agents_md"])
     # Second run should be idempotent
-    result = runner.invoke(main, ["--config", str(config_path), "claude_md"])
+    result = runner.invoke(main, ["--config", str(config_path), "agents_md"])
     assert result.exit_code == 0
     assert "up to date" in result.output
 
 
-def test_claude_md_check_exits_one_when_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agents_md_check_exits_one_when_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
-    # Write a stale CLAUDE.md without markers
-    (tmp_path / "master" / "CLAUDE.md").write_text("# Stale content\n", encoding="utf-8")
+    # Write a stale AGENTS.md without markers
+    (tmp_path / "master" / "AGENTS.md").write_text("# Stale content\n", encoding="utf-8")
 
-    result = runner.invoke(main, ["--config", str(config_path), "claude_md", "--check"])
+    result = runner.invoke(main, ["--config", str(config_path), "agents_md", "--check"])
     assert result.exit_code == 1
 
 
-def test_claude_md_check_exits_zero_when_current(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agents_md_check_exits_zero_when_current(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
     # Generate first to bring into sync
-    runner.invoke(main, ["--config", str(config_path), "claude_md"])
+    runner.invoke(main, ["--config", str(config_path), "agents_md"])
 
-    result = runner.invoke(main, ["--config", str(config_path), "claude_md", "--check"])
+    result = runner.invoke(main, ["--config", str(config_path), "agents_md", "--check"])
     assert result.exit_code == 0
 
 
-def test_claude_md_command_reports_malformed_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agents_md_command_reports_malformed_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)
-    # Reversed markers — find_managed_section raises ClaudeMdGenerationError.
-    (tmp_path / "master" / "CLAUDE.md").write_text(f"{MARKER_END}\n{MARKER_BEGIN}\n", encoding="utf-8")
+    # Reversed markers — find_managed_section raises AgentsMdGenerationError.
+    (tmp_path / "master" / "AGENTS.md").write_text(f"{MARKER_END}\n{MARKER_BEGIN}\n", encoding="utf-8")
 
-    result = CliRunner().invoke(main, ["--config", str(config_path), "claude_md"])
+    result = CliRunner().invoke(main, ["--config", str(config_path), "agents_md"])
     assert result.exit_code == 1
     assert "Error:" in result.output
 
 
-def test_claude_md_command_outside_project_exits_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agents_md_command_outside_project_exits_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = tmp_path / "config.yaml"
     config = {
         "agents": [{"name": "planner", "model": "test"}],
@@ -362,7 +362,7 @@ def test_claude_md_command_outside_project_exits_nonzero(tmp_path: Path, monkeyp
     }
     config_path.write_text(yaml.dump(config))
     monkeypatch.chdir(tmp_path)
-    result = CliRunner().invoke(main, ["--config", str(config_path), "claude_md"])
+    result = CliRunner().invoke(main, ["--config", str(config_path), "agents_md"])
     assert result.exit_code != 0
 
 

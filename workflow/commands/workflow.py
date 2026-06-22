@@ -15,12 +15,12 @@ import click
 import jinja2
 
 from workflow.audit import write_audit_log
-from workflow.commands.claude_md import generate_and_write_claude_md
+from workflow.commands.agents_md import generate_and_write_agents_md
 from workflow.config import WORKFLOW_ROOT_MARKER, AgentConfig, WorkflowConfig
 from workflow.config import ScriptCommand as _ScriptCommand
 from workflow.exceptions import (
+    AgentsMdGenerationError,
     AmbiguousPlanError,
-    ClaudeMdGenerationError,
     PlanCollisionError,
     PlanNotFoundError,
     WorkflowError,
@@ -169,21 +169,21 @@ def init(ctx: click.Context) -> None:
         if not (project_dir / RepoName.master / ".git").is_dir():
             msg = f"{project_dir / RepoName.master} is not a git repository (no .git/ found)."
             raise WorkflowError(msg)
-        # Generate CLAUDE.md into master before the bare clone so all agent clones inherit it.
+        # Generate AGENTS.md into master before the bare clone so all agent clones inherit it.
         if not dry_run:
             try:
-                generate_and_write_claude_md(config.model_copy(update={"project_dir": project_dir}))
+                generate_and_write_agents_md(config.model_copy(update={"project_dir": project_dir}))
                 master_repo_path = project_dir / RepoName.master
-                git_add(master_repo_path, Path("CLAUDE.md"), dry_run=False)
+                git_add(master_repo_path, Path("AGENTS.md"), dry_run=False)
                 # no_verify: at init time the pre-commit hook would run pytest before the
                 # workflow package is even installed in master; bypassing is required here.
                 git_commit_if_changed(
                     master_repo_path,
-                    "chore: generate initial CLAUDE.md",
+                    "chore: generate initial AGENTS.md",
                     dry_run=False,
                     no_verify=True,
                 )
-            except ClaudeMdGenerationError as exc:
+            except AgentsMdGenerationError as exc:
                 raise WorkflowError(str(exc)) from exc
         run_command(["git", "clone", "--bare", RepoName.master, "bare"], cwd=project_dir, dry_run=dry_run)
         for agent in config.agents:

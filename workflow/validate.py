@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel
 
-from workflow.claude_md import parse_hash_file
-from workflow.exceptions import ClaudeMdGenerationError, WorkflowError
+from workflow.agents_md import parse_hash_file
+from workflow.exceptions import AgentsMdGenerationError, WorkflowError
 from workflow.git_helpers import git_diff_branch, git_fetch
 from workflow.names import RepoName
 
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from workflow.config import WorkflowConfig
     from workflow.models import Plan
 
-CHECK_NAMES: list[str] = ["file-scope", "noqa-nosec", "git-hooks", "claude-md"]
+CHECK_NAMES: list[str] = ["file-scope", "noqa-nosec", "git-hooks", "agents-md"]
 
 # ---------------------------------------------------------------------------
 # CheckResult model
@@ -96,7 +96,7 @@ def validate(
         _check_file_scope(changed_files, target_repo),
         _check_noqa_nosec(full_diff),
         _check_git_hooks(repo_path, config),
-        _check_claude_md(repo_path, project_dir, changed_files),
+        _check_agents_md(repo_path, project_dir, changed_files),
     ]
 
 
@@ -192,40 +192,40 @@ def _check_git_hooks(repo_path: Path, config: WorkflowConfig) -> CheckResult:
     return CheckResult(check_name="git-hooks", status="pass", message="Git hooks correctly configured")
 
 
-def _check_claude_md(repo_path: Path, project_dir: Path, changed_files: list[str]) -> CheckResult:
-    hash_file = project_dir / ".claude_md_hash"
+def _check_agents_md(repo_path: Path, project_dir: Path, changed_files: list[str]) -> CheckResult:
+    hash_file = project_dir / ".agents_md_hash"
     if not hash_file.exists():
         msg = f"Trusted hash file not found: {hash_file}"
         raise WorkflowError(msg)
 
-    claude_md = repo_path / "CLAUDE.md"
-    if not claude_md.exists():
-        return CheckResult(check_name="claude-md", status="fail", message="CLAUDE.md not found in repo")
+    agents_md = repo_path / "AGENTS.md"
+    if not agents_md.exists():
+        return CheckResult(check_name="agents-md", status="fail", message="AGENTS.md not found in repo")
 
     try:
         trusted = parse_hash_file(hash_file.read_text(encoding="utf-8"))
-    except ClaudeMdGenerationError as exc:
-        return CheckResult(check_name="claude-md", status="fail", message=f"Hash file invalid: {exc}")
+    except AgentsMdGenerationError as exc:
+        return CheckResult(check_name="agents-md", status="fail", message=f"Hash file invalid: {exc}")
 
-    actual_hash = hashlib.sha256(claude_md.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
-    claude_modified = "CLAUDE.md" in changed_files
+    actual_hash = hashlib.sha256(agents_md.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
+    agents_md_modified = "AGENTS.md" in changed_files
 
-    if actual_hash != trusted.claude_md_sha:
+    if actual_hash != trusted.agents_md_sha:
         config_yaml = project_dir / "config.yaml"
         config_yaml_sha = hashlib.sha256(config_yaml.read_bytes()).hexdigest() if config_yaml.exists() else ""
         if config_yaml_sha != trusted.config_yaml_sha:
             message = (
-                "CLAUDE.md hash does not match trusted value; "
-                "config.yaml has changed since CLAUDE.md was last generated — run `workflow claude_md`."
+                "AGENTS.md hash does not match trusted value; "
+                "config.yaml has changed since AGENTS.md was last generated — run `workflow agents_md`."
             )
         else:
-            message = "CLAUDE.md hash does not match trusted value"
-        return CheckResult(check_name="claude-md", status="fail", message=message)
+            message = "AGENTS.md hash does not match trusted value"
+        return CheckResult(check_name="agents-md", status="fail", message=message)
 
-    if claude_modified:
+    if agents_md_modified:
         return CheckResult(
-            check_name="claude-md",
+            check_name="agents-md",
             status="fail",
-            message="CLAUDE.md was modified on this branch",
+            message="AGENTS.md was modified on this branch",
         )
-    return CheckResult(check_name="claude-md", status="pass", message="CLAUDE.md integrity verified")
+    return CheckResult(check_name="agents-md", status="pass", message="AGENTS.md integrity verified")

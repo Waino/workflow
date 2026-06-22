@@ -54,7 +54,7 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
     monkeypatch.chdir(tmp_path)
     # Single manager mock so we can assert call ordering across all init steps.
     manager = MagicMock()
-    monkeypatch.setattr(wc, "generate_and_write_claude_md", manager.generate_and_write_claude_md)
+    monkeypatch.setattr(wc, "generate_and_write_agents_md", manager.generate_and_write_agents_md)
     monkeypatch.setattr(wc, "git_add", manager.git_add)
     monkeypatch.setattr(wc, "git_commit_if_changed", manager.git_commit_if_changed)
     monkeypatch.setattr(wc, "run_command", manager.run_command)
@@ -127,9 +127,9 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
     ]
     assert (tmp_path / WORKFLOW_ROOT_MARKER).exists()
 
-    # CLAUDE.md must be generated, added, and committed before the bare clone.
+    # AGENTS.md must be generated, added, and committed before the bare clone.
     method_names = [name for name, _, _ in manager.method_calls]
-    gen_idx = method_names.index("generate_and_write_claude_md")
+    gen_idx = method_names.index("generate_and_write_agents_md")
     add_idx = method_names.index("git_add")
     commit_idx = method_names.index("git_commit_if_changed")
     bare_idx = next(
@@ -140,12 +140,12 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
     assert gen_idx < add_idx < commit_idx < bare_idx
 
 
-def test_init_succeeds_when_claude_md_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Init must continue past the CLAUDE.md commit step when there's nothing to commit."""
+def test_init_succeeds_when_agents_md_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Init must continue past the AGENTS.md commit step when there's nothing to commit."""
     config_path = _make_project(tmp_path, marker=False)
     (tmp_path / "master" / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(wc, "generate_and_write_claude_md", MagicMock())
+    monkeypatch.setattr(wc, "generate_and_write_agents_md", MagicMock())
     monkeypatch.setattr(wc, "git_add", MagicMock())
     monkeypatch.setattr(wc, "git_commit_if_changed", MagicMock(return_value=CommitResult.NOTHING_TO_COMMIT))
     monkeypatch.setattr(wc, "run_command", MagicMock())
