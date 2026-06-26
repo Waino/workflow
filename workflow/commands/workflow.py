@@ -126,7 +126,7 @@ def _run_pre_commit_in_sandbox(config: WorkflowConfig, repo_name: str, *, dry_ru
         raise WorkflowError(msg)
     project_name = config.project_name or _require_project_dir(config).name
     container_name = f"pi-{project_name}-{repo_name}"
-    repo_path = shlex.quote(f"/home/auggie/projects/{project_name}")
+    repo_path = shlex.quote(f"/home/auggie/projects/{project_name}/{repo_name}")
     run_command(
         ["docker", "exec", container_name, "bash", "-lc", f"cd {repo_path} && ./.git-pre-commit-hook"],
         dry_run=dry_run,
@@ -168,6 +168,9 @@ def init(ctx: click.Context) -> None:
     try:
         if not (project_dir / RepoName.master / ".git").is_dir():
             msg = f"{project_dir / RepoName.master} is not a git repository (no .git/ found)."
+            raise WorkflowError(msg)
+        if not (project_dir / RepoName.master / ".git-pre-commit-hook").is_file():
+            msg = f"{project_dir / RepoName.master / '.git-pre-commit-hook'} must exist."
             raise WorkflowError(msg)
         # Generate AGENTS.md into master before the bare clone so all agent clones inherit it.
         if not dry_run:
@@ -559,7 +562,10 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force: 
             no_verify=True,
         )
         git_push(project_dir / target_repo, dry_run=dry_run)
+        branch = git_current_branch(project_dir / target_repo)
         git_fetch(project_dir / RepoName.reviewer, dry_run=dry_run)
+        git_checkout(project_dir / RepoName.reviewer, branch, create=False, dry_run=dry_run)
+        git_pull(project_dir / RepoName.reviewer, dry_run=dry_run)
         _write_script_audit_log(config, "check", dry_run=dry_run, input_plan=new_plan.name)
         _print_command_reminder(config, PlanState.IMPLEMENTING, "check", new_plan.name)
         if not dry_run:

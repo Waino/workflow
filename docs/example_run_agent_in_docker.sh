@@ -166,9 +166,9 @@ elif [[ "$VENV_MODE" == true ]]; then
         --env UV_VENV_CLEAR=1 \
         --env UV_LINK_MODE=copy \
         "$CONTAINER" \
-        bash -c "uv venv --seed && source .venv/bin/activate && uv pip install -e ."
+        bash -c "source ~/.bashrc && uv venv --seed && source .venv/bin/activate && uv pip install -e ."
 else
-    EXEC_CMD=(docker exec -it --user auggie --workdir "/home/auggie/projects/${PROJECT}/${AGENT}" "$CONTAINER" pi)
+    EXEC_CMD=(docker exec -it --user auggie --workdir "/home/auggie/projects/${PROJECT}/${AGENT}" "$CONTAINER" bash -c "source ~/.bashrc && pi")
     [[ -n "$MODEL" ]] && EXEC_CMD+=(--model "$MODEL")
     exec "${EXEC_CMD[@]}"
 fi

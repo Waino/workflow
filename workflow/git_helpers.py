@@ -220,13 +220,22 @@ def transfer_branch_to_main(
     2. ``git pull`` in *master_repo*
     3. ``git merge <branch>`` in *master_repo*
     4. ``git push origin`` in *master_repo*
+    5. ``git checkout main`` in *source_repo*
+    2. ``git pull`` in *source_repo*
     """
     branch = git_current_branch(source_repo)
+    master_branch = git_current_branch(master_repo)
     if branch == "main":
         msg = "transfer_branch_to_main: source_repo is on 'main'; expected a feature branch"
         raise WorkflowError(msg)
+    if master_branch != "main":
+        msg = "transfer_branch_to_main: master_repo is not on 'main'; won't clobber a feature branch"
+        raise WorkflowError(msg)
+
     git_push(source_repo, dry_run=dry_run)
     git_pull(master_repo, dry_run=dry_run)
     # Merge via the remote-tracking ref so the branch need not exist locally.
     git_merge(master_repo, f"origin/{branch}", dry_run=dry_run)
     git_push(master_repo, dry_run=dry_run)
+    git_checkout(source_repo, "main", create=False, dry_run=dry_run)
+    git_pull(source_repo, dry_run=dry_run)

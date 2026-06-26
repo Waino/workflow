@@ -142,7 +142,7 @@ states:
         description: Run verification checks and hand off.
         script: check
         transition: checking
-        reminder: review
+        reminder: manual review, then pr
 
   checking:
     description: Implementation complete, review in progress.
@@ -157,10 +157,12 @@ states:
         prompt: |
           Perform a thorough code review of the changes on the {{ branch }} branch.
           The plan is at {{ plan.path }}.
-          {%- if plan.sequence_number|length > 1 %}The plan is a result of subdivision:
+          {%- if plan.sequence_number|length > 1 %}
+          The plan is a result of subdivision:
           also read the parent plan to ensure that changes align with the big picture.{%- endif %}
           Write a report into docs/plans/reviews/pr/{{ plan.name }}_{{ commit }}.md.
           Commit your changes. Do not modify the code.
+        reminder: fix
       - command_type: manual
         name: adjust
         description: Human edits the review or code directly.
@@ -169,6 +171,7 @@ states:
         description: Fix issues from the most recent review.
         prompt: |
           Fix the issues identified in the most recent review `docs/plans/reviews/pr/{{ plan.name }}_*.md`.
+        reminder: validate
       - command_type: script
         name: validate
         description: Run verification checks.
