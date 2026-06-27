@@ -34,7 +34,7 @@ class TestPlan:
             sequence_number=[2],
             slug="pydantic_models",
             state=PlanState.PLANNING,
-            path=Path("master/docs/plans/planning/002_pydantic_models.md"),
+            path=Path("canon/docs/plans/planning/002_pydantic_models.md"),
         )
         assert plan.sequence_number_str == "002"
         assert plan.name == "002_pydantic_models"
@@ -64,7 +64,7 @@ class TestPlan:
                 sequence_number=[],
                 slug="idea",
                 state=PlanState.INTENT,
-                path=Path("master/docs/plans/intent/001_idea.md"),
+                path=Path("canon/docs/plans/intent/001_idea.md"),
             )
 
     def test_plan_rejects_review_state(self) -> None:

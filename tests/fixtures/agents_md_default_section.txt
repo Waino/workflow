@@ -18,7 +18,7 @@ Inbound: (none)
 Outbound: plan -> planning [prompt], subdivide -> planning [prompt]
 Commands:
 - [script] new — Create a new intent file.
-- [script] push — Push pending content to master.
+- [script] push — Push pending content to canon.
 - [prompt] ask — Read the plan; ask clarifying questions.
 - [manual] answer — Human answers questions in chat.
 - [prompt] critique — Critique the plan.
@@ -42,7 +42,7 @@ Inbound: todo from planning [script]
 Outbound: implement -> implementing [script]
 Commands:
 - [script] implement -> implementing — Start implementation.
-- [script] push — Push pending content to master.
+- [script] push — Push pending content to canon.
 
 ### implementing (agent: builder)
 Plans under active implementation.

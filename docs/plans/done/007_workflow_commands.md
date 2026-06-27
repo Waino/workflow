@@ -39,7 +39,7 @@ Implement the script commands that perform workflow state transitions and git op
 
 ## workflow init
 
-- Create a bare clone of the master repo.
+- Create a bare clone of the canon repo.
 - Create one clone per agent (from config: default planner, builder, reviewer).
 - Directory structure:
   `{project_dir}/bare/`, `{project_dir}/planner/`, `{project_dir}/builder/`, `{project_dir}/reviewer/`
@@ -52,7 +52,7 @@ Implement the script commands that perform workflow state transitions and git op
 @click.pass_context
 def init(ctx: click.Context) -> None:
     """Initialize agent repositories."""
-    # git clone --bare master/ bare/
+    # git clone --bare canon/ bare/
     # git clone bare/ planner/  (for each agent)
 ```
 
@@ -95,9 +95,9 @@ Dry-run mode is essential for development.
 def todo(ctx: click.Context, plan_path: str) -> None:
     """Approve a plan for implementation."""
     # 1. Resolve plan (must be in state: planning, repo: planner)
-    # 2. transfer_branch_to_main(planner → bare → master, merge to main)
+    # 2. transfer_branch_to_main(planner → bare → canon, merge to main)
     # 3. transition_plan(plan, PlanState.TODO)
-    # 4. git_commit + git_push (master → bare)
+    # 4. git_commit + git_push (canon → bare)
     # 5. Print reminder: "next step is: workflow implement {plan_name}".
     #    Note that the reminder should be dynamic using the steps defined in the config.
 ```
@@ -110,10 +110,10 @@ def todo(ctx: click.Context, plan_path: str) -> None:
 @click.pass_context
 def implement(ctx: click.Context, plan_path: str) -> None:
     """Schedule a plan for implementation."""
-    # 1. Resolve plan (must be in state: planning or todo, repo: master)
+    # 1. Resolve plan (must be in state: planning or todo, repo: canon)
     # 2. If planning: do the same push-pull-merge as todo first
     # 3. transition_plan(plan, PlanState.IMPLEMENTING)
-    # 4. git_commit + git_push (master → bare)
+    # 4. git_commit + git_push (canon → bare)
     # 5. Print reminder, pause briefly
     # 6. TODO: switch to the builder's tmux window.
     #    Do not implement the window switch in this plan.
@@ -147,10 +147,10 @@ def accept(ctx: click.Context, plan_path: str) -> None:
     """Accept implementation and merge to main."""
     # 1. Resolve plan (must be in state: checking, repo: reviewer)
     # 2. git_push(reviewer → bare)
-    # 3. git_pull(master)
+    # 3. git_pull(canon)
     # 4. transition_plan(plan, PlanState.DONE)
-    # 5. git_merge + git_commit (in master)
-    # 6. git_push(master → bare)
+    # 5. git_merge + git_commit (in canon)
+    # 6. git_push(canon → bare)
 ```
 
 ## workflow reject
@@ -161,7 +161,7 @@ def accept(ctx: click.Context, plan_path: str) -> None:
 @click.pass_context
 def reject(ctx: click.Context, plan_path: str) -> None:
     """Reject a plan."""
-    # 1. Resolve plan (default repo: master; allow override via --target-repo)
+    # 1. Resolve plan (default repo: canon; allow override via --target-repo)
     # 2. transition_plan(plan, PlanState.REJECTED)
     # 3. git_commit
 ```

@@ -47,7 +47,7 @@ _TMUX_HINT = "Run 'workflow start' to create the tmux session."
 _REPO_FOR_PROMPT_STATE: dict[PlanState, RepoName] = {
     PlanState.INTENT: RepoName.planner,
     PlanState.PLANNING: RepoName.planner,
-    PlanState.TODO: RepoName.master,
+    PlanState.TODO: RepoName.canon,
     PlanState.IMPLEMENTING: RepoName.builder,
     PlanState.CHECKING: RepoName.reviewer,
     PlanState.REVIEW: RepoName.reviewer,

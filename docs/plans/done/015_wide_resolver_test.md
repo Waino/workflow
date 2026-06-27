@@ -48,7 +48,7 @@ this table without re-reading `plan_resolver.py`:
 | subcommand — script | agent (or `repo_override`); also `also_valid_in_states`' agents | every state of every occurrence, plus `transition`, plus `also_valid_in_states` |
 | audit (latest matching entry, by `build_audit_command_repo_state`) | recorded repo (strict) | recorded state, **widened** to every later state in `_STATE_PROGRESSION` |
 | git history (newest `%ct` across clones) | silent unless `git_provides_repo=True` | state of the chosen commit's plan path |
-| tmux | active window's repo (+ master) | (nothing) |
+| tmux | active window's repo (+ canon) | (nothing) |
 
 ## Fixture model
 
@@ -93,17 +93,17 @@ has them):
 
 | # | Plan | On-disk | Audit (most recent) | Command / fuzzy input | Expected |
 |---|------|---------|---------------------|-----------------------|----------|
-| 1 | `intent/001_idea` | master, planner, builder, reviewer | `new`, `push` (no audit mapping → silent) | `ask` / `"001"` | `AmbiguousPlanError` (planner+builder both have it, both `intent`) |
+| 1 | `intent/001_idea` | canon, planner, builder, reviewer | `new`, `push` (no audit mapping → silent) | `ask` / `"001"` | `AmbiguousPlanError` (planner+builder both have it, both `intent`) |
 | 1b | same | same | same | `ask` / `"planner/001"` | (planner, intent) — repo hint breaks the tie |
 | 2 | same | same | same | `critique` / `"001"` | (planner, intent) |
 | 3 | same | same | same | `plan` / `"001"` | (planner, intent) |
 | 4 | same | same | same | `subdivide` / `"001"` | (planner, intent) |
-| 5 | `rejected/002_bad_idea` | all 4 | `reject` → (master, rejected) | `ask` | `SourcesDisagreeError` (audit master, ask planner+builder) |
-| 6 | `done/003_early` | all 4 | `accept` → (master, done) | `ask` | `SourcesDisagreeError` |
+| 5 | `rejected/002_bad_idea` | all 4 | `reject` → (canon, rejected) | `ask` | `SourcesDisagreeError` (audit canon, ask planner+builder) |
+| 6 | `done/003_early` | all 4 | `accept` → (canon, done) | `ask` | `SourcesDisagreeError` |
 | 7 | `checking/004_flawed` | builder, reviewer (feat branch) | `check` → (reviewer, checking) | `ask` | `SourcesDisagreeError` |
 | 8 | same | same | same | `pr` | (reviewer, checking) |
 | 9 | same | same | same | `fix` | (reviewer, checking) |
-| 10 | `todo/005_next_in_line` | master | `todo` → (master, todo) | `ask` | `SourcesDisagreeError` |
+| 10 | `todo/005_next_in_line` | canon | `todo` → (canon, todo) | `ask` | `SourcesDisagreeError` |
 | 11 | same | same | same | `critique` | `SourcesDisagreeError` |
 | 12 | `planning/006_draft` | planner | `plan` → (planner, planning) | `ask` | (planner, planning) |
 | 13 | same | same | same | `critique` | (planner, planning) |
@@ -113,13 +113,13 @@ WIP plans — exist in one repo, optional stale copies in others:
 
 | # | Plan | On-disk | Audit (most recent) | Command / git_provides_repo | Expected |
 |---|------|---------|---------------------|-----------------------------|----------|
-| 15 | `intent/007_newly_created` | master (committed newer); planner (committed older, stale copy at intent) | (none — `new` has no mapping) | `push` / `True` | (master, intent) — git ties repos to master (newer `%ct`); subcommand's `repo_override=master` confirms |
+| 15 | `intent/007_newly_created` | canon (committed newer); planner (committed older, stale copy at intent) | (none — `new` has no mapping) | `push` / `True` | (canon, intent) — git ties repos to canon (newer `%ct`); subcommand's `repo_override=canon` confirms |
 | 16 | `planning/008_newly_planned` | planner (committed on plan/008 branch) | `plan` → (planner, planning) | `critique` | (planner, planning) |
-| 17 | `todo/009_not_pulled` | master (committed on main) | `todo` → (master, todo) | `implement` | (master, todo) — exercises `also_valid_in_states` |
-| 18 | `implementing/010_active_build` | builder; stale `master/implementing/010` from `implement` propagation | `implement` → (builder, implementing) | `build` | (builder, implementing) |
+| 17 | `todo/009_not_pulled` | canon (committed on main) | `todo` → (canon, todo) | `implement` | (canon, todo) — exercises `also_valid_in_states` |
+| 18 | `implementing/010_active_build` | builder; stale `canon/implementing/010` from `implement` propagation | `implement` → (builder, implementing) | `build` | (builder, implementing) |
 | 19 | `checking/011_under_review` | reviewer (feat branch); stale builder/checking/011 | `check` → (reviewer, checking) | `pr` | (reviewer, checking) |
-| 20 | `done/012_merged_without_review` | master | `accept` → (master, done) | `pr` | `SourcesDisagreeError` (audit master, pr reviewer) |
-| 21 | `rejected/013_another_bad_idea` | master | `reject` → (master, rejected) | `ask` | `SourcesDisagreeError` |
+| 20 | `done/012_merged_without_review` | canon | `accept` → (canon, done) | `pr` | `SourcesDisagreeError` (audit canon, pr reviewer) |
+| 21 | `rejected/013_another_bad_idea` | canon | `reject` → (canon, rejected) | `ask` | `SourcesDisagreeError` |
 
 Safety-net widening (new row beyond user's spec, per critique §2):
 

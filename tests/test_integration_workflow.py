@@ -55,17 +55,17 @@ def _make_integration_config(tmp_path: Path) -> Path:
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: PLR0915
     """Full happy path: init -> planner edit -> todo -> implement -> builder edit -> check -> accept."""
-    # Step 1: create master/ git repo with one initial commit on 'main'
-    master = tmp_path / "master"
-    master.mkdir()
-    _git(["init", str(master)])
-    _git(["config", "user.email", "test@example.com"], cwd=master)
-    _git(["config", "user.name", "Test"], cwd=master)
+    # Step 1: create canon/ git repo with one initial commit on 'main'
+    canon = tmp_path / "canon"
+    canon.mkdir()
+    _git(["init", str(canon)])
+    _git(["config", "user.email", "test@example.com"], cwd=canon)
+    _git(["config", "user.name", "Test"], cwd=canon)
     # Ensure we are on 'main'
-    _git(["checkout", "-b", "main"], cwd=master, check=False)
-    (master / "README.md").write_text("initial\n", encoding="utf-8")
-    _git(["add", "."], cwd=master)
-    _git(["commit", "-m", "initial commit"], cwd=master)
+    _git(["checkout", "-b", "main"], cwd=canon, check=False)
+    (canon / "README.md").write_text("initial\n", encoding="utf-8")
+    _git(["add", "."], cwd=canon)
+    _git(["commit", "-m", "initial commit"], cwd=canon)
 
     config_path = _make_integration_config(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -115,11 +115,11 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
     result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
     assert result.exit_code == 0, result.output
 
-    # AGENTS.md must exist in master, contain both markers, and be reachable
+    # AGENTS.md must exist in canon, contain both markers, and be reachable
     # via the bare clone — proving the "commit before bare clone" ordering.
-    master_agents_md = master / "AGENTS.md"
-    assert master_agents_md.exists()
-    agents_md_text = master_agents_md.read_text(encoding="utf-8")
+    canon_agents_md = canon / "AGENTS.md"
+    assert canon_agents_md.exists()
+    agents_md_text = canon_agents_md.read_text(encoding="utf-8")
     assert "<!-- WORKFLOW BEGIN -->" in agents_md_text
     assert "<!-- WORKFLOW END -->" in agents_md_text
     bare_blob_type = _git(["cat-file", "-t", "refs/heads/main:AGENTS.md"], cwd=tmp_path / "bare").stdout
@@ -175,8 +175,8 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
     result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005_foo"])
     assert result.exit_code == 0, result.output
 
-    # Step 10: assert plan is now in master/docs/plans/done/
-    assert (master / "docs" / "plans" / "done" / "005_foo.md").exists()
+    # Step 10: assert plan is now in canon/docs/plans/done/
+    assert (canon / "docs" / "plans" / "done" / "005_foo.md").exists()
 
     # Step 11: assert audit log has all expected entries in order
     entries = read_audit_log(tmp_path)
@@ -196,15 +196,15 @@ def test_check_agents_md_detects_branch_modification(tmp_path: Path, monkeypatch
     After init, _check_agents_md must fail when AGENTS.md is modified on a feature
     branch and pass once reverted.
     """
-    master = tmp_path / "master"
-    master.mkdir()
-    _git(["init", str(master)])
-    _git(["config", "user.email", "test@example.com"], cwd=master)
-    _git(["config", "user.name", "Test"], cwd=master)
-    _git(["checkout", "-b", "main"], cwd=master, check=False)
-    (master / "README.md").write_text("initial\n", encoding="utf-8")
-    _git(["add", "."], cwd=master)
-    _git(["commit", "-m", "initial commit"], cwd=master)
+    canon = tmp_path / "canon"
+    canon.mkdir()
+    _git(["init", str(canon)])
+    _git(["config", "user.email", "test@example.com"], cwd=canon)
+    _git(["config", "user.name", "Test"], cwd=canon)
+    _git(["checkout", "-b", "main"], cwd=canon, check=False)
+    (canon / "README.md").write_text("initial\n", encoding="utf-8")
+    _git(["add", "."], cwd=canon)
+    _git(["commit", "-m", "initial commit"], cwd=canon)
 
     config_path = _make_integration_config(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -250,7 +250,7 @@ def test_check_agents_md_detects_branch_modification(tmp_path: Path, monkeypatch
     assert result_fail.status == "fail"
     assert "hash does not match" in result_fail.message
 
-    # Revert and assert the check passes (same content as master, file not in changed_files).
+    # Revert and assert the check passes (same content as canon, file not in changed_files).
     (builder / "AGENTS.md").write_text(pristine, encoding="utf-8")
     result_pass = _check_agents_md(builder, tmp_path, [])
     assert result_pass.status == "pass"

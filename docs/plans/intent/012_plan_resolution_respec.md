@@ -67,7 +67,7 @@ TODO: Check each usage of "plan", and change to "ticket" when appropriate.
   state-sets, independently (not as intersection over (repo, state) tuples). Sources that are silent on a
   dimension contribute no constraint on that dimension.
 - Tmux only specifies an agent (window name). To avoid unnecessary empty intersections, tmux's repo
-  constraint is `{<active_agent>, "master"}` — the master repo has no pane of its own and is implicitly
+  constraint is `{<active_agent>, "canon"}` — the canon repo has no pane of its own and is implicitly
   always reachable from the command pane.
 - An explicit repo hint in the fuzzy path always wins, even if it conflicts with the active tmux pane.
   The resolution target also determines the dispatch target for prompt commands. Script commands may have
@@ -122,7 +122,7 @@ Parsing per commit:
 - A pure `D` (delete) would mean the file was removed entirely, which doesn't occur in the workflow —
   treat as "no match" defensively.
 
-Across repos: run the command in each of master, planner, builder, reviewer (bare is redundant as long
+Across repos: run the command in each of canon, planner, builder, reviewer (bare is redundant as long
 as the clones' remote-tracking refs are fresh — script commands keep them fresh). Pick the entry with
 the highest `%ct`; the winning clone gives the repo, the parsed path gives the state.
 
@@ -202,7 +202,7 @@ The states in which the subcommands are defined comes from the config, and is re
 
 - Pros
     - Never omitted.
-    - Some subcommands have hard contraints: e.g. prompts can only be sent to agents, not to master.
+    - Some subcommands have hard contraints: e.g. prompts can only be sent to agents, not to canon.
 - Cons
     - May leave ambiguity.
     - Workflow may be adjusted on the fly: the user should specify an unambiguous path when doing this.
@@ -281,23 +281,23 @@ The sequence number originates from a `plan` command, so there is an intent with
 - The original command is `workflow ask 005`.
 - The path does not specify repo, state, or slug. The path is silent.
 - The file system. The following files exist:
-    - `master/docs/plans/intent/005_quux.md`
-    - `master/docs/plans/planning/005_quux.md`
+    - `canon/docs/plans/intent/005_quux.md`
+    - `canon/docs/plans/planning/005_quux.md`
     - `planner/docs/plans/intent/005_quux.md`
     - `planner/docs/plans/planning/005_quux.md`
     - `builder/docs/plans/intent/005_quux.md`
     - The file system specifies the slug "quux".
 - The subcommand `ask` is a prompt. Prompts can only be sent to agents, so the repo set is
-  {"planner", "builder"} (hard constraint removing "master"). Prompts do not constrain state.
+  {"planner", "builder"} (hard constraint removing "canon"). Prompts do not constrain state.
 - The git history finds a last commit for the intent and for the ticket in state planning.
-    - Git specifies repo in {"master", "planner", "builder"} and state in {"intent", "planning"}.
-      Master immediately removed by the prompt hard constraint → {"planner", "builder"}.
+    - Git specifies repo in {"canon", "planner", "builder"} and state in {"intent", "planning"}.
+      canon immediately removed by the prompt hard constraint → {"planner", "builder"}.
 - The audit log:
     - Human created intent 005.
     - Planner created ticket 005 by planning intent 005. No transitions for 005 after that.
-    - Audit log specifies repo in {"master", "planner"} and state in {"intent", "planning"}.
+    - Audit log specifies repo in {"canon", "planner"} and state in {"intent", "planning"}.
       After the prompt hard constraint → repo {"planner"}.
-- The tmux pane for planner is visible. Tmux specifies repo in {"planner", "master"}; after the
+- The tmux pane for planner is visible. Tmux specifies repo in {"planner", "canon"}; after the
   prompt hard constraint → {"planner"}.
 - Intersection on repo: {"planner", "builder"} ∩ {"planner", "builder"} ∩ {"planner"} ∩ {"planner"} = {"planner"}.
 - Intersection on state: {"intent", "planning"} ∩ {"intent", "planning"} = {"intent", "planning"}.
@@ -318,16 +318,16 @@ The sequence number originates from subdivide, so there is no intent with the sa
 - The original command is `workflow ask 002`.
 - The path does not specify repo, state, or slug. The path is silent.
 - The file system. The following files exist:
-    - `master/docs/plans/planning/002_pydantic_models.md`
+    - `canon/docs/plans/planning/002_pydantic_models.md`
     - `planner/docs/plans/planning/002_pydantic_models.md`
     - The file system specifies the slug "pydantic_models".
-- The subcommand `ask` is a prompt: repo in {"planner", "builder"} (hard constraint removing "master"),
+- The subcommand `ask` is a prompt: repo in {"planner", "builder"} (hard constraint removing "canon"),
   no state constraint.
 - The git history finds the last commit to be the one in which 001 was subdivided into 002.
     - Git specifies repo in {"planner"} and state in {"planning"}.
 - The audit log says planner created 002 by subdividing 001. No transitions for 002 after that.
   Audit log specifies repo in {"planner"} and state in {"planning"}.
-- The tmux pane for planner is visible. Tmux specifies repo in {"planner", "master"};
+- The tmux pane for planner is visible. Tmux specifies repo in {"planner", "canon"};
   after the prompt hard constraint → {"planner"}.
 - Intersection on repo: {"planner"}. Intersection on state: {"planning"}.
   The plan resolves to `planner/docs/plans/planning/002_pydantic_models.md`.
@@ -341,14 +341,14 @@ The user made a manual adjustment to a plan in the `todo` state, and wants to pu
 - The path does not specify repo or state, but specifies the slug. The path is silent.
 - The file system. The following files exist:
     - `planner/docs/plans/planning/005_quux.md` (this is stale, but provides the slug)
-    - (master is already checked out to another branch, and does not have 005)
-- The subcommand `push` is a generic content-push. Soft constraint via `repo_override: master`:
-  repo preferred in {"master"}, state in {"intent", "todo"}. No hard constraint.
+    - (canon is already checked out to another branch, and does not have 005)
+- The subcommand `push` is a generic content-push. Soft constraint via `repo_override: canon`:
+  repo preferred in {"canon"}, state in {"intent", "todo"}. No hard constraint.
 - The git history:
-    - The branch `plan/005_quux` in master has a new manual commit with this file, that the human wanted to push.
-    - Git specifies repo in {"master"} and state in {"todo"}.
-- The audit log says the human transitioned 005 to todo. Audit log specifies repo in {"master"} and state in {"todo"}.
-- The tmux pane for builder is visible. Tmux specifies repo in {"builder", "master"}
-  (master is implicitly included because the command pane is always active).
-- Intersection on repo: {"master"}. Intersection on state: {"todo"}.
-  The plan resolves to `master/docs/plans/todo/005_quux.md`.
+    - The branch `plan/005_quux` in canon has a new manual commit with this file, that the human wanted to push.
+    - Git specifies repo in {"canon"} and state in {"todo"}.
+- The audit log says the human transitioned 005 to todo. Audit log specifies repo in {"canon"} and state in {"todo"}.
+- The tmux pane for builder is visible. Tmux specifies repo in {"builder", "canon"}
+  (canon is implicitly included because the command pane is always active).
+- Intersection on repo: {"canon"}. Intersection on state: {"todo"}.
+  The plan resolves to `canon/docs/plans/todo/005_quux.md`.

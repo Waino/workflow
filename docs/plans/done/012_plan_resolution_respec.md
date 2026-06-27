@@ -93,7 +93,7 @@ def push(ctx: click.Context, plan_path: str) -> None:
 
 ### `repo_override` configuration field
 
-Intent §Worked example 3 refers to "`repo_override: master`" on the generic
+Intent §Worked example 3 refers to "`repo_override: canon`" on the generic
 `push` command. Model it on `ScriptCommand` as an optional soft constraint:
 
 ```python
@@ -115,14 +115,14 @@ Default config entries for the new generic `push`:
       - command_type: script
         name: push
         script: push
-        repo_override: master
+        repo_override: canon
         reminder: ask
   todo:
     commands:
       - command_type: script
         name: push
         script: push
-        repo_override: master
+        repo_override: canon
 ```
 
 The existing `push` entry in the `implementing` state is renamed to `check`:
@@ -141,8 +141,8 @@ The existing `push` entry in the `implementing` state is renamed to `check`:
 ### Migration note (phase 2 without phase 3)
 
 Until phase 3 lands, the generic `push` temporarily resolves with
-`resolve_plan(plan_path, project_dir, repo=RepoName.master)` — matching the
-`repo_override: master` semantics by hand. Phase 3 replaces this with the
+`resolve_plan(plan_path, project_dir, repo=RepoName.canon)` — matching the
+`repo_override: canon` semantics by hand. Phase 3 replaces this with the
 merged resolver and makes `repo_override` a first-class constraint.
 
 Commit message: `feat(workflow): split push into check (handoff) and push (content)`.
@@ -224,11 +224,11 @@ a matching `name`. For each match:
 - States where the command appears (plus any `also_valid_in_states`) are added
   to `states`.
 - The repo derived from `state_config.agent` (via `_repo_for_prompt_state` for
-  prompts, `state_config.agent or RepoName.master` for scripts) goes into
+  prompts, `state_config.agent or RepoName.canon` for scripts) goes into
   `repos`.
 - If the command is a `ScriptCommand` with `repo_override`, that repo is
   added too (soft constraint).
-- Prompt commands contribute a hard constraint that master is not in
+- Prompt commands contribute a hard constraint that canon is not in
   `repos` (prompts can only dispatch to agents).
 
 ### The git history source
@@ -249,7 +249,7 @@ Run `git log --all --no-merges --max-count=1 --format='%H %ct' --name-status`
 with `:(glob)docs/plans/*/<filename>.md` pathspecs and parse the newest
 commit's path-status line into (committer_timestamp, state, resolved_path).
 
-Runs once per repo (master/planner/builder/reviewer). The repo with the
+Runs once per repo (canon/planner/builder/reviewer). The repo with the
 highest timestamp wins; its parsed state is the git-source state constraint.
 Rename handling: if the line starts with `R`, use the destination path
 (after the second tab). Same-commit `D old` + `A new` with matching basenames
@@ -269,14 +269,14 @@ Replay `read_audit_log(project_dir)` for entries mentioning `seq` in either
 
 | command    | repo     | resulting state |
 | ---------- | -------- | --------------- |
-| `new`      | master   | intent          |
+| `new`      | canon    | intent          |
 | `plan`     | planner  | planning        |
 | `subdivide`| planner  | planning        |
-| `todo`     | master   | todo            |
-| `implement`| master   | implementing    |
+| `todo`     | canon    | todo            |
+| `implement`| canon    | implementing    |
 | `check`    | builder  | checking        |
-| `accept`   | master   | done            |
-| `reject`   | master   | rejected        |
+| `accept`   | canon    | done            |
+| `reject`   | canon    | rejected        |
 | `push`     | (skip)   | (skip)          |
 
 The most recent matching entry provides `_Constraint(repos={...}, states={...})`.
@@ -290,7 +290,7 @@ as a module constant; the resolver imports it.
 Read via libtmux: the session is `config.tmux.session_name`; the "active
 window" is `session.active_window` (already a libtmux concept). If the
 active window name matches a `RepoName.{planner,builder,reviewer}`, produce
-`_Constraint(repos={<that_repo>, RepoName.master}, states=None)` per intent
+`_Constraint(repos={<that_repo>, RepoName.canon}, states=None)` per intent
 §Decisions. Otherwise the source is silent.
 
 Must not raise on tmux absence — resolution works fine without tmux. Catch

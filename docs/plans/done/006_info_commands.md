@@ -45,7 +45,7 @@ template extraction and the `git add` step described below.
   matching what the inline string currently produces. It will be fleshed out
   in a future iteration as conventions for new intents settle.
 - Open the created file using `$EDITOR` (fall back to `vi` if unset).
-- Run `git add` on the created file in the `master` repo so it shows up in
+- Run `git add` on the created file in the `canon` repo so it shows up in
   `git status` for the human. Do not commit.
 
 ## workflow status

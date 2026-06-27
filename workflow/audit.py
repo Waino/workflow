@@ -29,7 +29,7 @@ def build_audit_command_repo_state(config: WorkflowConfig) -> dict[str, tuple[Re
 
     For each command (script or prompt) in any state with a non-``None``
     ``transition``, the command leaves the plan in ``transition`` state,
-    owned by that state's agent (or ``master`` when no agent is configured).
+    owned by that state's agent (or ``canon`` when no agent is configured).
     Commands without a transition contribute no entry; their audit-log
     appearances do not constrain the resolver.
     """
@@ -46,7 +46,7 @@ def build_audit_command_repo_state(config: WorkflowConfig) -> dict[str, tuple[Re
             target_state = cmd.transition
             target_cfg = config.states.get(target_state)
             agent = getattr(target_cfg, "agent", None) if target_cfg is not None else None
-            repo = RepoName.master
+            repo = RepoName.canon
             if agent is not None:
                 with suppress(ValueError):
                     repo = RepoName(agent)

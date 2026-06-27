@@ -53,13 +53,13 @@ def infer_target_repo(
     """Return the repo name to inspect for *plan*, honouring any override.
 
     Falls back to the agent configured for the plan's state in *config*.
-    States with no agent (e.g. ``todo``, ``done``, ``rejected``) map to ``"master"``.
+    States with no agent (e.g. ``todo``, ``done``, ``rejected``) map to ``"canon"``.
     """
     if target_repo_override is not None:
         return target_repo_override
     state_cfg = config.states.get(plan.state)
     if state_cfg is None or state_cfg.agent is None:
-        return RepoName.master
+        return RepoName.canon
     return state_cfg.agent
 
 
@@ -133,7 +133,7 @@ def _is_allowed(file_path: str, target_repo: RepoName | str) -> bool:
     is_intent = under_plans and parts[2:3] == ("intent",)
     is_review = under_plans and parts[2:3] == ("reviews",)
 
-    if target_repo == RepoName.master:
+    if target_repo == RepoName.canon:
         return True
     if target_repo == RepoName.planner:
         return under_plans and not is_review

@@ -13,6 +13,11 @@ A prompt command may therefore arrive in a state where it is not listed below
 When this happens, follow the prompt as given.
 {% for state in states %}
 
+Plans reside in `docs/plans`.
+The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md` is in the state `implementing`.
+Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
+Reviews (in docs/plans/reviews) do not follow this naming scheme.
+
 ### {{ state.name }} (agent: {{ state.agent }})
 {{ state.description }}
 Inbound: {{ state.inbound_str }}

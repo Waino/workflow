@@ -147,7 +147,7 @@ def _build_world(world: Path, scenarios: list[PlanScenario]) -> None:
 # and WIP plans (one canonical clone, optional stale copies). See plan 015.
 # ---------------------------------------------------------------------------
 
-_ALL_REPOS: list[RepoName] = [RepoName.master, RepoName.planner, RepoName.builder, RepoName.reviewer]
+_ALL_REPOS: list[RepoName] = [RepoName.canon, RepoName.planner, RepoName.builder, RepoName.reviewer]
 
 _SCENARIOS: list[PlanScenario] = [
     # Synced older plans -----------------------------------------------------
@@ -181,9 +181,9 @@ _SCENARIOS: list[PlanScenario] = [
     ),
     PlanScenario(
         plan_id="005_next_in_line",
-        on_disk=[(RepoName.master, PlanState.TODO)],
+        on_disk=[(RepoName.canon, PlanState.TODO)],
         audit_entries=[_AuditDraft(actor="human", command="todo", input_plan="005_next_in_line")],
-        commit_in=[RepoName.master],
+        commit_in=[RepoName.canon],
     ),
     PlanScenario(
         plan_id="006_draft",
@@ -192,14 +192,14 @@ _SCENARIOS: list[PlanScenario] = [
         commit_in=[RepoName.planner],
     ),
     # WIP plans --------------------------------------------------------------
-    # Row 15: master is the canonical (newer) copy; planner has an older stale
-    # intent copy. Committing planner first then master makes master's %ct
+    # Row 15: canon is the canonical (newer) copy; planner has an older stale
+    # intent copy. Committing planner first then canon makes canon's %ct
     # win when git_provides_repo=True.
     PlanScenario(
         plan_id="007_newly_created",
-        on_disk=[(RepoName.master, PlanState.INTENT), (RepoName.planner, PlanState.INTENT)],
+        on_disk=[(RepoName.canon, PlanState.INTENT), (RepoName.planner, PlanState.INTENT)],
         audit_entries=[],
-        commit_in=[RepoName.planner, RepoName.master],
+        commit_in=[RepoName.planner, RepoName.canon],
     ),
     PlanScenario(
         plan_id="008_newly_planned",
@@ -209,17 +209,17 @@ _SCENARIOS: list[PlanScenario] = [
     ),
     PlanScenario(
         plan_id="009_not_pulled",
-        on_disk=[(RepoName.master, PlanState.TODO)],
+        on_disk=[(RepoName.canon, PlanState.TODO)],
         audit_entries=[_AuditDraft(actor="human", command="todo", input_plan="009_not_pulled")],
-        commit_in=[RepoName.master],
+        commit_in=[RepoName.canon],
     ),
-    # Row 18: builder canonical, master stale. Commit master first so builder
+    # Row 18: builder canonical, canon stale. Commit canon first so builder
     # has the newer %ct (canonical-last rule from plan 015 §Risks).
     PlanScenario(
         plan_id="010_active_build",
-        on_disk=[(RepoName.builder, PlanState.IMPLEMENTING), (RepoName.master, PlanState.IMPLEMENTING)],
+        on_disk=[(RepoName.builder, PlanState.IMPLEMENTING), (RepoName.canon, PlanState.IMPLEMENTING)],
         audit_entries=[_AuditDraft(actor="builder", command="implement", input_plan="010_active_build")],
-        commit_in=[RepoName.master, RepoName.builder],
+        commit_in=[RepoName.canon, RepoName.builder],
     ),
     # Row 19: reviewer canonical, builder stale (same canonical-last rule).
     PlanScenario(
@@ -230,15 +230,15 @@ _SCENARIOS: list[PlanScenario] = [
     ),
     PlanScenario(
         plan_id="012_merged_without_review",
-        on_disk=[(RepoName.master, PlanState.DONE)],
+        on_disk=[(RepoName.canon, PlanState.DONE)],
         audit_entries=[_AuditDraft(actor="human", command="accept", input_plan="012_merged_without_review")],
-        commit_in=[RepoName.master],
+        commit_in=[RepoName.canon],
     ),
     PlanScenario(
         plan_id="013_another_bad_idea",
-        on_disk=[(RepoName.master, PlanState.REJECTED)],
+        on_disk=[(RepoName.canon, PlanState.REJECTED)],
         audit_entries=[_AuditDraft(actor="human", command="reject", input_plan="013_another_bad_idea")],
-        commit_in=[RepoName.master],
+        commit_in=[RepoName.canon],
     ),
     # Row 22: audit lags on-disk state. Plan is at checking/ but audit's most
     # recent mapped entry is `implement` (→ implementing). `_from_audit_log`
@@ -326,23 +326,23 @@ _CASES: list[ResolverCase] = [
     _ok("synced-006-planning-critique", "006_draft", "critique", RepoName.planner, PlanState.PLANNING),
     _ok("synced-006-planning-subdivide", "006_draft", "subdivide", RepoName.planner, PlanState.PLANNING),
     # --- WIP plans ----------------------------------------------------------
-    # Row 15: push with git_provides_repo=True; git ties repos to master
-    # (newer %ct), subcommand's repo_override=master confirms.
+    # Row 15: push with git_provides_repo=True; git ties repos to canon
+    # (newer %ct), subcommand's repo_override=canon confirms.
     _ok(
         "wip-007-push-git-provides-repo",
         "007_newly_created",
         "push",
-        RepoName.master,
+        RepoName.canon,
         PlanState.INTENT,
         git_provides_repo=True,
     ),
     _ok("wip-008-planning-critique", "008_newly_planned", "critique", RepoName.planner, PlanState.PLANNING),
     # Row 17 exercises `implement`'s `also_valid_in_states=[planning]`.
-    _ok("wip-009-todo-implement", "009_not_pulled", "implement", RepoName.master, PlanState.TODO),
+    _ok("wip-009-todo-implement", "009_not_pulled", "implement", RepoName.canon, PlanState.TODO),
     _ok("wip-010-implementing-build", "010_active_build", "build", RepoName.builder, PlanState.IMPLEMENTING),
     _ok("wip-011-checking-pr", "011_under_review", "pr", RepoName.reviewer, PlanState.CHECKING),
     _err("wip-012-done-pr", "012_merged_without_review", "pr", SourcesDisagreeError),
-    # no ok-with-hints for 012: it is done, but only exists in master. Must be pushed before reviewer can see it.
+    # no ok-with-hints for 012: it is done, but only exists in canon. Must be pushed before reviewer can see it.
     _err("wip-013-rejected-ask", "013_another_bad_idea", "ask", SourcesDisagreeError),
     # Row 22: `_from_audit_log` widening safety net (audit `implement` lags
     # an on-disk move into checking/; widened state set must include CHECKING).

@@ -2,14 +2,14 @@
 
 - `workflow init`
     - All 4 repos now have 001_idea (from initial repo) on the main branch.
-- `vim master/docs/plans/intent/001_idea.md`
+- `vim canon/docs/plans/intent/001_idea.md`
     - Last minute change to idea
-    - Manually commit to main in master
+    - Manually commit to main in canon
 - `workflow push 001`
-    - 001 is resolved to `master/docs/plans/intent/001_idea.md`
-        - Normally it would resolve to `planner/docs/plans/intent/001_idea.md`: need to detect that master is ahead.
-    - Push main from master to bare. Pull to planner.
-    - master, bare, and planner now have the updated idea on main
+    - 001 is resolved to `canon/docs/plans/intent/001_idea.md`
+        - Normally it would resolve to `planner/docs/plans/intent/001_idea.md`: need to detect that canon is ahead.
+    - Push main from canon to bare. Pull to planner.
+    - canon, bare, and planner now have the updated idea on main
 - `workflow start`
     - Planner is visible in the tmux split window.
 - `workflow ask 001`
@@ -27,23 +27,23 @@
 - `workflow critique 002.1`
 - `workflow implement 002.1`
     - 002.1 is resolved to `planner/docs/plans/planning/002.1_some_foo.md`.
-    - Push `plan/001_idea` from planner to bare. Pull to master.
-    - Transition moves `master/docs/plans/planning/002.1_some_foo.md` -> `master/docs/plans/implementing/002.1_some_foo.md`.
+    - Push `plan/001_idea` from planner to bare. Pull to canon.
+    - Transition moves `canon/docs/plans/planning/002.1_some_foo.md` -> `canon/docs/plans/implementing/002.1_some_foo.md`.
     - Rotate the tmux panes so that builder is visible. Paus for a moment.
     - Commit, merge `plan/001_idea` into main.
     - Push main, pull to planner and builder.
         - It is ok for `implement` to check out builder to main and pull: no work should be ongoing.
         - In builder, `implement` then creates branch `feat/002.1_some_foo` from main and leaves the
           builder checked out on it, ready for `build`.
-    - master, planner, and builder now have:
+    - canon, planner, and builder now have:
         - 002, 002.2 and 003 in state planning on main
         - 002.1 in state implementing on main
 - `workflow ask 002.1`
     - 002.1 is resolved to `builder/docs/plans/implementing/002.1_some_foo.md`.
         - Problem: if we only fetch but don't modify the working tree, the file doesn't exist.
-        - Typically `master/docs/plans/implementing/002.1_some_foo.md` would exist and is most progressed,
+        - Typically `canon/docs/plans/implementing/002.1_some_foo.md` would exist and is most progressed,
           and its state gives us the agent.
-        - However, master might already be checked out to something else instead, let's avoid relying on it.
+        - However, canon might already be checked out to something else instead, let's avoid relying on it.
         - One solution is to check out main in builder and pull, instead of fetch.
         - Another solution is to use git history instead of the file system.
 - `workflow build 002.1`
@@ -56,20 +56,20 @@
     - 002.2 is resolved to `planner/docs/plans/planning/002.2_more_foo.md`.
     - Planner branches `plan/002.2_more_foo` and commits updates.
 - `workflow todo 002.2`
-    - Push `plan/002.2_more_foo` from planner to bare. Pull to master.
-    - Transition moves `master/docs/plans/planning/002.1_some_foo.md` -> `master/docs/plans/todo/002.1_some_foo.md`.
+    - Push `plan/002.2_more_foo` from planner to bare. Pull to canon.
+    - Transition moves `canon/docs/plans/planning/002.1_some_foo.md` -> `canon/docs/plans/todo/002.1_some_foo.md`.
     - Commit, merge `plan/002.2_more_foo` into main.
     - Push main, pull to planner and builder.
-    - master, planner, and builder now have:
+    - canon, planner, and builder now have:
         - 002 and 003 in state planning on main
         - 002.2 in state todo on main
         - 002.1 in state implementing on main
 - `workflow new baz`
-    - Branch `plan/004_baz` off main in master.
-    - Create `master/docs/plans/intent/004_baz.md`.
+    - Branch `plan/004_baz` off main in canon.
+    - Create `canon/docs/plans/intent/004_baz.md`.
     - Manually commit
 - `workflow push 004`
-    - Push branch `plan/004_baz` from master to bare. Pull to planner.
+    - Push branch `plan/004_baz` from canon to bare. Pull to planner.
 - `workflow ask 004`
     - 004 is resolved to `planner/docs/plans/intent/004_baz.md`.
     - Planner checks out `plan/004_baz`
@@ -81,7 +81,7 @@
         - To critique the intent again, it would be necessary to specify `workflow critique intent/004`.
     - Planner is on `plan/004_baz`: any changes needed can be committed there.
 - `workflow todo 004`
-    - Push from planner to bare. Pull to master.
+    - Push from planner to bare. Pull to canon.
     - Transition to todo.
     - Commit, merge `plan/004_baz` into main.
     - Push main, pull to planner and fetch to builder.
@@ -91,8 +91,8 @@
     - The `go` command should not just rotate the tmux, but also print the git status of the target repo.
 - `workflow check 002.1`
     - 002.1 is resolved to `builder/docs/plans/implementing/002.1_some_foo.md`
-    - Push `feat/002.1_some_foo` from builder to bare. Pull to master.
-    - Transition moves `master/docs/plans/implementing/002.1_some_foo.md` -> `master/docs/plans/checking/002.1_some_foo.md`.
+    - Push `feat/002.1_some_foo` from builder to bare. Pull to canon.
+    - Transition moves `canon/docs/plans/implementing/002.1_some_foo.md` -> `canon/docs/plans/checking/002.1_some_foo.md`.
     - Rotate the tmux panes so that reviewer is visible.
     - Commit, push, pull to builder and reviewer.
         - Avoids leaving stale state `implementing` in builder.
@@ -109,7 +109,7 @@
     - 002.1 is resolved to `reviewer/docs/plans/checking/002.1_some_foo.md`
 - `workflow accept 002.1`
     - 002.1 is resolved to `reviewer/docs/plans/checking/002.1_some_foo.md`
-    - Push `feat/002.1_some_foo` from reviewer to bare. Pull to master.
-    - Transition moves `master/docs/plans/checking/002.1_some_foo.md` -> `master/docs/plans/done/002.1_some_foo.md`.
+    - Push `feat/002.1_some_foo` from reviewer to bare. Pull to canon.
+    - Transition moves `canon/docs/plans/checking/002.1_some_foo.md` -> `canon/docs/plans/done/002.1_some_foo.md`.
     - Commit, merge `feat/002.1_some_foo` into main.
     - Commit, push, pull to reviewer.

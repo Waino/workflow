@@ -23,9 +23,9 @@ states:
         reminder: "git commit, then workflow push"
       - command_type: script
         name: push
-        description: Push pending content to master.
+        description: Push pending content to canon.
         script: push
-        repo_override: master
+        repo_override: canon
         pull_target: planner
         reminder: ask
       - command_type: prompt
@@ -56,6 +56,7 @@ states:
         prompt: |
           Read the intent at {{ plan.path }}.
           Write a detailed implementation plan into docs/plans/planning/.
+          Commit your changes.
         transition: planning
         reminder: critique
       - command_type: prompt
@@ -71,6 +72,7 @@ states:
           Use running numbers in a hierarchy below the input plan,
           e.g. `docs/plans/planning/{{ plan.sequence_number_str }}.1_foo.md` and `docs/plans/planning/{{ plan.sequence_number_str }}.2_bar.md`
           {%- endif %}
+          Commit your changes.
         transition: planning
 
   planning:
@@ -112,9 +114,9 @@ states:
         reminder: ask
       - command_type: script
         name: push
-        description: Push pending content to master.
+        description: Push pending content to canon.
         script: push
-        repo_override: master
+        repo_override: canon
 
   implementing:
     description: Plans under active implementation.
@@ -136,6 +138,7 @@ states:
           Read the plan at {{ plan.path }}.
           Work on the feature branch {{ branch }}.
           Implement the plan.
+          Commit your changes, making sure to run the pre-commit hook.
         reminder: check
       - command_type: script
         name: check

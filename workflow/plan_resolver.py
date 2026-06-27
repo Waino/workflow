@@ -24,7 +24,7 @@ from workflow.names import RepoName
 
 # Color styles for the SourcesDisagreeError rendering.
 _REPO_STYLES: dict[RepoName, str] = {
-    RepoName.master: "steel_blue3",
+    RepoName.canon: "steel_blue3",
     RepoName.planner: "turquoise4",
     RepoName.builder: "gold3",
     RepoName.reviewer: "light_salmon3",
@@ -145,7 +145,7 @@ def _check_collisions(plans: list[Plan]) -> None:
             raise PlanCollisionError(seq_str, group)
 
 
-def find_all_plans_in_repo(project_dir: Path, repo: str = RepoName.master) -> list[Plan]:
+def find_all_plans_in_repo(project_dir: Path, repo: str = RepoName.canon) -> list[Plan]:
     """Scan docs/plans/ in a single repo and return all plans found.
 
     Raises PlanCollisionError if two non-intent plans with the same sequence number
@@ -511,7 +511,7 @@ def _accumulate_subcommand_contribution(
     if cmd.repo_override is not None:
         repos.add(cmd.repo_override)
     else:
-        repos.add(_agent_repo(agent, RepoName.master))
+        repos.add(_agent_repo(agent, RepoName.canon))
 
 
 def _from_subcommand(
@@ -525,7 +525,7 @@ def _from_subcommand(
     Prompt commands contribute the agent's repo as a soft routing hint; this
     contribution is suppressed when *path_provides_repos* is True because the
     caller has already pinned the repo explicitly.  Script commands contribute
-    their ``repo_override`` if set, otherwise the state's agent or master.
+    their ``repo_override`` if set, otherwise the state's agent or canon.
     Scripts also contribute the states they are defined in (plus their
     transition target).
     """
@@ -550,7 +550,7 @@ def _from_subcommand(
                 for extra_state in cmd.also_valid_in_states:
                     extra_cfg = config.states.get(extra_state)
                     extra_agent = getattr(extra_cfg, "agent", None) if extra_cfg is not None else None
-                    repos.add(_agent_repo(extra_agent, RepoName.master))
+                    repos.add(_agent_repo(extra_agent, RepoName.canon))
     if not found:
         return _Constraint()
     return _Constraint(
@@ -656,7 +656,7 @@ def _from_git_history(
 
     By default the returned constraint carries only ``states``; ``repos`` is
     left silent because the same transition commit is replayed (via pull/
-    fetch) into both ``master`` and the agent's clone, and git's `%ct`
+    fetch) into both ``canon`` and the agent's clone, and git's `%ct`
     tie-break would otherwise arbitrarily pick one. Callers that genuinely
     need the source-of-edit repo (currently only ``push``) pass
     ``provides_repo=True``.
@@ -762,9 +762,9 @@ def _from_tmux(config: WorkflowConfig) -> _Constraint:
     repo = _active_tmux_repo(config.tmux.session_name)
     if repo is None:
         return _Constraint()
-    if repo == RepoName.master:
-        return _Constraint(repos=frozenset({RepoName.master}))
-    return _Constraint(repos=frozenset({repo, RepoName.master}))
+    if repo == RepoName.canon:
+        return _Constraint(repos=frozenset({RepoName.canon}))
+    return _Constraint(repos=frozenset({repo, RepoName.canon}))
 
 
 def _filesystem_matches(
@@ -872,7 +872,7 @@ def resolve_plan(
     Args:
         fuzzy_path: The user-provided path reference. Absolute paths and full
             `repo/docs/plans/state/name` paths short-circuit further inference.
-        project_dir: Root of the project (contains master/, planner/, etc.).
+        project_dir: Root of the project (contains canon/, planner/, etc.).
         config: Workflow configuration; provides the subcommand and tmux sources.
         command_name: Name of the CLI subcommand being resolved. ``None`` skips
             the subcommand source entirely.
@@ -880,7 +880,7 @@ def resolve_plan(
             constraint (the clone with the newest commit touching the plan
             file). Only ``push`` opts in: it needs to identify the clone with
             unpushed manual edits. All other callers leave git silent on the
-            repo dimension so transition commits don't tie-break to ``master``
+            repo dimension so transition commits don't tie-break to ``canon``
             and conflict with the subcommand's agent-owned repo.
 
     Raises:

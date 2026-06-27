@@ -121,8 +121,8 @@ def _open_in_editor(path: Path) -> None:
 
 
 def _run_pre_commit_in_sandbox(config: WorkflowConfig, repo_name: str, *, dry_run: bool) -> None:
-    if repo_name == RepoName.master:
-        msg = "Target repo 'master' has no sandbox container."
+    if repo_name == RepoName.canon:
+        msg = "Target repo 'canon' has no sandbox container."
         raise WorkflowError(msg)
     project_name = config.project_name or _require_project_dir(config).name
     container_name = f"pi-{project_name}-{repo_name}"
@@ -166,29 +166,29 @@ def init(ctx: click.Context) -> None:
     project_dir = (config.project_dir or Path.cwd()).resolve()
 
     try:
-        if not (project_dir / RepoName.master / ".git").is_dir():
-            msg = f"{project_dir / RepoName.master} is not a git repository (no .git/ found)."
+        if not (project_dir / RepoName.canon / ".git").is_dir():
+            msg = f"{project_dir / RepoName.canon} is not a git repository (no .git/ found)."
             raise WorkflowError(msg)
-        if not (project_dir / RepoName.master / ".git-pre-commit-hook").is_file():
-            msg = f"{project_dir / RepoName.master / '.git-pre-commit-hook'} must exist."
+        if not (project_dir / RepoName.canon / ".git-pre-commit-hook").is_file():
+            msg = f"{project_dir / RepoName.canon / '.git-pre-commit-hook'} must exist."
             raise WorkflowError(msg)
-        # Generate AGENTS.md into master before the bare clone so all agent clones inherit it.
+        # Generate AGENTS.md into canon before the bare clone so all agent clones inherit it.
         if not dry_run:
             try:
                 generate_and_write_agents_md(config.model_copy(update={"project_dir": project_dir}))
-                master_repo_path = project_dir / RepoName.master
-                git_add(master_repo_path, Path("AGENTS.md"), dry_run=False)
+                canon_repo_path = project_dir / RepoName.canon
+                git_add(canon_repo_path, Path("AGENTS.md"), dry_run=False)
                 # no_verify: at init time the pre-commit hook would run pytest before the
-                # workflow package is even installed in master; bypassing is required here.
+                # workflow package is even installed in canon; bypassing is required here.
                 git_commit_if_changed(
-                    master_repo_path,
+                    canon_repo_path,
                     "chore: generate initial AGENTS.md",
                     dry_run=False,
                     no_verify=True,
                 )
             except AgentsMdGenerationError as exc:
                 raise WorkflowError(str(exc)) from exc
-        run_command(["git", "clone", "--bare", RepoName.master, "bare"], cwd=project_dir, dry_run=dry_run)
+        run_command(["git", "clone", "--bare", RepoName.canon, "bare"], cwd=project_dir, dry_run=dry_run)
         for agent in config.agents:
             run_command(["git", "clone", "bare", agent.name], cwd=project_dir, dry_run=dry_run)
         for agent in config.agents:
@@ -203,13 +203,13 @@ def init(ctx: click.Context) -> None:
                 cwd=agent_repo,
                 dry_run=dry_run,
             )
-        # Wire master to bare so git pull/push work in place.
+        # Wire canon to bare so git pull/push work in place.
         bare_path = project_dir / "bare"
-        master_repo = project_dir / RepoName.master
-        run_command(["git", "remote", "add", "origin", str(bare_path)], cwd=master_repo, dry_run=dry_run)
-        run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=master_repo, dry_run=dry_run)
-        run_command(["git", "config", "push.default", "current"], cwd=master_repo, dry_run=dry_run)
-        run_command(["git", "push", "-u", "origin", "HEAD"], cwd=master_repo, dry_run=dry_run)
+        canon_repo = project_dir / RepoName.canon
+        run_command(["git", "remote", "add", "origin", str(bare_path)], cwd=canon_repo, dry_run=dry_run)
+        run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=canon_repo, dry_run=dry_run)
+        run_command(["git", "config", "push.default", "current"], cwd=canon_repo, dry_run=dry_run)
+        run_command(["git", "push", "-u", "origin", "HEAD"], cwd=canon_repo, dry_run=dry_run)
         if not dry_run:
             (project_dir / WORKFLOW_ROOT_MARKER).touch()
 
@@ -313,7 +313,7 @@ def new(ctx: click.Context, slug: str) -> None:
             msg = f"Invalid slug {slug!r}: use lowercase letters, digits, and underscores."
             raise WorkflowError(msg)
         number = next_intent_number(project_dir)
-        intent_path = project_dir / RepoName.master / "docs" / "plans" / "intent" / f"{number:03d}_{slug}.md"
+        intent_path = project_dir / RepoName.canon / "docs" / "plans" / "intent" / f"{number:03d}_{slug}.md"
         template_text = (
             importlib.resources.files("workflow.templates").joinpath("intent.md.j2").read_text(encoding="utf-8")
         )
@@ -326,8 +326,8 @@ def new(ctx: click.Context, slug: str) -> None:
             intent_path.write_text(content, encoding="utf-8")
             _open_in_editor(intent_path)
         git_add(
-            project_dir / RepoName.master,
-            intent_path.relative_to(project_dir / RepoName.master),
+            project_dir / RepoName.canon,
+            intent_path.relative_to(project_dir / RepoName.canon),
             dry_run=dry_run,
         )
         _write_script_audit_log(config, "new", dry_run=dry_run, output_plans=[intent_path.stem])
@@ -344,7 +344,7 @@ def new(ctx: click.Context, slug: str) -> None:
 @click.option("--force", is_flag=True, help="Continue even when validation fails")
 @click.pass_context
 def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
-    """Approve a ticket: push from planner, pull to master, transition to todo."""
+    """Approve a ticket: push from planner, pull to canon, transition to todo."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
 
@@ -359,15 +359,15 @@ def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
                 ctx.exit(1)
                 return
 
-        transfer_branch_to_main(project_dir / RepoName.planner, project_dir / RepoName.master, dry_run=dry_run)
-        new_plan = transition_plan(plan, PlanState.TODO, project_dir, repo_override=RepoName.master, dry_run=dry_run)
+        transfer_branch_to_main(project_dir / RepoName.planner, project_dir / RepoName.canon, dry_run=dry_run)
+        new_plan = transition_plan(plan, PlanState.TODO, project_dir, repo_override=RepoName.canon, dry_run=dry_run)
         git_commit(
-            project_dir / RepoName.master,
+            project_dir / RepoName.canon,
             _transition_commit_message(plan, PlanState.TODO),
             dry_run=dry_run,
             no_verify=True,
         )
-        git_push(project_dir / RepoName.master, dry_run=dry_run)
+        git_push(project_dir / RepoName.canon, dry_run=dry_run)
         _write_script_audit_log(config, "todo", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.PLANNING, "todo", new_plan.name)
     except (
@@ -407,24 +407,24 @@ def implement(ctx: click.Context, plan_path: str) -> None:
         if plan.state == PlanState.PLANNING:
             transfer_branch_to_main(
                 project_dir / RepoName.planner,
-                project_dir / RepoName.master,
+                project_dir / RepoName.canon,
                 dry_run=dry_run,
             )
-            plan = transition_plan(plan, PlanState.TODO, project_dir, repo_override=RepoName.master, dry_run=dry_run)
+            plan = transition_plan(plan, PlanState.TODO, project_dir, repo_override=RepoName.canon, dry_run=dry_run)
             git_commit(
-                project_dir / RepoName.master,
+                project_dir / RepoName.canon,
                 _transition_commit_message(plan, PlanState.TODO),
                 dry_run=dry_run,
                 no_verify=True,
             )
         new_plan = transition_plan(plan, PlanState.IMPLEMENTING, project_dir, dry_run=dry_run)
         git_commit(
-            project_dir / RepoName.master,
+            project_dir / RepoName.canon,
             _transition_commit_message(new_plan, PlanState.IMPLEMENTING),
             dry_run=dry_run,
             no_verify=True,
         )
-        git_push(project_dir / RepoName.master, dry_run=dry_run)
+        git_push(project_dir / RepoName.canon, dry_run=dry_run)
         # Leave the builder ready on its feature branch, freshly synced from main (D5).
         git_fetch(builder_repo, dry_run=dry_run)
         git_checkout(builder_repo, "main", dry_run=dry_run)
@@ -602,7 +602,7 @@ def push(ctx: click.Context, plan_path: str) -> None:
             git_provides_repo=True,
         )
         repo = RepoName(plan.path.parts[0])
-        if not dry_run and repo != RepoName.master:
+        if not dry_run and repo != RepoName.canon:
             branch = git_current_branch(project_dir / repo)
             if branch == "main":
                 msg = f"push: {repo} is on 'main'; expected a feature branch"
@@ -647,17 +647,17 @@ def accept(ctx: click.Context, plan_path: str) -> None:
             msg = "accept: reviewer is on 'main'; expected a feature branch"
             raise WorkflowError(msg)
         git_push(project_dir / RepoName.reviewer, dry_run=dry_run)
-        git_pull(project_dir / RepoName.master, dry_run=dry_run)
-        # Merge via remote-tracking ref: the branch is not checked out locally in master.
-        git_merge(project_dir / RepoName.master, f"origin/{branch}", dry_run=dry_run)
-        new_plan = transition_plan(plan, PlanState.DONE, project_dir, repo_override=RepoName.master, dry_run=dry_run)
+        git_pull(project_dir / RepoName.canon, dry_run=dry_run)
+        # Merge via remote-tracking ref: the branch is not checked out locally in canon.
+        git_merge(project_dir / RepoName.canon, f"origin/{branch}", dry_run=dry_run)
+        new_plan = transition_plan(plan, PlanState.DONE, project_dir, repo_override=RepoName.canon, dry_run=dry_run)
         git_commit(
-            project_dir / RepoName.master,
+            project_dir / RepoName.canon,
             _transition_commit_message(new_plan, PlanState.DONE),
             dry_run=dry_run,
             no_verify=True,
         )
-        git_push(project_dir / RepoName.master, dry_run=dry_run)
+        git_push(project_dir / RepoName.canon, dry_run=dry_run)
         _write_script_audit_log(config, "accept", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.CHECKING, "accept", new_plan.name)
     except (
@@ -677,7 +677,7 @@ def accept(ctx: click.Context, plan_path: str) -> None:
 @click.option(
     "--target-repo",
     type=click.Choice(RepoName),
-    default=RepoName.master,
+    default=RepoName.canon,
     show_default=True,
     help="Repo containing the plan to reject.",
 )

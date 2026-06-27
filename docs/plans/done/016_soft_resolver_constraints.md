@@ -17,12 +17,12 @@ when it should merely be a routing hint, overridable by an explicit path.
 | path       | {planner}          | —                  |
 | subcommand | {planner, builder} | — (prompt)         |
 | git        | —                  | {REJECTED}         |
-| audit      | {master}¹          | {REJECTED}         |
+| audit      | {canon}¹          | {REJECTED}         |
 | tmux       | silent             | —                  |
 
-¹ `reject` transitions to `rejected`; `rejected` has `agent: null` → `master`.
+¹ `reject` transitions to `rejected`; `rejected` has `agent: null` → `canon`.
 
-Intersection of repos: `{planner} ∩ {planner,builder} ∩ {master}` = **∅** → `SourcesDisagreeError`.
+Intersection of repos: `{planner} ∩ {planner,builder} ∩ {canon}` = **∅** → `SourcesDisagreeError`.
 
 ### Tracing `reviewer/004 ask` (plan 004 at CHECKING in builder + reviewer)
 
@@ -88,7 +88,7 @@ Repos = `{reviewer}`, States = `{CHECKING}` → finds `reviewer/checking/004` �
 
 | case                    | without path → repos intersection | outcome |
 |-------------------------|-----------------------------------|---------|
-| `002 ask` (seq only)   | `{planner,builder} ∩ {master}`    | ∅ → SourcesDisagreeError ✓ |
+| `002 ask` (seq only)   | `{planner,builder} ∩ {canon}`    | ∅ → SourcesDisagreeError ✓ |
 | `004 ask` (seq only)   | `{planner,builder} ∩ {reviewer}`  | ∅ → SourcesDisagreeError ✓ |
 | `006 ask` (seq only)   | `{planner,builder} ∩ {planner}`   | `{planner}` → resolves ✓ |
 | `001 ask` (seq only)   | `{planner,builder}` (audit silent)| two filesystem hits → AmbiguousPlanError ✓ |

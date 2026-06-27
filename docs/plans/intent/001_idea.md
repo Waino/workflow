@@ -86,8 +86,8 @@ then save and close; the modified text is sent to the reviewer.
 - **agent**: One of the three AI agents (planner, builder, reviewer) running in a sandbox.
   Does not include the human operator.
 - **repo**: A git clone of the project used by a participant.
-  The named repos are `master` (human operator), `planner`, `builder`, `reviewer`, and `bare`.
-  `master` is a repo but not an agent; `human` is an actor but not a repo.
+  The named repos are `canon` (human operator), `planner`, `builder`, `reviewer`, and `bare`.
+  `canon` is a repo but not an agent; `human` is an actor but not a repo.
 
 ## Loose path parsing
 
@@ -234,7 +234,7 @@ In this walkthrough, the project is called `foo`.
 
 Directory structure:
     /home/auggie/projects/foo/              # project directory
-        master/                             # git repo for merging and human work
+        canon/                             # git repo for merging and human work
             docs/plans/
 
 ### Cheat-sheet
@@ -264,12 +264,12 @@ Directory structure:
 ### Init
 
 - script: workflow init
-- Call out to git to create clones of the master repo
+- Call out to git to create clones of the canon repo
 - Default agents: planner, builder, reviewer. Can be modified in config.
 
 Directory structure after:
     /home/auggie/projects/foo/              # project directory
-        master/                             # repo for merging and human work
+        canon/                             # repo for merging and human work
         bare/                               # bare git repo for push
         planner/                            # repo for planner agent
         builder/                            # repo for builder agent
@@ -326,16 +326,16 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 - Ticket must be in state `planning` in a branch on the `planner` repo.
 - Run validate.
 - Push from `planner` to `bare`.
-- Pull to `master`.
+- Pull to `canon`.
 - Transition the ticket to `todo`. Commit.
 - Merge to `main` branch.
-- Push from `master` to `bare`.
+- Push from `canon` to `bare`.
 - Print workflow reminder: "next step is: workflow implement {new_path_to_plan}"
 
 ### Implement: Schedule a ticket for implementation
 
 - script: workflow implement {path_to_plan}
-- Ticket must be in state `planning` or `todo` on the `main` branch of the `master` repo.
+- Ticket must be in state `planning` or `todo` on the `main` branch of the `canon` repo.
 - If ticket is in `planning`, first perform the same push-pull-merge sequence as `todo`.
 - Transition the ticket to `implementing`. Commit. Push.
 - Fetch in builder.
@@ -365,9 +365,9 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
 - script: workflow push {path_to_plan}
 - Generic content-push command. No state transition; used to publish manual edits.
 - Two typical uses:
-    - Push new or modified intents from master to bare, pull to planner.
+    - Push new or modified intents from canon to bare, pull to planner.
     - Push a manually modified plan in the `todo` state. No pull (no agent owns the todo state).
-- Source repo is usually `master`, but not a hard constraint (see `repo_override` in configuration).
+- Source repo is usually `canon`, but not a hard constraint (see `repo_override` in configuration).
 - Git history is authoritative for locating the latest change to push.
 
 ### @ PR Review
@@ -425,7 +425,7 @@ Commit your changes. Do not modify the code.
 
 - script: workflow accept {path_to_plan}
 - Push the branch from `reviewer`
-- Pull to `master`
+- Pull to `canon`
 - Transitions ticket into `done`. Commit.
 - Merge to main
 - Push
@@ -434,7 +434,7 @@ Commit your changes. Do not modify the code.
 
 - script: workflow reject {path_to_plan}
 - Push the branch from `reviewer`
-- Pull to `master`
+- Pull to `canon`
 - Transitions ticket into `reject`. Commit.
 - Merge to main
 - Push
@@ -563,7 +563,7 @@ states:
             - name: push
               command_type: script
               script: push
-              repo_override: master   # source repo differs from the agent that owns the state
+              repo_override: canon   # source repo differs from the agent that owns the state
             ...
     todo:
         agent: null
@@ -576,7 +576,7 @@ states:
 
 - `repo_override` overrides the normal agent-ownership derivation of the source repo for a command.
   Used when a command's source repo differs from the agent that owns the state
-  (e.g. `push` acts on intents from `master`, even though planner owns the intent state).
+  (e.g. `push` acts on intents from `canon`, even though planner owns the intent state).
 
 ```python
 @register_script("implement")

@@ -44,12 +44,12 @@ def test_transition_plan_rewrites_source_repo_when_overridden(monkeypatch: pytes
 
     monkeypatch.setattr(state, "git_mv", fake_git_mv)
 
-    new_plan = state.transition_plan(_plan(), PlanState.TODO, Path("/project"), repo_override="master", dry_run=True)
+    new_plan = state.transition_plan(_plan(), PlanState.TODO, Path("/project"), repo_override="canon", dry_run=True)
 
     assert captured == {
-        "repo_path": Path("/project/master"),
-        "source": Path("/project/master/docs/plans/planning/005_foo.md"),
-        "target": Path("/project/master/docs/plans/todo/005_foo.md"),
+        "repo_path": Path("/project/canon"),
+        "source": Path("/project/canon/docs/plans/planning/005_foo.md"),
+        "target": Path("/project/canon/docs/plans/todo/005_foo.md"),
         "dry_run": True,
     }
-    assert new_plan.path == Path("master/docs/plans/todo/005_foo.md")
+    assert new_plan.path == Path("canon/docs/plans/todo/005_foo.md")

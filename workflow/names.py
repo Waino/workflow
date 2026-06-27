@@ -8,7 +8,7 @@ from enum import StrEnum
 class RepoName(StrEnum):
     """Workflow repos with fixed built-in responsibilities."""
 
-    master = "master"
+    canon = "canon"
     planner = "planner"
     builder = "builder"
     reviewer = "reviewer"

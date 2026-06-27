@@ -234,10 +234,10 @@ def test_render_workflow_section_is_byte_identical_across_calls(tmp_path: Path) 
 
 def test_generate_and_write_writes_files(tmp_path: Path) -> None:
     config = _load_default_config(tmp_path)
-    master = tmp_path / "master"
-    master.mkdir()
+    canon = tmp_path / "canon"
+    canon.mkdir()
     cm_cmd.generate_and_write_agents_md(config)
-    agents_md = tmp_path / "master" / "AGENTS.md"
+    agents_md = tmp_path / "canon" / "AGENTS.md"
     assert agents_md.exists()
     assert MARKER_BEGIN in agents_md.read_text(encoding="utf-8")
     assert (tmp_path / ".agents_md_hash").exists()
@@ -245,30 +245,30 @@ def test_generate_and_write_writes_files(tmp_path: Path) -> None:
 
 def test_generate_and_write_is_idempotent(tmp_path: Path) -> None:
     config = _load_default_config(tmp_path)
-    master = tmp_path / "master"
-    master.mkdir()
+    canon = tmp_path / "canon"
+    canon.mkdir()
     cm_cmd.generate_and_write_agents_md(config)
-    first_content = (tmp_path / "master" / "AGENTS.md").read_text(encoding="utf-8")
+    first_content = (tmp_path / "canon" / "AGENTS.md").read_text(encoding="utf-8")
     cm_cmd.generate_and_write_agents_md(config)
-    second_content = (tmp_path / "master" / "AGENTS.md").read_text(encoding="utf-8")
+    second_content = (tmp_path / "canon" / "AGENTS.md").read_text(encoding="utf-8")
     assert first_content == second_content
 
 
 def test_generate_and_write_raises_on_malformed_markers(tmp_path: Path) -> None:
     config = _load_default_config(tmp_path)
-    master = tmp_path / "master"
-    master.mkdir()
+    canon = tmp_path / "canon"
+    canon.mkdir()
     bad_text = f"{MARKER_END}\n{MARKER_BEGIN}\n"  # reversed
-    (master / "AGENTS.md").write_text(bad_text, encoding="utf-8")
+    (canon / "AGENTS.md").write_text(bad_text, encoding="utf-8")
     with pytest.raises(AgentsMdGenerationError):
         cm_cmd.generate_and_write_agents_md(config)
 
 
 def test_generate_and_write_agents_md_is_world_readable(tmp_path: Path) -> None:
     config = _load_default_config(tmp_path)
-    (tmp_path / "master").mkdir()
+    (tmp_path / "canon").mkdir()
     cm_cmd.generate_and_write_agents_md(config)
-    mode = (tmp_path / "master" / "AGENTS.md").stat().st_mode & 0o777
+    mode = (tmp_path / "canon" / "AGENTS.md").stat().st_mode & 0o777
     assert mode == 0o644
 
 
@@ -280,7 +280,7 @@ def test_generate_and_write_agents_md_is_world_readable(tmp_path: Path) -> None:
 def _make_project(tmp_path: Path) -> Path:
     (tmp_path / WORKFLOW_ROOT_MARKER).touch()
     copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
-    for repo in ("master", "planner", "builder", "reviewer"):
+    for repo in ("canon", "planner", "builder", "reviewer"):
         (tmp_path / repo).mkdir(exist_ok=True)
     return tmp_path / "config.yaml"
 
@@ -292,7 +292,7 @@ def test_agents_md_command_writes_file(tmp_path: Path, monkeypatch: pytest.Monke
     result = CliRunner().invoke(main, ["--config", str(config_path), "agents_md"])
 
     assert result.exit_code == 0
-    agents_md = tmp_path / "master" / "AGENTS.md"
+    agents_md = tmp_path / "canon" / "AGENTS.md"
     assert agents_md.exists()
     assert "AGENTS.md written." in result.output
     assert "git diff" in result.output
@@ -326,7 +326,7 @@ def test_agents_md_check_exits_one_when_stale(tmp_path: Path, monkeypatch: pytes
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
     # Write a stale AGENTS.md without markers
-    (tmp_path / "master" / "AGENTS.md").write_text("# Stale content\n", encoding="utf-8")
+    (tmp_path / "canon" / "AGENTS.md").write_text("# Stale content\n", encoding="utf-8")
 
     result = runner.invoke(main, ["--config", str(config_path), "agents_md", "--check"])
     assert result.exit_code == 1
@@ -347,7 +347,7 @@ def test_agents_md_command_reports_malformed_markers(tmp_path: Path, monkeypatch
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)
     # Reversed markers — find_managed_section raises AgentsMdGenerationError.
-    (tmp_path / "master" / "AGENTS.md").write_text(f"{MARKER_END}\n{MARKER_BEGIN}\n", encoding="utf-8")
+    (tmp_path / "canon" / "AGENTS.md").write_text(f"{MARKER_END}\n{MARKER_BEGIN}\n", encoding="utf-8")
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "agents_md"])
     assert result.exit_code == 1

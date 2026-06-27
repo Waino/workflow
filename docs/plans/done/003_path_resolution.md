@@ -131,11 +131,11 @@ def resolve_plan(
 
     Args:
         fuzzy_path: The human-provided path reference.
-        project_dir: Root of the project (contains master/, planner/, etc.).
+        project_dir: Root of the project (contains canon/, planner/, etc.).
         expected_states: If the command constrains which states are valid, pass them here.
             Used for disambiguation when multiple matches exist.
-        repo: Which repo to search ('master', 'planner', 'builder', 'reviewer').
-            If None, search master/. Some commands (doublecheck) may pass multiple
+        repo: Which repo to search ('canon', 'planner', 'builder', 'reviewer').
+            If None, search canon/. Some commands (doublecheck) may pass multiple
             repos; those callers should resolve per-repo and merge results.
 
     Returns:
@@ -161,11 +161,11 @@ def resolve_plan(
 2. **Normalize**: strip `.md` suffix if present, normalize path separators.
 
 3. **Extract components**: determine which parts are present (repo prefix, state, sequence number, slug).
-   The repo prefix is a known repo name (`master`, `planner`, `builder`, `reviewer`) as the first
+   The repo prefix is a known repo name (`canon`, `planner`, `builder`, `reviewer`) as the first
    path component. The state is a known `PlanState` value. Everything else is the plan name.
 
 4. **Search**: call `find_all_plans_in_repo` on the target repo (from step 3 if embedded in the path,
-   else from the `repo` parameter, else `master`). Collision detection happens inside `find_all_plans_in_repo`.
+   else from the `repo` parameter, else `canon`). Collision detection happens inside `find_all_plans_in_repo`.
 
 5. **Filter by components**: apply the extracted sequence number, slug, and state to narrow the matches.
 
@@ -187,7 +187,7 @@ def resolve_plan(
 ## Helper: find_all_plans_in_repo
 
 ```python
-def find_all_plans_in_repo(project_dir: Path, repo: str = "master") -> list[Plan]:
+def find_all_plans_in_repo(project_dir: Path, repo: str = "canon") -> list[Plan]:
     """Scan docs/plans/ in a single repo and return all plans found.
 
     Raises PlanCollisionError if two non-intent plans with the same sequence number
@@ -205,7 +205,7 @@ def find_all_plans_in_repo(project_dir: Path, repo: str = "master") -> list[Plan
 def find_all_plans(project_dir: Path) -> list[Plan]:
     """Scan all repos and return a merged, deduplicated list of plans.
 
-    When the same plan appears in multiple repos (e.g. 'master' and 'builder'),
+    When the same plan appears in multiple repos (e.g. 'canon' and 'builder'),
     the copy with the most progressed state is kept.
     State ordering: intent < planning < todo < implementing < checking < done < rejected.
     REJECTED ranks highest, so a rejected copy always wins regardless of other repos.

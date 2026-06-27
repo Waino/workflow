@@ -35,7 +35,7 @@ operator's workflow shell follows the active agent. Concretely, close follow-thr
   `builder-shell` window using raw `tmux` subprocess calls via `run_command(...)`. There is no split and
   therefore no control pane.
 - `implement` (`workflow/commands/workflow.py:361-406`) transitions the plan to `implementing`, commits,
-  and pushes `master`. It then sleeps and stops at `# TODO: switch to the builder tmux window.`
+  and pushes `canon`. It then sleeps and stops at `# TODO: switch to the builder tmux window.`
   (line 395). No fetch, branch checkout, or branch creation is performed in the builder repo.
 - `check` (`workflow/commands/workflow.py:498-535`) runs the pre-commit hook and `validate`, transitions
   to `checking`, commits, pushes the builder branch, and `git_fetch`es the reviewer. No pane rotation.
@@ -207,7 +207,7 @@ if git_status_porcelain(project_dir / RepoName.builder, dry_run=dry_run):
 if git_branch_exists(project_dir / RepoName.builder, f"feat/{new_plan.name}", dry_run=dry_run):
     raise WorkflowError(f"branch feat/{new_plan.name} already exists in builder")
 
-# … existing transition + push of master …
+# … existing transition + push of canon …
 
 git_fetch(project_dir / RepoName.builder, dry_run=dry_run)
 git_checkout(project_dir / RepoName.builder, "main", dry_run=dry_run)
@@ -343,7 +343,7 @@ All of `black`, `ruff`, `pytest -m 'not slow'`, and `mypy` must pass (pre-commit
   start" `WorkflowError` rather than corrupting the layout. Window *names* (stable, set by `start`) are
   used for targets.
 - **Plan transitions before the builder branch is ready** — `implement` advances plan state and pushes
-  `master` before the branch setup. Preconditions (A4) are checked *first* so the common failures (dirty
+  `canon` before the branch setup. Preconditions (A4) are checked *first* so the common failures (dirty
   tree, existing branch) abort before any state change; a failure later (e.g. fetch error) surfaces loudly
   and the operator re-runs the branch setup.
 - **Double feature-branch creation** (D5) — mitigated by the branch-absent precondition (A4) and by

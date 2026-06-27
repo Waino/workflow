@@ -33,7 +33,7 @@ def _make_project(tmp_path: Path) -> Path:
     (tmp_path / WORKFLOW_ROOT_MARKER).touch()
     config_path = tmp_path / "config.yaml"
     copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", config_path)
-    for repo in ("master", "planner", "builder", "reviewer"):
+    for repo in ("canon", "planner", "builder", "reviewer"):
         (tmp_path / repo).mkdir()
     return config_path
 
@@ -119,7 +119,7 @@ def test_pr_uses_reviewer_repo_and_renders_branch_commit_and_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "checking", "004_cli_framework.md")
+    _make_plan(tmp_path, "canon", "checking", "004_cli_framework.md")
     _make_plan(tmp_path, "reviewer", "checking", "004_cli_framework.md")
     monkeypatch.chdir(tmp_path)
     pulls: list[tuple[Path, bool, bool]] = []

@@ -53,7 +53,7 @@ def _prepare_agents_md_update(
         msg = "config.project_dir must be set to generate AGENTS.md."
         raise AgentsMdGenerationError(msg)
     project_dir = config.project_dir
-    resolved_path = agents_md_path or (project_dir / "master" / "AGENTS.md")
+    resolved_path = agents_md_path or (project_dir / "canon" / "AGENTS.md")
     config_yaml_path = project_dir / "config.yaml"
     hash_file_path = project_dir / ".agents_md_hash"
 
@@ -167,7 +167,7 @@ def agents_md(ctx: click.Context, check: bool) -> None:  # noqa: FBT001
 
         _atomic_write(update.resolved_path, update.new_text.encode("utf-8"), mode=0o644)
         _atomic_write(update.hash_file_path, update.new_hash.encode("utf-8"))
-        click.echo("AGENTS.md written. Review with 'git diff' in master, then commit and push.")
+        click.echo("AGENTS.md written. Review with 'git diff' in canon, then commit and push.")
 
     except (AgentsMdGenerationError, WorkflowError) as exc:
         click.echo(f"Error: {exc}", err=True)

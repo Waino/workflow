@@ -43,12 +43,12 @@ def _plan(state: PlanState, repo: str) -> Plan:
     return Plan(sequence_number=[5], slug="foo", state=state, path=Path(f"{repo}/docs/plans/{state.value}/005_foo.md"))
 
 
-def test_infer_target_repo_uses_state_agent_or_master(tmp_path: Path) -> None:
+def test_infer_target_repo_uses_state_agent_or_canon(tmp_path: Path) -> None:
     config = _config(tmp_path)
 
     assert dc.infer_target_repo(_plan(PlanState.PLANNING, "planner"), config) == "planner"
     assert dc.infer_target_repo(_plan(PlanState.CHECKING, "reviewer"), config) == "reviewer"
-    assert dc.infer_target_repo(_plan(PlanState.TODO, "master"), config) == "master"
+    assert dc.infer_target_repo(_plan(PlanState.TODO, "canon"), config) == "canon"
     assert dc.infer_target_repo(_plan(PlanState.CHECKING, "reviewer"), config, "builder") == "builder"
 
 
@@ -59,7 +59,7 @@ def test_infer_target_repo_uses_state_agent_or_master(tmp_path: Path) -> None:
         ("planner", ["workflow/cli.py"], "fail"),
         ("builder", ["docs/plans/intent/001_idea.md"], "fail"),
         ("reviewer", ["docs/plans/intent/001_idea.md"], "fail"),
-        ("master", ["workflow/cli.py"], "pass"),
+        ("canon", ["workflow/cli.py"], "pass"),
     ],
 )
 def test_check_file_scope_enforces_repo_rules(target_repo: str, changed_files: list[str], status: str) -> None:

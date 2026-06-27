@@ -71,17 +71,17 @@ Extract as a reusable helper:
 ```python
 def transfer_branch_to_main(
     source_repo: Path,
-    master_repo: Path,
+    canon_repo: Path,
     bare_repo: Path,
     *,
     dry_run: bool = False,
 ) -> None:
-    """Push from source agent repo to bare, pull to master, merge to main, push back.
+    """Push from source agent repo to bare, pull to canon, merge to main, push back.
 
     1. git push (source_repo → bare)
-    2. git pull (master ← bare)
-    3. git merge branch (in master)
-    4. git push (master → bare)
+    2. git pull (canon ← bare)
+    3. git merge branch (in canon)
+    4. git push (canon → bare)
     """
 ```
 

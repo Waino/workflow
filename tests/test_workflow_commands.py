@@ -33,7 +33,7 @@ def _make_project(tmp_path: Path, *, marker: bool = True) -> Path:
     if marker:
         (tmp_path / WORKFLOW_ROOT_MARKER).touch()
     copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
-    for repo in ("master", "planner", "builder", "reviewer"):
+    for repo in ("canon", "planner", "builder", "reviewer"):
         (tmp_path / repo).mkdir(exist_ok=True)
     return tmp_path / "config.yaml"
 
@@ -50,7 +50,7 @@ def _plan(repo: str, state: PlanState, name: str = "005_foo") -> Plan:
 
 def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path, marker=False)
-    (tmp_path / "master" / ".git").mkdir()
+    (tmp_path / "canon" / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     # Single manager mock so we can assert call ordering across all init steps.
     manager = MagicMock()
@@ -65,7 +65,7 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
     project_dir = tmp_path.resolve()
     run_command_calls = [c.args[0] for c in manager.run_command.call_args_list]
     assert run_command_calls == [
-        ["git", "clone", "--bare", "master", "bare"],
+        ["git", "clone", "--bare", "canon", "bare"],
         ["git", "clone", "bare", "planner"],
         ["git", "clone", "bare", "builder"],
         ["git", "clone", "bare", "reviewer"],
@@ -94,8 +94,8 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
             ".git/hooks/pre-commit",
         ],  # reviewer
         ["git", "remote", "add", "origin", str(project_dir / "bare")],
-        ["git", "config", "push.autoSetupRemote", "true"],  # master
-        ["git", "config", "push.default", "current"],  # master
+        ["git", "config", "push.autoSetupRemote", "true"],  # canon
+        ["git", "config", "push.default", "current"],  # canon
         ["git", "push", "-u", "origin", "HEAD"],
         [
             "run_agent_in_docker.sh",
@@ -143,7 +143,7 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
 def test_init_succeeds_when_agents_md_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Init must continue past the AGENTS.md commit step when there's nothing to commit."""
     config_path = _make_project(tmp_path, marker=False)
-    (tmp_path / "master" / ".git").mkdir()
+    (tmp_path / "canon" / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(wc, "generate_and_write_agents_md", MagicMock())
     monkeypatch.setattr(wc, "git_add", MagicMock())
@@ -219,7 +219,7 @@ def test_start_uses_project_local_script_when_present(tmp_path: Path, monkeypatc
 
 def test_new_uses_existing_plans_and_audit_log_for_numbering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "intent", "001_idea.md")
+    _make_plan(tmp_path, "canon", "intent", "001_idea.md")
     write_audit_log(
         tmp_path,
         AuditLogEntry(
@@ -237,7 +237,7 @@ def test_new_uses_existing_plans_and_audit_log_for_numbering(tmp_path: Path, mon
     result = CliRunner().invoke(main, ["--config", str(config_path), "new", "flux_capacitor"])
 
     assert result.exit_code == 0
-    expected = tmp_path / "master" / "docs" / "plans" / "intent" / "003_flux_capacitor.md"
+    expected = tmp_path / "canon" / "docs" / "plans" / "intent" / "003_flux_capacitor.md"
     assert expected.exists()
     assert fake_open.call_args.args[0] == expected
 
@@ -256,7 +256,7 @@ def test_todo_transitions_and_prints_implement_reminder(tmp_path: Path, monkeypa
     fake_commit = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("commit"))
     fake_push = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("push"))
     monkeypatch.setattr(wc, "transfer_branch_to_main", fake_transfer)
-    monkeypatch.setattr(wc, "transition_plan", MagicMock(return_value=_plan("master", PlanState.TODO)))
+    monkeypatch.setattr(wc, "transition_plan", MagicMock(return_value=_plan("canon", PlanState.TODO)))
     monkeypatch.setattr(wc, "git_commit", fake_commit)
     monkeypatch.setattr(wc, "git_push", fake_push)
 
@@ -279,9 +279,9 @@ def _stub_implement_builder_setup(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_implement_prints_explicit_ask_reminder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "todo", "005_foo.md")
+    _make_plan(tmp_path, "canon", "todo", "005_foo.md")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(wc, "transition_plan", MagicMock(return_value=_plan("master", PlanState.IMPLEMENTING)))
+    monkeypatch.setattr(wc, "transition_plan", MagicMock(return_value=_plan("canon", PlanState.IMPLEMENTING)))
     monkeypatch.setattr(wc, "git_commit", MagicMock())
     monkeypatch.setattr(wc, "git_push", MagicMock())
     _stub_implement_builder_setup(monkeypatch)
@@ -296,7 +296,7 @@ def test_implement_prints_explicit_ask_reminder(tmp_path: Path, monkeypatch: pyt
 def test_implement_rejects_dirty_builder_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A dirty builder working tree aborts implement before any state transition."""
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "todo", "005_foo.md")
+    _make_plan(tmp_path, "canon", "todo", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     fake_transition = MagicMock()
     monkeypatch.setattr(wc, "transition_plan", fake_transition)
@@ -313,7 +313,7 @@ def test_implement_rejects_dirty_builder_tree(tmp_path: Path, monkeypatch: pytes
 def test_implement_rejects_existing_feature_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A pre-existing feat/<plan> branch aborts implement before any state transition."""
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "todo", "005_foo.md")
+    _make_plan(tmp_path, "canon", "todo", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     fake_transition = MagicMock()
     monkeypatch.setattr(wc, "transition_plan", fake_transition)
@@ -359,7 +359,7 @@ def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkey
 
 def test_push_pushes_resolved_repo_without_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "intent", "005_foo.md")
+    _make_plan(tmp_path, "canon", "intent", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     fake_push = MagicMock()
     fake_pull = MagicMock()
@@ -369,7 +369,7 @@ def test_push_pushes_resolved_repo_without_transition(tmp_path: Path, monkeypatc
     result = CliRunner().invoke(main, ["--config", str(config_path), "push", "005"])
 
     assert result.exit_code == 0
-    assert [c.args[0] for c in fake_push.call_args_list] == [tmp_path / "master"]
+    assert [c.args[0] for c in fake_push.call_args_list] == [tmp_path / "canon"]
     # intent-state push has pull_target=planner — assert pull_target was also called
     assert [c.args[0] for c in fake_pull.call_args_list] == [tmp_path / "planner"]
     assert "workflow ask 005_foo" in result.output
@@ -389,7 +389,7 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
         wc,
         "transition_plan",
         lambda _plan_arg, target_state, *_args, **_kwargs: _plan(
-            "master" if target_state == PlanState.DONE else "reviewer",
+            "canon" if target_state == PlanState.DONE else "reviewer",
             target_state,
         ),
     )
@@ -412,7 +412,7 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
         + [c.args[0] for c in fake_commit.call_args_list]
     )
     assert tmp_path / "reviewer" in all_repos
-    assert tmp_path / "master" in all_repos
+    assert tmp_path / "canon" in all_repos
     # §2.10 audit-log assertions
     entries = read_audit_log(tmp_path)
     commands = [e.command for e in entries]
@@ -429,7 +429,7 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
 
 def test_next_intent_number_accounts_for_plans_and_audit_log(tmp_path: Path) -> None:
     _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "intent", "001_idea.md")
+    _make_plan(tmp_path, "canon", "intent", "001_idea.md")
     write_audit_log(
         tmp_path,
         AuditLogEntry(
@@ -457,13 +457,13 @@ def test_new_renders_template_and_calls_git_add(tmp_path: Path, monkeypatch: pyt
     result = CliRunner().invoke(main, ["--config", str(config_path), "new", "flux_capacitor"])
 
     assert result.exit_code == 0
-    expected = tmp_path / "master" / "docs" / "plans" / "intent" / "001_flux_capacitor.md"
+    expected = tmp_path / "canon" / "docs" / "plans" / "intent" / "001_flux_capacitor.md"
     assert expected.exists()
     content = expected.read_text(encoding="utf-8")
     assert "# 001: Flux Capacitor" in content
     assert "## Goal" in content
     assert [(c.args[0], c.args[1]) for c in fake_git_add.call_args_list] == [
-        (tmp_path / "master", Path("docs/plans/intent/001_flux_capacitor.md")),
+        (tmp_path / "canon", Path("docs/plans/intent/001_flux_capacitor.md")),
     ]
 
 
@@ -508,9 +508,9 @@ def test_parse_datetime_rejects_garbage() -> None:
 
 def test_status_shows_active_plans_and_next_free_number(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "intent", "003_foo.md")
-    _make_plan(tmp_path, "master", "implementing", "001_bar.md")
-    _make_plan(tmp_path, "master", "done", "002_baz.md")
+    _make_plan(tmp_path, "canon", "intent", "003_foo.md")
+    _make_plan(tmp_path, "canon", "implementing", "001_bar.md")
+    _make_plan(tmp_path, "canon", "done", "002_baz.md")
     monkeypatch.chdir(tmp_path)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "status"])
@@ -527,7 +527,7 @@ def test_status_shows_active_plans_and_next_free_number(tmp_path: Path, monkeypa
 
 def test_status_shows_done_plans_with_all_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "done", "002_baz.md")
+    _make_plan(tmp_path, "canon", "done", "002_baz.md")
     monkeypatch.chdir(tmp_path)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "status", "--all"])
@@ -538,7 +538,7 @@ def test_status_shows_done_plans_with_all_flag(tmp_path: Path, monkeypatch: pyte
 
 def test_status_last_action_and_next_step_from_audit_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "implementing", "001_foo.md")
+    _make_plan(tmp_path, "canon", "implementing", "001_foo.md")
     write_audit_log(
         tmp_path,
         AuditLogEntry(
@@ -560,7 +560,7 @@ def test_status_last_action_and_next_step_from_audit_log(tmp_path: Path, monkeyp
 
 def test_status_no_audit_entry_leaves_columns_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "implementing", "001_foo.md")
+    _make_plan(tmp_path, "canon", "implementing", "001_foo.md")
     monkeypatch.chdir(tmp_path)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "status"])
@@ -579,7 +579,7 @@ def test_status_cross_state_next_step_via_transition(tmp_path: Path, monkeypatch
     first command in TODO ("implement").
     """
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "todo", "001_foo.md")
+    _make_plan(tmp_path, "canon", "todo", "001_foo.md")
     write_audit_log(
         tmp_path,
         AuditLogEntry(
@@ -709,7 +709,7 @@ def test_log_filter_by_until(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 def test_log_filter_by_plan_strict_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When the plan resolves uniquely the substring-fallback notice must NOT appear."""
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "intent", "001_foo.md")
+    _make_plan(tmp_path, "canon", "intent", "001_foo.md")
     write_audit_log(
         tmp_path,
         AuditLogEntry(
@@ -742,7 +742,7 @@ def test_log_filter_by_plan_fallback_notice(tmp_path: Path, monkeypatch: pytest.
 
 def test_status_shows_rejected_plan_only_with_all_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "rejected", "005_foo.md")
+    _make_plan(tmp_path, "canon", "rejected", "005_foo.md")
     monkeypatch.chdir(tmp_path)
 
     result_default = CliRunner().invoke(main, ["--config", str(config_path), "status"])
@@ -761,7 +761,7 @@ def test_new_dry_run_does_not_create_file(tmp_path: Path, monkeypatch: pytest.Mo
     result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "new", "my_feature"])
 
     assert result.exit_code == 0
-    expected = tmp_path / "master" / "docs" / "plans" / "intent" / "001_my_feature.md"
+    expected = tmp_path / "canon" / "docs" / "plans" / "intent" / "001_my_feature.md"
     assert not expected.exists()
     assert "Would create" in result.output
     assert "Would open in $EDITOR" in result.output
@@ -781,7 +781,7 @@ def test_implement_from_planning_branch_transfers_and_transitions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Implement from a PLANNING plan: transfer planner→master, transition TODO then IMPLEMENTING."""
+    """Implement from a PLANNING plan: transfer planner→canon, transition TODO then IMPLEMENTING."""
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "planner", "planning", "005_foo.md")
     monkeypatch.chdir(tmp_path)
@@ -795,8 +795,8 @@ def test_implement_from_planning_branch_transfers_and_transitions(
         "transition_plan",
         MagicMock(
             side_effect=[
-                _plan("master", PlanState.TODO),
-                _plan("master", PlanState.IMPLEMENTING),
+                _plan("canon", PlanState.TODO),
+                _plan("canon", PlanState.IMPLEMENTING),
             ],
         ),
     )
@@ -827,10 +827,10 @@ def test_accept_main_branch_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert "main" in result.output
 
 
-def test_init_fails_without_master_git_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Init exits non-zero when master/.git is missing."""
+def test_init_fails_without_canon_git_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Init exits non-zero when canon/.git is missing."""
     config_path = _make_project(tmp_path, marker=False)
-    # Do NOT create master/.git — the precheck should fire.
+    # Do NOT create canon/.git — the precheck should fire.
     monkeypatch.chdir(tmp_path)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
@@ -856,9 +856,9 @@ def test_todo_resolver_error_exits_nonzero(tmp_path: Path, monkeypatch: pytest.M
 
 
 def test_push_with_pull_target_pulls_after_push(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Push from master with pull_target=planner runs git_push then git_pull(planner)."""
+    """Push from canon with pull_target=planner runs git_push then git_pull(planner)."""
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "intent", "005_foo.md")
+    _make_plan(tmp_path, "canon", "intent", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     fake_push = MagicMock()
     fake_pull = MagicMock()
@@ -868,16 +868,16 @@ def test_push_with_pull_target_pulls_after_push(tmp_path: Path, monkeypatch: pyt
     result = CliRunner().invoke(main, ["--config", str(config_path), "push", "005"])
 
     assert result.exit_code == 0
-    assert fake_push.call_args_list[0].args[0] == tmp_path / "master"
+    assert fake_push.call_args_list[0].args[0] == tmp_path / "canon"
     assert fake_pull.call_args_list[0].args[0] == tmp_path / "planner"
 
 
-def test_push_main_branch_guard_non_master_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Push raises error when source repo is not master and current branch is 'main'."""
+def test_push_main_branch_guard_non_canon_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Push raises error when source repo is not canon and current branch is 'main'."""
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)
-    # The default config always resolves push to master; bypass the resolver
-    # to exercise the defensive guard for non-master repos.
+    # The default config always resolves push to canon; bypass the resolver
+    # to exercise the defensive guard for non-canon repos.
     monkeypatch.setattr(wc, "resolve_plan", MagicMock(return_value=_plan("planner", PlanState.PLANNING)))
     monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="main"))
     monkeypatch.setattr(wc, "git_push", MagicMock())
@@ -888,10 +888,10 @@ def test_push_main_branch_guard_non_master_repo(tmp_path: Path, monkeypatch: pyt
     assert "main" in result.output
 
 
-def test_push_master_on_main_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Push from master on 'main' is allowed (master legitimately pushes intent/todo)."""
+def test_push_canon_on_main_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Push from canon on 'main' is allowed (canon legitimately pushes intent/todo)."""
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "master", "intent", "005_foo.md")
+    _make_plan(tmp_path, "canon", "intent", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(wc, "git_push", MagicMock())
     monkeypatch.setattr(wc, "git_pull", MagicMock())

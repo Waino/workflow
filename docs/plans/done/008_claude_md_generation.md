@@ -13,7 +13,7 @@ the source of prompts.
 ## Scope
 
 - One `workflow agents_md` command updates a single auto-generated section of
-  `master/AGENTS.md`. It writes the file and prints a reminder; it does
+  `canon/AGENTS.md`. It writes the file and prints a reminder; it does
   not stage, commit, or push. The operator reviews with `git diff` and
   commits when satisfied.
 - The same generation function is called by `workflow init` to seed
@@ -116,7 +116,7 @@ Inbound: (none)
 Outbound: plan -> planning [prompt], subdivide -> planning [prompt]
 Commands:
 - [script] new — Create a new intent file.
-- [script] push — Push pending content to master.
+- [script] push — Push pending content to canon.
 - [prompt] ask — Read the plan; ask clarifying questions.
 - [manual] answer — Human answers questions in chat.
 - [prompt] critique — Critique the plan.
@@ -140,7 +140,7 @@ Inbound: todo from planning [script]
 Outbound: implement -> implementing [script]
 Commands:
 - [script] implement -> implementing — Start implementation.
-- [script] push — Push pending content to master.
+- [script] push — Push pending content to canon.
 
 ### implementing (agent: builder)
 Plans under active implementation.
@@ -248,9 +248,9 @@ Behaviour:
   (exit code only matters) and local dev (the one-line summary is
   enough to know what to look for in `git diff`).
 - Default mode (writing):
-  - Write `master/AGENTS.md` and `{project_dir}/.agents_md_hash`
+  - Write `canon/AGENTS.md` and `{project_dir}/.agents_md_hash`
     atomically (write to temp files, then rename).
-  - Print: `AGENTS.md written. Review with 'git diff' in master, then commit and push.`
+  - Print: `AGENTS.md written. Review with 'git diff' in canon, then commit and push.`
   - The command does **not** stage, commit, or push. That is left to
     the operator, who reviews the diff and may decide to revert.
 
@@ -365,35 +365,35 @@ The existing check already reads the first whitespace-separated token of
 
 Init currently does, in order:
 
-1. Assert `master/` is a git repo.
-2. `git clone --bare master bare`.
+1. Assert `canon/` is a git repo.
+2. `git clone --bare canon bare`.
 3. Clone bare into each agent.
 4. Configure remotes / push settings.
-5. `git push -u origin HEAD` from master.
+5. `git push -u origin HEAD` from canon.
 6. Touch `.workflow_root`.
 
 Updated init flow inserts AGENTS.md generation **before the bare clone**
 so all agent clones inherit it. Init is a one-time bootstrap and does
 auto-commit (unlike the standalone `agents_md` command):
 
-1. Assert `master/` is a git repo.
+1. Assert `canon/` is a git repo.
 2. **New**: `generate_and_write_agents_md(config, project_dir)` writes
-   `master/AGENTS.md` and `.agents_md_hash`.
-3. **New**: in master, `git add AGENTS.md && git commit -m "chore: generate initial AGENTS.md"`
-   (skipped if there is nothing to commit, i.e. master already had a
+   `canon/AGENTS.md` and `.agents_md_hash`.
+3. **New**: in canon, `git add AGENTS.md && git commit -m "chore: generate initial AGENTS.md"`
+   (skipped if there is nothing to commit, i.e. canon already had a
    byte-identical AGENTS.md).
-4. `git clone --bare master bare` — the bare clone now contains the
+4. `git clone --bare canon bare` — the bare clone now contains the
    committed AGENTS.md.
 5. Clone bare into each agent.
 6. Configure remotes / push settings.
-7. `git push -u origin HEAD` from master.
+7. `git push -u origin HEAD` from canon.
 8. Touch `.workflow_root`.
 
 `.agents_md_hash` is written in step 2 and is never committed (it lives
 outside any repo).
 
 There is no dirty-tree guard. The operator is expected to use
-`git status` / `git diff` to manage the state of master, and to avoid
+`git status` / `git diff` to manage the state of canon, and to avoid
 running `workflow agents_md` while agents are mid-task (see Risks).
 
 ## Exceptions
@@ -464,7 +464,7 @@ Command tests (CliRunner):
 - `--check` exits 1 with a one-line "would change" summary when
   AGENTS.md is stale; exits 0 silently when current. Never writes.
 - Stale AGENTS.md → writes the file and `.agents_md_hash`, prints
-  `AGENTS.md written. Review with 'git diff' in master, then commit and push.`,
+  `AGENTS.md written. Review with 'git diff' in canon, then commit and push.`,
   exits 0. No git commands are invoked.
 - Missing or empty `description` field anywhere in the config → config
   load raises a Pydantic validation error.
@@ -474,7 +474,7 @@ Init tests:
 - `workflow init` invokes `generate_and_write_agents_md` and commits
   AGENTS.md **before** the `git clone --bare` call (asserted via
   call-order on a mocked `run_command`).
-- Init's AGENTS.md commit is skipped when `master/AGENTS.md` is already
+- Init's AGENTS.md commit is skipped when `canon/AGENTS.md` is already
   byte-identical to the generated content.
 
 Validate tests:
