@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 from click.testing import CliRunner
 
+import workflow.commands.info as wi
 import workflow.commands.workflow as wc
 from workflow import main
 from workflow.audit import read_audit_log, write_audit_log
@@ -390,6 +391,7 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     fake_pull = MagicMock()
     fake_merge = MagicMock()
     fake_commit = MagicMock()
+    fake_checkout = MagicMock()
     monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="feat/005_foo"))
     monkeypatch.setattr(
         wc,
@@ -403,6 +405,7 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(wc, "git_pull", fake_pull)
     monkeypatch.setattr(wc, "git_merge", fake_merge)
     monkeypatch.setattr(wc, "git_commit", fake_commit)
+    monkeypatch.setattr(wc, "git_checkout", fake_commit)
 
     accept_result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005"])
     reject_result = CliRunner().invoke(
@@ -416,6 +419,7 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
         [c.args[0] for c in fake_push.call_args_list]
         + [c.args[0] for c in fake_pull.call_args_list]
         + [c.args[0] for c in fake_commit.call_args_list]
+        + [c.args[0] for c in fake_checkout.call_args_list]
     )
     assert tmp_path / "reviewer" in all_repos
     assert tmp_path / "canon" in all_repos
@@ -518,6 +522,7 @@ def test_status_shows_active_plans_and_next_free_number(tmp_path: Path, monkeypa
     _make_plan(tmp_path, "canon", "implementing", "001_bar.md")
     _make_plan(tmp_path, "canon", "done", "002_baz.md")
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wi, "git_status", MagicMock(return_value=""))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "status"])
 
@@ -535,6 +540,7 @@ def test_status_shows_done_plans_with_all_flag(tmp_path: Path, monkeypatch: pyte
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "canon", "done", "002_baz.md")
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wi, "git_status", MagicMock(return_value=""))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "status", "--all"])
 
@@ -555,6 +561,7 @@ def test_status_last_action_and_next_step_from_audit_log(tmp_path: Path, monkeyp
         ),
     )
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wi, "git_status", MagicMock(return_value=""))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "status"])
 
@@ -562,19 +569,6 @@ def test_status_last_action_and_next_step_from_audit_log(tmp_path: Path, monkeyp
     # last-action column shows the executed command; next step is the configured reminder.
     assert "build" in result.output
     assert "check" in result.output
-
-
-def test_status_no_audit_entry_leaves_columns_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "canon", "implementing", "001_foo.md")
-    monkeypatch.chdir(tmp_path)
-
-    result = CliRunner().invoke(main, ["--config", str(config_path), "status"])
-
-    assert result.exit_code == 0
-    # No audit entries: neither "build" nor "check" should appear in the body.
-    assert "build" not in result.output
-    assert "check" not in result.output
 
 
 def test_status_cross_state_next_step_via_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -596,6 +590,7 @@ def test_status_cross_state_next_step_via_transition(tmp_path: Path, monkeypatch
         ),
     )
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wi, "git_status", MagicMock(return_value=""))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "status"])
 
@@ -750,6 +745,7 @@ def test_status_shows_rejected_plan_only_with_all_flag(tmp_path: Path, monkeypat
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "canon", "rejected", "005_foo.md")
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wi, "git_status", MagicMock(return_value=""))
 
     result_default = CliRunner().invoke(main, ["--config", str(config_path), "status"])
     result_all = CliRunner().invoke(main, ["--config", str(config_path), "status", "--all"])

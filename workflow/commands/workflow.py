@@ -563,9 +563,13 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force: 
         )
         git_push(project_dir / target_repo, dry_run=dry_run)
         branch = git_current_branch(project_dir / target_repo)
+        # checkout the feature branch in reviewer
         git_fetch(project_dir / RepoName.reviewer, dry_run=dry_run)
         git_checkout(project_dir / RepoName.reviewer, branch, create=False, dry_run=dry_run)
         git_pull(project_dir / RepoName.reviewer, dry_run=dry_run)
+        # checkout main in builder to make it ready for the next task
+        git_checkout(project_dir / RepoName.builder, "main", create=False, dry_run=dry_run)
+        git_pull(project_dir / RepoName.builder, dry_run=dry_run)
         _write_script_audit_log(config, "check", dry_run=dry_run, input_plan=new_plan.name)
         _print_command_reminder(config, PlanState.IMPLEMENTING, "check", new_plan.name)
         if not dry_run:
@@ -658,6 +662,9 @@ def accept(ctx: click.Context, plan_path: str) -> None:
             no_verify=True,
         )
         git_push(project_dir / RepoName.canon, dry_run=dry_run)
+        # checkout main in reviewer to make it ready for the next task
+        git_checkout(project_dir / RepoName.reviewer, "main", create=False, dry_run=dry_run)
+        git_pull(project_dir / RepoName.reviewer, dry_run=dry_run)
         _write_script_audit_log(config, "accept", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.CHECKING, "accept", new_plan.name)
     except (

@@ -161,11 +161,12 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
     _git(["commit", "-m", "builder work on 005"], cwd=builder)
 
     # Step 7: workflow check - transitions implementing -> checking, then pushes.
+    reviewer = tmp_path / "reviewer"
     result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005_foo"])
     assert result.exit_code == 0, result.output
     # check must have moved the plan to checking/
-    assert (builder / "docs" / "plans" / "checking" / "005_foo.md").exists()
-    assert not (builder / "docs" / "plans" / "implementing" / "005_foo.md").exists()
+    assert (reviewer / "docs" / "plans" / "checking" / "005_foo.md").exists()
+    assert not (reviewer / "docs" / "plans" / "implementing" / "005_foo.md").exists()
 
     # Step 8: omitted (reviewer already on the feature branch)
 
