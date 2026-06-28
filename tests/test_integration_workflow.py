@@ -37,13 +37,14 @@ def _git(
 
 def _make_integration_config(tmp_path: Path) -> Path:
     """Write a minimal workflow config derived from the default, return its path."""
-    (tmp_path / WORKFLOW_ROOT_MARKER).touch()
     with (tmp_path / "run_agent_in_docker.sh").open("w") as dummy_script:
         dummy_script.write("#!/bin/bash")
     (tmp_path / "run_agent_in_docker.sh").chmod(0o755)
     src = Path(__file__).parent.parent / "docs" / "default_config.yaml"
     dest = tmp_path / "config.yaml"
     dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+    (tmp_path / "canon" / ".git-pre-commit-hook").touch()
     return dest
 
 
@@ -166,10 +167,7 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
     assert (builder / "docs" / "plans" / "checking" / "005_foo.md").exists()
     assert not (builder / "docs" / "plans" / "implementing" / "005_foo.md").exists()
 
-    # Step 8: reviewer fetches and checks out the feature branch
-    reviewer = tmp_path / "reviewer"
-    _git(["fetch", "origin"], cwd=reviewer)
-    _git(["checkout", "-b", "feat/005_foo", "origin/feat/005_foo"], cwd=reviewer)
+    # Step 8: omitted (reviewer already on the feature branch)
 
     # Step 9: workflow accept
     result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005_foo"])

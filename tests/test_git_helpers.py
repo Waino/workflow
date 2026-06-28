@@ -16,7 +16,11 @@ def test_transfer_branch_to_main_runs_steps_in_order(monkeypatch: pytest.MonkeyP
     canon_repo = tmp_path / "canon"
     calls: list[tuple[object, ...]] = []
 
-    monkeypatch.setattr(git_helpers, "git_current_branch", lambda _repo: "feat/005_plan_state_and_git")
+    monkeypatch.setattr(
+        git_helpers,
+        "git_current_branch",
+        lambda repo: "feat/005_plan_state_and_git" if repo == source_repo else "main",
+    )
     monkeypatch.setattr(git_helpers, "git_push", lambda repo, *, dry_run=False: calls.append(("push", repo, dry_run)))
     monkeypatch.setattr(git_helpers, "git_pull", lambda repo, *, dry_run=False: calls.append(("pull", repo, dry_run)))
     monkeypatch.setattr(
@@ -33,6 +37,7 @@ def test_transfer_branch_to_main_runs_steps_in_order(monkeypatch: pytest.MonkeyP
         # origin/ prefix because the branch is only a remote tracking ref in target repo
         ("merge", canon_repo, "origin/feat/005_plan_state_and_git", True),
         ("push", canon_repo, True),
+        ("pull", source_repo, True),
     ]
 
 

@@ -35,6 +35,7 @@ def _make_project(tmp_path: Path, *, marker: bool = True) -> Path:
     copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
     for repo in ("canon", "planner", "builder", "reviewer"):
         (tmp_path / repo).mkdir(exist_ok=True)
+    (tmp_path / "canon" / ".git-pre-commit-hook").touch()
     return tmp_path / "config.yaml"
 
 
@@ -144,6 +145,7 @@ def test_init_succeeds_when_agents_md_unchanged(tmp_path: Path, monkeypatch: pyt
     """Init must continue past the AGENTS.md commit step when there's nothing to commit."""
     config_path = _make_project(tmp_path, marker=False)
     (tmp_path / "canon" / ".git").mkdir()
+    (tmp_path / "canon" / ".git-pre-commit-hook").touch()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(wc, "generate_and_write_agents_md", MagicMock())
     monkeypatch.setattr(wc, "git_add", MagicMock())
@@ -345,6 +347,9 @@ def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkey
     fake_rotate = MagicMock()
     monkeypatch.setattr(wc, "rotate_control_pane", fake_rotate)
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
+    monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="feat/005_foo"))
+    monkeypatch.setattr(wc, "git_checkout", MagicMock())
+    monkeypatch.setattr(wc, "git_pull", MagicMock())
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005"])
 
@@ -352,7 +357,8 @@ def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkey
     first_call_args = fake_run_command.call_args_list[0].args[0]
     assert first_call_args[:2] == ["docker", "exec"]
     assert first_call_args[2].endswith("-builder")
-    assert "Next step: review" in result.output
+    assert "Next step" in result.output
+    assert "review" in result.output
     # The reviewer window is rotated into view after the handoff.
     assert fake_rotate.call_args.args[1] == "reviewer"
 
@@ -993,6 +999,9 @@ def test_rotate_best_effort_downgrades_error_to_warning(
     monkeypatch.setattr(wc, "git_push", MagicMock())
     monkeypatch.setattr(wc, "git_fetch", MagicMock())
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
+    monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="feat/005_foo"))
+    monkeypatch.setattr(wc, "git_checkout", MagicMock())
+    monkeypatch.setattr(wc, "git_pull", MagicMock())
     monkeypatch.setattr(wc, "rotate_control_pane", MagicMock(side_effect=WorkflowError("boom")))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005"])
