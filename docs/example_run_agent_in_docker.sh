@@ -7,7 +7,7 @@
 # PROJECT       - project name (used in container name and volume path)
 # AGENT         - agent name  (used in container name and volume path)
 # --project-dir - absolute path to the project root directory (passed by `workflow start`)
-# --model       - model id forwarded to the agent CLI (required for agent windows)
+# --model       - model id forwarded to the agent CLI
 # --reset       - remove the existing container before starting a fresh one
 # --shell       - open an interactive bash shell instead of running the agent CLI
 # --venv        - create a virtual env instead of running the agent CLI
