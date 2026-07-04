@@ -11,12 +11,12 @@ The user may deviate from the workflow at any time.
 A prompt command may therefore arrive in a state where it is not listed below
 (for example, `ask` may be sent in any state).
 When this happens, follow the prompt as given.
-{% for state in states %}
 
 Plans reside in `docs/plans`.
 The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md` is in the state `implementing`.
 Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
 Reviews (in docs/plans/reviews) do not follow this naming scheme.
+{% for state in states %}
 
 ### {{ state.name }} (agent: {{ state.agent }})
 {{ state.description }}

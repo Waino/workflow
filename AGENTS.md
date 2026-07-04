@@ -66,11 +66,6 @@ Commands:
 - [prompt] plan -> planning — Write a detailed plan from an intent.
 - [prompt] subdivide -> planning — Break the plan into smaller planning documents.
 
-Plans reside in `docs/plans`.
-The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md` is in the state `implementing`.
-Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
-Reviews (in docs/plans/reviews) do not follow this naming scheme.
-
 ### planning (agent: planner)
 Plans being drafted.
 Inbound: plan from intent [prompt], subdivide from intent [prompt]
@@ -81,11 +76,6 @@ Commands:
 - [manual] revise — Human revises the plan.
 - [script] todo -> todo — Approve for implementation.
 
-Plans reside in `docs/plans`.
-The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md` is in the state `implementing`.
-Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
-Reviews (in docs/plans/reviews) do not follow this naming scheme.
-
 ### todo (agent: human operator)
 Plans approved for implementation.
 Inbound: todo from planning [script]
@@ -93,11 +83,6 @@ Outbound: implement -> implementing [script]
 Commands:
 - [script] implement -> implementing — Start implementation.
 - [script] push — Push pending content to canon.
-
-Plans reside in `docs/plans`.
-The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md` is in the state `implementing`.
-Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
-Reviews (in docs/plans/reviews) do not follow this naming scheme.
 
 ### implementing (agent: builder)
 Plans under active implementation.
@@ -108,11 +93,6 @@ Commands:
 - [manual] answer — Human answers questions in chat.
 - [prompt] build — Implement the plan.
 - [script] check -> checking — Run verification checks and hand off.
-
-Plans reside in `docs/plans`.
-The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md` is in the state `implementing`.
-Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
-Reviews (in docs/plans/reviews) do not follow this naming scheme.
 
 ### checking (agent: reviewer)
 Implementation complete, review in progress.
@@ -127,32 +107,17 @@ Commands:
 - [script] accept -> done — Accept and merge to main.
 - [script] reject -> rejected — Close out without merging.
 
-Plans reside in `docs/plans`.
-The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md` is in the state `implementing`.
-Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
-Reviews (in docs/plans/reviews) do not follow this naming scheme.
-
 ### done (agent: human operator)
 Merged to main. Implementation and review complete.
 Inbound: accept from checking [script]
 Outbound: (none)
 Commands: (none)
 
-Plans reside in `docs/plans`.
-The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md` is in the state `implementing`.
-Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
-Reviews (in docs/plans/reviews) do not follow this naming scheme.
-
 ### rejected (agent: human operator)
 Will not be implemented.
 Inbound: reject from checking [script]
 Outbound: (none)
 Commands: (none)
-
-Plans reside in `docs/plans`.
-The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md` is in the state `implementing`.
-Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
-Reviews (in docs/plans/reviews) do not follow this naming scheme.
 
 ### review (agent: reviewer)
 Special state for all reviews. Commands are codebase-wide review and audit tasks unrelated to a specific plan.
