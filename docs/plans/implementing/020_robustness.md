@@ -286,3 +286,26 @@ Recommended commit order (also the subdivision boundary if split):
 None blocking. Builds on existing `git_helpers.py`, `shell.py`, `tmux_dispatch.py`,
 and the integration test harness. Related but independent: 019 (tmux gaps, in
 `implementing`).
+
+## Deviations (recorded during implementation)
+
+- **`plan_resolver` ambiguity on same-command reruns.** Resolving a bare plan
+  identifier (e.g. `005_foo`) after the *same* transition command (`implement`,
+  `check`, or `accept`) has already run once produces a `SourcesDisagreeError`:
+  the audit source's most-recent entry now records that same command against
+  its *target* state's owning repo, which can differ from the subcommand
+  source's repo (derived from the command's *defined* state). This is a
+  pre-existing `plan_resolver.py` limitation (out of scope for 020, not
+  modified here), only surfaced by the new resume tests that call the same
+  command twice. Worked around in tests by passing a fully-qualified
+  `repo/docs/plans/state/name.md` path on the rerun, which is the same
+  workaround an operator would use in practice. Left as a follow-up candidate
+  for `plan_resolver.py`, not fixed in this plan.
+- **`doctor` anomaly scope.** Implemented pragmatically per the brief spec:
+  branch/dirty/lock/validity per clone, plus "stray branch" detection for
+  `builder`/`reviewer` (non-`main`, non-`feat/<active plan>`) and duplicate
+  plan files across state dirs *within a single repo*. Cross-repo staleness
+  (e.g. `planner`/`reviewer` lagging behind `canon` between transitions) is
+  normal/expected during active work and is intentionally not flagged, since
+  agents only pull to `main` between tasks, not proactively after every canon
+  change.
