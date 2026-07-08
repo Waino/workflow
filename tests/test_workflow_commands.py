@@ -350,6 +350,9 @@ def _stub_implement_builder_setup(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the builder-side git/tmux work so implement tests stay repo-free."""
     monkeypatch.setattr(wc, "git_status_porcelain", MagicMock(return_value=""))
     monkeypatch.setattr(wc, "git_branch_exists", MagicMock(return_value=False))
+    monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="main"))
+    monkeypatch.setattr(wc, "git_index_lock_present", MagicMock(return_value=False))
+    monkeypatch.setattr(wc, "git_commit_if_changed", MagicMock(return_value=CommitResult.COMMITTED))
     monkeypatch.setattr(wc, "git_fetch", MagicMock())
     monkeypatch.setattr(wc, "git_checkout", MagicMock())
     monkeypatch.setattr(wc, "git_pull", MagicMock())
@@ -390,7 +393,7 @@ def test_implement_rejects_dirty_builder_tree(tmp_path: Path, monkeypatch: pytes
 
 
 def test_implement_rejects_existing_feature_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A pre-existing feat/<plan> branch aborts implement before any state transition."""
+    """A pre-existing feat/<plan> branch (plan not yet implementing) requires --continue."""
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "canon", "todo", "005_foo.md")
     monkeypatch.chdir(tmp_path)
@@ -398,11 +401,13 @@ def test_implement_rejects_existing_feature_branch(tmp_path: Path, monkeypatch: 
     monkeypatch.setattr(wc, "transition_plan", fake_transition)
     monkeypatch.setattr(wc, "git_status_porcelain", MagicMock(return_value=""))
     monkeypatch.setattr(wc, "git_branch_exists", MagicMock(return_value=True))
+    monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="main"))
+    monkeypatch.setattr(wc, "git_index_lock_present", MagicMock(return_value=False))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005"])
 
     assert result.exit_code == 1
-    assert "already exists" in result.output
+    assert "pass --continue" in result.output
     fake_transition.assert_not_called()
 
 
@@ -419,8 +424,10 @@ def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkey
     )
     monkeypatch.setattr(wc, "transition_plan", lambda _p, ts, *_a, **_kw: _plan("builder", ts))
     monkeypatch.setattr(wc, "git_commit", MagicMock())
+    monkeypatch.setattr(wc, "git_commit_if_changed", MagicMock(return_value=CommitResult.COMMITTED))
     monkeypatch.setattr(wc, "git_push", MagicMock())
     monkeypatch.setattr(wc, "git_fetch", MagicMock())
+    monkeypatch.setattr(wc, "git_index_lock_present", MagicMock(return_value=False))
     fake_rotate = MagicMock()
     monkeypatch.setattr(wc, "rotate_control_pane", fake_rotate)
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
@@ -430,7 +437,7 @@ def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkey
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     first_call_args = fake_run_command.call_args_list[0].args[0]
     assert first_call_args[:2] == ["docker", "exec"]
     assert first_call_args[2].endswith("-builder")
@@ -468,7 +475,11 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     fake_merge = MagicMock()
     fake_commit = MagicMock()
     fake_checkout = MagicMock()
-    monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="feat/005_foo"))
+
+    def _current_branch(repo_path: Path) -> str:
+        return "main" if repo_path == tmp_path / "canon" else "feat/005_foo"
+
+    monkeypatch.setattr(wc, "git_current_branch", _current_branch)
     monkeypatch.setattr(
         wc,
         "transition_plan",
@@ -481,6 +492,7 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(wc, "git_pull", fake_pull)
     monkeypatch.setattr(wc, "git_merge", fake_merge)
     monkeypatch.setattr(wc, "git_commit", fake_commit)
+    monkeypatch.setattr(wc, "git_commit_if_changed", fake_commit)
     monkeypatch.setattr(wc, "git_checkout", fake_commit)
 
     accept_result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005"])
@@ -859,15 +871,21 @@ def test_implement_from_planning_branch_transfers_and_transitions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Implement from a PLANNING plan: transfer planner→canon, transition TODO then IMPLEMENTING."""
+    """Implement from a PLANNING plan: transfer planner->canon (inlined+guarded), then TODO, IMPLEMENTING."""
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "planner", "planning", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     call_order: list[str] = []
-    fake_transfer = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("transfer"))
-    fake_commit = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("commit"))
-    fake_push = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("push"))
-    monkeypatch.setattr(wc, "transfer_branch_to_main", fake_transfer)
+    monkeypatch.setattr(wc, "git_push", MagicMock(side_effect=lambda *_a, **_kw: call_order.append("push")))
+    monkeypatch.setattr(wc, "git_pull", MagicMock(side_effect=lambda *_a, **_kw: call_order.append("pull")))
+    monkeypatch.setattr(wc, "git_merge", MagicMock(side_effect=lambda *_a, **_kw: call_order.append("merge")))
+    monkeypatch.setattr(wc, "git_checkout", MagicMock(side_effect=lambda *_a, **_kw: call_order.append("checkout")))
+
+    def _commit_if_changed(*_a: object, **_kw: object) -> CommitResult:
+        call_order.append("commit")
+        return CommitResult.COMMITTED
+
+    monkeypatch.setattr(wc, "git_commit_if_changed", _commit_if_changed)
     monkeypatch.setattr(
         wc,
         "transition_plan",
@@ -878,15 +896,34 @@ def test_implement_from_planning_branch_transfers_and_transitions(
             ],
         ),
     )
-    monkeypatch.setattr(wc, "git_commit", fake_commit)
-    monkeypatch.setattr(wc, "git_push", fake_push)
-    _stub_implement_builder_setup(monkeypatch)
+    monkeypatch.setattr(wc, "git_status_porcelain", MagicMock(return_value=""))
+    monkeypatch.setattr(wc, "git_branch_exists", MagicMock(return_value=False))
+    monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="feat/planner-branch"))
+    monkeypatch.setattr(wc, "git_index_lock_present", MagicMock(return_value=False))
+    monkeypatch.setattr(wc, "git_fetch", MagicMock())
+    monkeypatch.setattr(wc, "rotate_control_pane", MagicMock())
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005"])
 
     assert result.exit_code == 0, result.output
-    assert call_order == ["transfer", "commit", "commit", "push"]
+    # push planner -> pull canon -> merge -> push canon -> checkout planner main -> pull planner
+    # -> commit (todo) -> commit (implementing) -> push canon -> checkout builder main -> pull builder
+    # -> checkout feat branch
+    assert call_order == [
+        "push",
+        "pull",
+        "merge",
+        "push",
+        "checkout",
+        "pull",
+        "commit",
+        "commit",
+        "push",
+        "checkout",
+        "pull",
+        "checkout",
+    ]
     assert "workflow ask 005_foo" in result.output
     entries = read_audit_log(tmp_path)
     assert any(e.command == "implement" for e in entries)
@@ -1068,8 +1105,10 @@ def test_rotate_best_effort_downgrades_error_to_warning(
     )
     monkeypatch.setattr(wc, "transition_plan", lambda _p, ts, *_a, **_kw: _plan("builder", ts))
     monkeypatch.setattr(wc, "git_commit", MagicMock())
+    monkeypatch.setattr(wc, "git_commit_if_changed", MagicMock(return_value=CommitResult.COMMITTED))
     monkeypatch.setattr(wc, "git_push", MagicMock())
     monkeypatch.setattr(wc, "git_fetch", MagicMock())
+    monkeypatch.setattr(wc, "git_index_lock_present", MagicMock(return_value=False))
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
     monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="feat/005_foo"))
     monkeypatch.setattr(wc, "git_checkout", MagicMock())

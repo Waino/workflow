@@ -318,3 +318,189 @@ def test_init_dry_run_previews_resume_without_mutating(tmp_path: Path, monkeypat
     assert "[skip] bare clone" in result_cont.output
     assert marker_before == (tmp_path / WORKFLOW_ROOT_MARKER).exists()
     assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "bare").stdout == bare_head_before
+
+
+# ---------------------------------------------------------------------------
+# check / accept / implement resume tests
+# ---------------------------------------------------------------------------
+
+
+def _drive_pipeline_through_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run init -> planner edit -> todo -> implement -> builder edit -> check, for real."""
+    _init_canon_repo(tmp_path)
+    config_path = _make_integration_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    passing = [CheckResult(check_name="ok", status="pass", message="ok")]
+    monkeypatch.setattr(wc, "run_validate", MagicMock(return_value=passing))
+    monkeypatch.setattr(wc, "_run_pre_commit_in_sandbox", MagicMock())
+    monkeypatch.setattr(wc.time, "sleep", MagicMock())
+    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
+    monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+    assert result.exit_code == 0, result.output
+
+    for repo_name in ("planner", "builder", "reviewer"):
+        repo = tmp_path / repo_name
+        _git(["config", "user.email", "test@example.com"], cwd=repo)
+        _git(["config", "user.name", "Test"], cwd=repo)
+
+    planner = tmp_path / "planner"
+    _git(["checkout", "-b", "plan/005_foo"], cwd=planner)
+    plan_dir = planner / "docs" / "plans" / "planning"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "005_foo.md").write_text("# 005: Foo\n\n## Goal\nDo stuff.\n", encoding="utf-8")
+    _git(["add", "."], cwd=planner)
+    _git(["commit", "-m", "add planning plan"], cwd=planner)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "todo", "005_foo"])
+    assert result.exit_code == 0, result.output
+    result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005_foo"])
+    assert result.exit_code == 0, result.output
+
+    builder = tmp_path / "builder"
+    (builder / "README.md").write_text("builder work\n", encoding="utf-8")
+    _git(["add", "."], cwd=builder)
+    _git(["commit", "-m", "builder work on 005"], cwd=builder)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005_foo"])
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_check_rerun_after_full_success_is_a_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-running `check` after it already fully succeeded must be idempotent."""
+    _drive_pipeline_through_check(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.yaml"
+
+    reviewer_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "reviewer").stdout
+    builder_branch_before = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path / "builder").stdout
+
+    # A fully-qualified path sidesteps a pre-existing plan_resolver limitation: two audit
+    # entries for the same command ("check" here) disagree on repo (subcommand pins
+    # builder, the second run's own audit entry pins reviewer) when resolved by bare name.
+    # builder itself already moved on to 'main' (last check step), so the transitioned
+    # file is only reachable via the reviewer clone (still on the feature branch).
+    result = CliRunner().invoke(
+        main,
+        ["--config", str(config_path), "check", "reviewer/docs/plans/checking/005_foo.md"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "reviewer").stdout == reviewer_head_before
+    assert _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path / "builder").stdout == builder_branch_before
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_accept_rerun_after_full_success_is_a_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-running `accept` after it already fully succeeded must be idempotent."""
+    _drive_pipeline_through_check(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.yaml"
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005_foo"])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "canon" / "docs" / "plans" / "done" / "005_foo.md").exists()
+
+    canon_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout
+    reviewer_branch_before = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path / "reviewer").stdout
+
+    # See the qualified-path comment in test_check_rerun_after_full_success_is_a_noop.
+    result = CliRunner().invoke(
+        main,
+        ["--config", str(config_path), "accept", "canon/docs/plans/done/005_foo.md"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout == canon_head_before
+    assert _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path / "reviewer").stdout == reviewer_branch_before
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_implement_rerun_after_full_success_leaves_builder_on_feature_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-running `implement` after success must not force builder back onto 'main'."""
+    _init_canon_repo(tmp_path)
+    config_path = _make_integration_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
+    monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
+    monkeypatch.setattr(wc.time, "sleep", MagicMock())
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+    assert result.exit_code == 0, result.output
+    for repo_name in ("planner", "builder", "reviewer"):
+        repo = tmp_path / repo_name
+        _git(["config", "user.email", "test@example.com"], cwd=repo)
+        _git(["config", "user.name", "Test"], cwd=repo)
+
+    _make_plan(tmp_path / "canon", "todo", "005_foo.md")
+    _git(["add", "."], cwd=tmp_path / "canon")
+    _git(["commit", "-m", "add todo plan"], cwd=tmp_path / "canon")
+    _git(["push"], cwd=tmp_path / "canon")
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005_foo"])
+    assert result.exit_code == 0, result.output
+
+    builder = tmp_path / "builder"
+    assert _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=builder).stdout.strip() == b"feat/005_foo"
+    # Simulate work in progress on the feature branch.
+    (builder / "in_progress.txt").write_text("wip\n", encoding="utf-8")
+    _git(["add", "."], cwd=builder)
+    _git(["commit", "-m", "wip"], cwd=builder)
+    wip_head = _git(["rev-parse", "HEAD"], cwd=builder).stdout
+
+    # See the qualified-path comment in test_check_rerun_after_full_success_is_a_noop.
+    result = CliRunner().invoke(
+        main,
+        ["--config", str(config_path), "implement", "canon/docs/plans/implementing/005_foo.md"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=builder).stdout.strip() == b"feat/005_foo"
+    assert _git(["rev-parse", "HEAD"], cwd=builder).stdout == wip_head
+
+
+def _make_plan(repo_path: Path, state: str, filename: str) -> None:
+    plan_dir = repo_path / "docs" / "plans" / state
+    plan_dir.mkdir(parents=True, exist_ok=True)
+    (plan_dir / filename).write_text("# 005: Foo\n\n## Goal\nDo stuff.\n", encoding="utf-8")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_implement_needs_continue_for_leftover_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pre-existing feat/<plan> branch, while the plan is still `todo`, gates behind --continue."""
+    _init_canon_repo(tmp_path)
+    config_path = _make_integration_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
+    monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
+    monkeypatch.setattr(wc.time, "sleep", MagicMock())
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+    assert result.exit_code == 0, result.output
+    for repo_name in ("planner", "builder", "reviewer"):
+        repo = tmp_path / repo_name
+        _git(["config", "user.email", "test@example.com"], cwd=repo)
+        _git(["config", "user.name", "Test"], cwd=repo)
+
+    _make_plan(tmp_path / "canon", "todo", "005_foo.md")
+    _git(["add", "."], cwd=tmp_path / "canon")
+    _git(["commit", "-m", "add todo plan"], cwd=tmp_path / "canon")
+    _git(["push"], cwd=tmp_path / "canon")
+
+    builder = tmp_path / "builder"
+    _git(["checkout", "-b", "feat/005_foo"], cwd=builder)
+    _git(["checkout", "main"], cwd=builder)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005_foo"])
+
+    assert result.exit_code == 1
+    assert "pass --continue" in result.output
+    assert (tmp_path / "canon" / "docs" / "plans" / "todo" / "005_foo.md").exists()
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005_foo", "--continue"])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "canon" / "docs" / "plans" / "implementing" / "005_foo.md").exists()

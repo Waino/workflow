@@ -35,6 +35,7 @@ from workflow.git_helpers import (
     git_current_branch,
     git_fetch,
     git_index_lock_present,
+    git_is_ancestor,
     git_is_valid_repo,
     git_merge,
     git_pull,
@@ -65,11 +66,13 @@ from workflow.validate import CHECK_NAMES, CheckResult, infer_target_repo
 from workflow.validate import validate as run_validate
 
 # Hard state constraints for script commands
+# Each command also accepts its own transition's *target* state, so a plan already
+# moved by a prior (partially-failed) run of the same command can be resumed.
 _EXPECTED_STATES_FOR: dict[str, set[PlanState]] = {
     "todo": {PlanState.PLANNING},
-    "implement": {PlanState.PLANNING, PlanState.TODO},
-    "check": {PlanState.IMPLEMENTING},
-    "accept": {PlanState.CHECKING},
+    "implement": {PlanState.PLANNING, PlanState.TODO, PlanState.IMPLEMENTING},
+    "check": {PlanState.IMPLEMENTING, PlanState.CHECKING},
+    "accept": {PlanState.CHECKING, PlanState.DONE},
     "reject": set(PlanState) - {PlanState.REVIEW},
 }
 
@@ -589,10 +592,130 @@ def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
     ctx.exit(0)
 
 
+def _ensure_branch_checked_out(repo_path: Path, branch: str, *, dry_run: bool) -> None:
+    """Check out *branch* in *repo_path* unless it is already the current branch."""
+    if git_current_branch(repo_path) != branch:
+        git_checkout(repo_path, branch, dry_run=dry_run)
+
+
+def _transition_if_needed(  # noqa: PLR0913
+    plan: Plan,
+    target_state: PlanState,
+    project_dir: Path,
+    *,
+    repo_override: str | None = None,
+    commit_repo: str | None = None,
+    dry_run: bool,
+) -> Plan:
+    """Move *plan* to *target_state*, skipping the ``git mv`` when already done (decision 4).
+
+    Always (re)commits via :func:`git_commit_if_changed`, which safely no-ops when
+    there is nothing staged. This also finishes a prior run that moved the file but
+    was interrupted before committing.
+    """
+    repo_name = repo_override or plan.path.parts[0]
+    target_rel = Path(repo_name) / "docs" / "plans" / target_state.value / plan.path.name
+    if (project_dir / target_rel).exists():
+        new_plan = plan.model_copy(update={"state": target_state, "path": target_rel})
+    else:
+        new_plan = transition_plan(plan, target_state, project_dir, repo_override=repo_override, dry_run=dry_run)
+    git_commit_if_changed(
+        project_dir / (commit_repo or repo_name),
+        _transition_commit_message(new_plan, target_state),
+        dry_run=dry_run,
+        no_verify=True,
+    )
+    return new_plan
+
+
+def _classify_implement_steps(
+    resume: ResumePlan,
+    plan: Plan,
+    project_dir: Path,
+    builder_repo: Path,
+    feature_branch: str,
+) -> None:
+    if plan.state == PlanState.PLANNING:
+        resume.will_run("transfer planner branch to main")
+        resume.will_run("transition to todo")
+    else:
+        resume.satisfied("transfer planner branch to main", "plan already past planning")
+        resume.satisfied("transition to todo", "plan already past planning")
+
+    implementing_path = project_dir / RepoName.canon / "docs" / "plans" / "implementing" / plan.path.name
+    if implementing_path.exists():
+        resume.satisfied("transition to implementing", "plan file already in implementing/")
+    else:
+        resume.will_run("transition to implementing")
+
+    resume.will_run("push canon")
+
+    # If the feature branch already exists, builder is presumably already checked out to
+    # it (and possibly has work in progress) -- fetch/checkout-main/pull must not run, or
+    # a rerun on an already-fully-implemented plan would force builder off its own branch.
+    branch_exists = git_branch_exists(builder_repo, feature_branch)
+    if branch_exists:
+        resume.satisfied("fetch builder", "feature branch already exists")
+        resume.satisfied("checkout main in builder", "feature branch already exists")
+    else:
+        resume.will_run("fetch builder")
+        if git_current_branch(builder_repo) == "main":
+            resume.satisfied("checkout main in builder", "builder already on main")
+        else:
+            resume.will_run("checkout main in builder")
+
+    step = f"create {feature_branch}"
+    if not branch_exists:
+        resume.will_run(step)
+    elif plan.state == PlanState.IMPLEMENTING:
+        resume.satisfied(step, "already created by a prior run")
+    else:
+        resume.needs_continue(step, "branch exists but plan not yet implementing; pass --continue to accept it as-is")
+
+
+def _run_implement_steps(
+    plan: Plan,
+    project_dir: Path,
+    builder_repo: Path,
+    feature_branch: str,
+    *,
+    dry_run: bool,
+) -> Plan:
+    """Run the (already-classified) implement steps, each idempotently skipping its own no-op."""
+    if plan.state == PlanState.PLANNING:
+        # Inlined, guarded equivalent of transfer_branch_to_main: each git op below is
+        # naturally idempotent (safe to always re-run), unlike the shared helper (used
+        # unguarded by `todo`, out of scope for resume -- see plan 020 build sequence).
+        planner_repo = project_dir / RepoName.planner
+        canon_repo = project_dir / RepoName.canon
+        planner_branch = git_current_branch(planner_repo)
+        git_push(planner_repo, dry_run=dry_run)
+        git_pull(canon_repo, dry_run=dry_run)
+        git_merge(canon_repo, f"origin/{planner_branch}", dry_run=dry_run)
+        git_push(canon_repo, dry_run=dry_run)
+        _ensure_branch_checked_out(planner_repo, "main", dry_run=dry_run)
+        git_pull(planner_repo, dry_run=dry_run)
+        plan = _transition_if_needed(plan, PlanState.TODO, project_dir, repo_override=RepoName.canon, dry_run=dry_run)
+
+    new_plan = _transition_if_needed(plan, PlanState.IMPLEMENTING, project_dir, dry_run=dry_run)
+
+    canon_repo = project_dir / RepoName.canon
+    git_push(canon_repo, dry_run=dry_run)
+    # Leave an existing feature branch (and any work in progress on it) untouched.
+    if not git_branch_exists(builder_repo, feature_branch):
+        git_fetch(builder_repo, dry_run=dry_run)
+        _ensure_branch_checked_out(builder_repo, "main", dry_run=dry_run)
+        git_pull(builder_repo, dry_run=dry_run)
+        git_checkout(builder_repo, feature_branch, create=True, dry_run=dry_run)
+
+    return new_plan
+
+
 @register_script("implement")
+@click.option("--continue", "cont", is_flag=True, help="Proceed past rough (unverifiable) partial state.")
 @click.argument("plan_path")
 @click.pass_context
-def implement(ctx: click.Context, plan_path: str) -> None:
+def implement(ctx: click.Context, plan_path: str, *, cont: bool) -> None:
     """Schedule a ticket for implementation: transition to implementing and push."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
@@ -601,41 +724,27 @@ def implement(ctx: click.Context, plan_path: str) -> None:
         project_dir = _require_project_dir(config)
         plan = resolve_plan(plan_path, project_dir, config=config, command_name="implement")
         _enforce_expected_state(plan, "implement")
-        # Preconditions (checked before any state change, so a failure leaves no state change).
         builder_repo = project_dir / RepoName.builder
+        canon_repo = project_dir / RepoName.canon
         feature_branch = f"feat/{plan.name}"
-        if git_status_porcelain(builder_repo):
-            msg = "builder working tree is dirty; commit or discard changes before implement"
-            raise WorkflowError(msg)
-        if git_branch_exists(builder_repo, feature_branch):
-            msg = f"branch {feature_branch} already exists in builder"
-            raise WorkflowError(msg)
+        require(not git_index_lock_present(builder_repo), f"leftover git lock in {builder_repo}; remove it first.")
+        require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
         if plan.state == PlanState.PLANNING:
-            transfer_branch_to_main(
-                project_dir / RepoName.planner,
-                project_dir / RepoName.canon,
-                dry_run=dry_run,
-            )
-            plan = transition_plan(plan, PlanState.TODO, project_dir, repo_override=RepoName.canon, dry_run=dry_run)
-            git_commit(
-                project_dir / RepoName.canon,
-                _transition_commit_message(plan, PlanState.TODO),
-                dry_run=dry_run,
-                no_verify=True,
-            )
-        new_plan = transition_plan(plan, PlanState.IMPLEMENTING, project_dir, dry_run=dry_run)
-        git_commit(
-            project_dir / RepoName.canon,
-            _transition_commit_message(new_plan, PlanState.IMPLEMENTING),
-            dry_run=dry_run,
-            no_verify=True,
+            planner_repo = project_dir / RepoName.planner
+            require(not git_index_lock_present(planner_repo), f"leftover git lock in {planner_repo}; remove it first.")
+        require(
+            not git_status_porcelain(builder_repo),
+            "builder working tree is dirty; commit or discard changes before implement",
         )
-        git_push(project_dir / RepoName.canon, dry_run=dry_run)
-        # Leave the builder ready on its feature branch, freshly synced from main (D5).
-        git_fetch(builder_repo, dry_run=dry_run)
-        git_checkout(builder_repo, "main", dry_run=dry_run)
-        git_pull(builder_repo, dry_run=dry_run)
-        git_checkout(builder_repo, feature_branch, create=True, dry_run=dry_run)
+
+        resume = ResumePlan(title="implement")
+        _classify_implement_steps(resume, plan, project_dir, builder_repo, feature_branch)
+        resume.render()
+        if resume.abort_unless_continue(cont=cont):
+            ctx.exit(1)
+            return
+
+        new_plan = _run_implement_steps(plan, project_dir, builder_repo, feature_branch, dry_run=dry_run)
         _write_script_audit_log(config, "implement", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.TODO, "implement", new_plan.name)
         if not dry_run:
@@ -733,6 +842,30 @@ def _print_validate_next_step(plan: object) -> None:
         )
 
 
+def _classify_check_steps(resume: ResumePlan, plan: Plan, project_dir: Path, target_repo: AgentName) -> None:
+    target_path = project_dir / target_repo / "docs" / "plans" / "checking" / plan.path.name
+    if target_path.exists():
+        resume.satisfied("transition to checking", "plan file already in checking/")
+    else:
+        resume.will_run("transition to checking")
+
+    resume.will_run(f"push {target_repo} branch")
+    resume.will_run("fetch reviewer")
+
+    branch = f"feat/{plan.name}"
+    reviewer_repo = project_dir / RepoName.reviewer
+    if git_current_branch(reviewer_repo) == branch:
+        resume.satisfied("checkout branch in reviewer", "reviewer already on branch")
+    else:
+        resume.will_run("checkout branch in reviewer")
+    resume.will_run("pull reviewer")
+
+    if git_current_branch(project_dir / RepoName.builder) == "main":
+        resume.satisfied("checkout main in builder", "builder already on main")
+    else:
+        resume.will_run("checkout main in builder")
+
+
 @register_script("check")
 @click.option(
     "--target-repo",
@@ -753,6 +886,18 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force: 
         project_dir = _require_project_dir(config)
         plan = resolve_plan(plan_path, project_dir, config=config, command_name="check")
         _enforce_expected_state(plan, "check")
+        target_repo_path = project_dir / target_repo
+        reviewer_repo = project_dir / RepoName.reviewer
+        builder_repo = project_dir / RepoName.builder
+        require(
+            not git_index_lock_present(target_repo_path),
+            f"leftover git lock in {target_repo_path}; remove it first.",
+        )
+        require(not git_index_lock_present(reviewer_repo), f"leftover git lock in {reviewer_repo}; remove it first.")
+        if plan.state == PlanState.IMPLEMENTING:
+            branch = git_current_branch(target_repo_path)
+            require(branch.startswith("feat/"), f"{target_repo} must be on a feat/* branch, currently on {branch!r}.")
+
         _run_pre_commit_in_sandbox(config, target_repo, dry_run=dry_run)
         results = run_validate(plan, project_dir, config, target_repo_override=target_repo, dry_run=dry_run)
         if not dry_run:
@@ -760,22 +905,26 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force: 
             if not force and any(result.status == "fail" for result in results):
                 ctx.exit(1)
                 return
-        new_plan = transition_plan(plan, PlanState.CHECKING, project_dir, dry_run=dry_run)
-        git_commit(
-            project_dir / target_repo,
-            _transition_commit_message(new_plan, PlanState.CHECKING),
+
+        resume = ResumePlan(title="check")
+        _classify_check_steps(resume, plan, project_dir, target_repo)
+        resume.render()
+
+        new_plan = _transition_if_needed(
+            plan,
+            PlanState.CHECKING,
+            project_dir,
+            commit_repo=target_repo,
             dry_run=dry_run,
-            no_verify=True,
         )
-        git_push(project_dir / target_repo, dry_run=dry_run)
-        branch = git_current_branch(project_dir / target_repo)
-        # checkout the feature branch in reviewer
-        git_fetch(project_dir / RepoName.reviewer, dry_run=dry_run)
-        git_checkout(project_dir / RepoName.reviewer, branch, create=False, dry_run=dry_run)
-        git_pull(project_dir / RepoName.reviewer, dry_run=dry_run)
+        git_push(target_repo_path, dry_run=dry_run)
+        branch = f"feat/{new_plan.name}"
+        git_fetch(reviewer_repo, dry_run=dry_run)
+        _ensure_branch_checked_out(reviewer_repo, branch, dry_run=dry_run)
+        git_pull(reviewer_repo, dry_run=dry_run)
         # checkout main in builder to make it ready for the next task
-        git_checkout(project_dir / RepoName.builder, "main", create=False, dry_run=dry_run)
-        git_pull(project_dir / RepoName.builder, dry_run=dry_run)
+        _ensure_branch_checked_out(builder_repo, "main", dry_run=dry_run)
+        git_pull(builder_repo, dry_run=dry_run)
         _write_script_audit_log(config, "check", dry_run=dry_run, input_plan=new_plan.name)
         _print_command_reminder(config, PlanState.IMPLEMENTING, "check", new_plan.name)
         if not dry_run:
@@ -840,6 +989,30 @@ def push(ctx: click.Context, plan_path: str) -> None:
     ctx.exit(0)
 
 
+def _classify_accept_steps(resume: ResumePlan, plan: Plan, project_dir: Path, branch: str) -> None:
+    canon_repo = project_dir / RepoName.canon
+    reviewer_repo = project_dir / RepoName.reviewer
+
+    resume.will_run("push reviewer branch")
+    resume.will_run("pull canon")
+    if git_is_ancestor(canon_repo, f"origin/{branch}", "main"):
+        resume.satisfied("merge into canon main", "origin/<branch> already merged into main")
+    else:
+        resume.will_run("merge into canon main")
+
+    target_path = project_dir / RepoName.canon / "docs" / "plans" / "done" / plan.path.name
+    if target_path.exists():
+        resume.satisfied("transition to done", "plan file already in done/")
+    else:
+        resume.will_run("transition to done")
+
+    resume.will_run("push canon")
+    if git_current_branch(reviewer_repo) == "main":
+        resume.satisfied("checkout main in reviewer", "reviewer already on main")
+    else:
+        resume.will_run("checkout main in reviewer")
+
+
 @register_script("accept")
 @click.argument("plan_path")
 @click.pass_context
@@ -852,25 +1025,40 @@ def accept(ctx: click.Context, plan_path: str) -> None:
         project_dir = _require_project_dir(config)
         plan = resolve_plan(plan_path, project_dir, config=config, command_name="accept")
         _enforce_expected_state(plan, "accept")
-        branch = "<dry-run-branch>" if dry_run else git_current_branch(project_dir / RepoName.reviewer)
-        if not dry_run and branch == "main":
-            msg = "accept: reviewer is on 'main'; expected a feature branch"
-            raise WorkflowError(msg)
-        git_push(project_dir / RepoName.reviewer, dry_run=dry_run)
-        git_pull(project_dir / RepoName.canon, dry_run=dry_run)
+        reviewer_repo = project_dir / RepoName.reviewer
+        canon_repo = project_dir / RepoName.canon
+        require(not git_index_lock_present(reviewer_repo), f"leftover git lock in {reviewer_repo}; remove it first.")
+        require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
+        require(git_current_branch(canon_repo) == "main", "accept: canon must be on 'main'.")
+        # The feature branch follows the fixed 'feat/{plan.name}' convention (set by
+        # `implement`), not whatever reviewer happens to be checked out to right now --
+        # a prior run may have already advanced reviewer to 'main' (decision 2).
+        branch = f"feat/{plan.name}"
+        if plan.state == PlanState.CHECKING:
+            current_branch = git_current_branch(reviewer_repo)
+            if current_branch == "main":
+                msg = "accept: reviewer is on 'main'; expected a feature branch"
+                raise WorkflowError(msg)
+
+        resume = ResumePlan(title="accept")
+        _classify_accept_steps(resume, plan, project_dir, branch)
+        resume.render()
+
+        git_push(reviewer_repo, dry_run=dry_run)
+        git_pull(canon_repo, dry_run=dry_run)
         # Merge via remote-tracking ref: the branch is not checked out locally in canon.
-        git_merge(project_dir / RepoName.canon, f"origin/{branch}", dry_run=dry_run)
-        new_plan = transition_plan(plan, PlanState.DONE, project_dir, repo_override=RepoName.canon, dry_run=dry_run)
-        git_commit(
-            project_dir / RepoName.canon,
-            _transition_commit_message(new_plan, PlanState.DONE),
+        git_merge(canon_repo, f"origin/{branch}", dry_run=dry_run)
+        new_plan = _transition_if_needed(
+            plan,
+            PlanState.DONE,
+            project_dir,
+            repo_override=RepoName.canon,
             dry_run=dry_run,
-            no_verify=True,
         )
-        git_push(project_dir / RepoName.canon, dry_run=dry_run)
+        git_push(canon_repo, dry_run=dry_run)
         # checkout main in reviewer to make it ready for the next task
-        git_checkout(project_dir / RepoName.reviewer, "main", create=False, dry_run=dry_run)
-        git_pull(project_dir / RepoName.reviewer, dry_run=dry_run)
+        _ensure_branch_checked_out(reviewer_repo, "main", dry_run=dry_run)
+        git_pull(reviewer_repo, dry_run=dry_run)
         _write_script_audit_log(config, "accept", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.CHECKING, "accept", new_plan.name)
     except (
