@@ -145,13 +145,13 @@ def git_is_ancestor(repo_path: Path, ancestor: str, descendant: str) -> bool:
     return result.returncode == 0
 
 
-def git_remote_url(repo_path: Path, name: str) -> str | None:
-    """Return the configured URL for remote *name* in *repo_path*, or ``None`` if unset.
+def git_config_get(repo_path: Path, key: str) -> str | None:
+    """Return the configured value for *key* in *repo_path*, or ``None`` if unset.
 
     Read-only guard query: always runs for real, even in dry-run.
     """
     result = subprocess.run(  # noqa: S603
-        ["git", "config", "--get", f"remote.{name}.url"],  # noqa: S607
+        ["git", "config", "--get", key],  # noqa: S607
         cwd=repo_path,
         capture_output=True,
         check=False,
@@ -159,6 +159,14 @@ def git_remote_url(repo_path: Path, name: str) -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout.decode().strip()
+
+
+def git_remote_url(repo_path: Path, name: str) -> str | None:
+    """Return the configured URL for remote *name* in *repo_path*, or ``None`` if unset.
+
+    Read-only guard query: always runs for real, even in dry-run.
+    """
+    return git_config_get(repo_path, f"remote.{name}.url")
 
 
 def git_index_lock_present(repo_path: Path) -> bool:
@@ -252,7 +260,8 @@ def git_commit_if_changed(
         subprocess.run(commit_args, cwd=repo_path, check=True, capture_output=True)  # noqa: S603
     except subprocess.CalledProcessError as exc:
         output = (exc.stdout or b"") + (exc.stderr or b"")
-        if b"nothing to commit" in output:
+        # Git phrases the no-op differently when untracked (but unstaged) files are present.
+        if b"nothing to commit" in output or b"nothing added to commit" in output:
             return CommitResult.NOTHING_TO_COMMIT
         raise
     return CommitResult.COMMITTED

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from shutil import copyfile
@@ -158,6 +159,28 @@ def test_init_succeeds_when_agents_md_unchanged(tmp_path: Path, monkeypatch: pyt
     assert (tmp_path / WORKFLOW_ROOT_MARKER).exists()
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_init_fails_when_bare_exists_but_is_not_a_valid_clone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A leftover, non-bare-repo `bare/` directory must fail the precondition, not get cloned over."""
+    config_path = _make_project(tmp_path, marker=False)
+    (tmp_path / "canon" / ".git").mkdir()
+    bare_dir = tmp_path / "bare"
+    bare_dir.mkdir()
+    (bare_dir / "leftover.txt").write_text("junk\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    fake_run_command = MagicMock()
+    monkeypatch.setattr(wc, "run_command", fake_run_command)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+
+    assert result.exit_code == 1
+    assert "not a valid bare clone" in result.output
+    fake_run_command.assert_not_called()
+
+
 def test_start_runs_tmux_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -218,6 +241,59 @@ def test_start_uses_project_local_script_when_present(tmp_path: Path, monkeypatc
     _config, windows, _control = fake_create.call_args.args
     # The command string for the first agent window should start with the absolute path.
     assert dict(windows)["planner"].startswith(str(tmp_path.resolve()))
+
+
+def test_start_attaches_without_recreating_when_session_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "workflow_session_exists", MagicMock(return_value=True))
+    fake_create = MagicMock()
+    monkeypatch.setattr(wc, "create_workflow_session", fake_create)
+    monkeypatch.setattr(wc, "attach_workflow_session", MagicMock())
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "start"])
+
+    assert result.exit_code == 0, result.output
+    fake_create.assert_not_called()
+
+
+def test_start_reset_refuses_self_kill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "workflow_session_exists", MagicMock(return_value=True))
+    monkeypatch.setattr(wc, "is_inside_workflow_session", MagicMock(return_value=True))
+    fake_kill = MagicMock()
+    monkeypatch.setattr(wc, "kill_workflow_session", fake_kill)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "start", "--reset"])
+
+    assert result.exit_code == 1
+    assert "refusing to kill the session you are attached to" in result.output
+    fake_kill.assert_not_called()
+
+
+def test_start_reset_kills_and_recreates_existing_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "workflow_session_exists", MagicMock(return_value=True))
+    monkeypatch.setattr(wc, "is_inside_workflow_session", MagicMock(return_value=False))
+    fake_kill = MagicMock()
+    monkeypatch.setattr(wc, "kill_workflow_session", fake_kill)
+    fake_create = MagicMock()
+    monkeypatch.setattr(wc, "create_workflow_session", fake_create)
+    monkeypatch.setattr(wc, "attach_workflow_session", MagicMock())
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "start", "--reset"])
+
+    assert result.exit_code == 0, result.output
+    fake_kill.assert_called_once()
+    fake_create.assert_called_once()
 
 
 def test_new_uses_existing_plans_and_audit_log_for_numbering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

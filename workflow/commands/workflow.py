@@ -15,7 +15,7 @@ import click
 import jinja2
 
 from workflow.audit import write_audit_log
-from workflow.commands.agents_md import generate_and_write_agents_md
+from workflow.commands.agents_md import _prepare_agents_md_update, generate_and_write_agents_md
 from workflow.config import WORKFLOW_ROOT_MARKER, AgentConfig, WorkflowConfig
 from workflow.config import ScriptCommand as _ScriptCommand
 from workflow.exceptions import (
@@ -31,11 +31,15 @@ from workflow.git_helpers import (
     git_checkout,
     git_commit,
     git_commit_if_changed,
+    git_config_get,
     git_current_branch,
     git_fetch,
+    git_index_lock_present,
+    git_is_valid_repo,
     git_merge,
     git_pull,
     git_push,
+    git_remote_url,
     git_status,
     git_status_porcelain,
     transfer_branch_to_main,
@@ -47,11 +51,15 @@ from workflow.plan_resolver import next_intent_number, resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console, error_console, print_workflow_error, run_command
 from workflow.state import transition_plan
+from workflow.steps import ResumePlan, require
 from workflow.tmux_dispatch import (
     assert_in_workflow_session,
     attach_workflow_session,
     create_workflow_session,
+    is_inside_workflow_session,
+    kill_workflow_session,
     rotate_control_pane,
+    workflow_session_exists,
 )
 from workflow.validate import CHECK_NAMES, CheckResult, infer_target_repo
 from workflow.validate import validate as run_validate
@@ -157,71 +165,234 @@ def _manual_shell_repo(config: WorkflowConfig) -> RepoName | None:
     return None
 
 
+def _hook_symlink_ok(repo_path: Path) -> bool:
+    """Return whether the pre-commit hook symlink exists and points at the shared hook script."""
+    hook = repo_path / ".git" / "hooks" / "pre-commit"
+    return hook.is_symlink() and str(hook.readlink()) == "../../.git-pre-commit-hook"
+
+
+def _ensure_pre_commit_hook(repo_path: Path, *, dry_run: bool) -> None:
+    """Symlink .git/hooks/pre-commit to the shared hook script, replacing a broken link if needed."""
+    if _hook_symlink_ok(repo_path):
+        return
+    hook = repo_path / ".git" / "hooks" / "pre-commit"
+    if not dry_run and (hook.is_symlink() or hook.exists()):
+        hook.unlink()
+    run_command(["ln", "-s", "../../.git-pre-commit-hook", ".git/hooks/pre-commit"], cwd=repo_path, dry_run=dry_run)
+
+
+def _agent_push_config_ok(repo_path: Path) -> bool:
+    """Return whether push config and the pre-commit hook are already set up in *repo_path*."""
+    return (
+        git_config_get(repo_path, "push.autoSetupRemote") == "true"
+        and git_config_get(repo_path, "push.default") == "current"
+        and _hook_symlink_ok(repo_path)
+    )
+
+
+def _ensure_agent_push_config(repo_path: Path, *, dry_run: bool) -> None:
+    """Configure push behaviour and install the pre-commit hook symlink in *repo_path*.
+
+    Push config lets feature branches push to a same-named remote branch without
+    requiring a pre-existing upstream. Each setting is only (re)applied when not
+    already correct, so this is safe to call on every ``init`` run.
+    """
+    if git_config_get(repo_path, "push.autoSetupRemote") != "true":
+        run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=repo_path, dry_run=dry_run)
+    if git_config_get(repo_path, "push.default") != "current":
+        run_command(["git", "config", "push.default", "current"], cwd=repo_path, dry_run=dry_run)
+    _ensure_pre_commit_hook(repo_path, dry_run=dry_run)
+
+
+def _wire_canon_to_bare(canon_repo: Path, bare_path: Path, *, dry_run: bool) -> None:
+    """Add/configure the ``origin`` remote in canon (pointing at bare) and push HEAD."""
+    if git_remote_url(canon_repo, "origin") is None:
+        run_command(["git", "remote", "add", "origin", str(bare_path)], cwd=canon_repo, dry_run=dry_run)
+    if git_config_get(canon_repo, "push.autoSetupRemote") != "true":
+        run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=canon_repo, dry_run=dry_run)
+    if git_config_get(canon_repo, "push.default") != "current":
+        run_command(["git", "config", "push.default", "current"], cwd=canon_repo, dry_run=dry_run)
+    run_command(["git", "push", "-u", "origin", "HEAD"], cwd=canon_repo, dry_run=dry_run)
+
+
+def _classify_agents_md_step(resume: ResumePlan, config: WorkflowConfig, project_dir: Path) -> None:
+    update = _prepare_agents_md_update(config.model_copy(update={"project_dir": project_dir}))
+    if update.agents_md_unchanged:
+        resume.satisfied("AGENTS.md committed", "already up to date")
+    else:
+        resume.will_run("AGENTS.md committed")
+
+
+def _dir_needs_clone(path: Path) -> bool:
+    """Return whether *path* still needs to be created via ``git clone`` (missing or empty).
+
+    ``git clone`` tolerates cloning into an existing but empty directory, so an
+    empty directory is equivalent to "not yet cloned", not a rough partial state.
+    """
+    return not path.exists() or not any(path.iterdir())
+
+
+def _classify_bare_clone_step(resume: ResumePlan, bare_path: Path) -> None:
+    if _dir_needs_clone(bare_path):
+        resume.will_run("bare clone")
+    else:
+        resume.satisfied("bare clone", "bare is a valid clone of canon")
+
+
+def _classify_agent_clone_steps(resume: ResumePlan, config: WorkflowConfig, project_dir: Path, bare_path: Path) -> None:
+    for agent in config.agents:
+        agent_repo = project_dir / agent.name
+        step = f"clone {agent.name}"
+        if _dir_needs_clone(agent_repo):
+            resume.will_run(step)
+        elif git_is_valid_repo(agent_repo) and git_remote_url(agent_repo, "origin") == str(bare_path):
+            resume.needs_continue(step, "clone exists; pass --continue to keep it as-is")
+        else:
+            msg = f"{agent_repo} exists but is not a valid clone of bare; remove it or fix it."
+            raise WorkflowError(msg)
+
+
+def _classify_agent_configure_steps(resume: ResumePlan, config: WorkflowConfig, project_dir: Path) -> None:
+    for agent in config.agents:
+        agent_repo = project_dir / agent.name
+        step = f"configure {agent.name}"
+        if agent_repo.exists() and _agent_push_config_ok(agent_repo):
+            resume.satisfied(step, "push config and pre-commit hook already set up")
+        else:
+            resume.will_run(step)
+
+
+def _classify_wire_canon_step(resume: ResumePlan, canon_repo: Path, bare_path: Path) -> None:
+    origin_url = git_remote_url(canon_repo, "origin")
+    if origin_url is not None and Path(origin_url).resolve() != bare_path.resolve():
+        msg = f"canon 'origin' remote points at {origin_url!r}, expected {bare_path}; fix or remove it."
+        raise WorkflowError(msg)
+    if origin_url is not None:
+        resume.satisfied("wire canon to bare", "origin already points at bare")
+    else:
+        resume.will_run("wire canon to bare")
+
+
+def _classify_marker_step(resume: ResumePlan, project_dir: Path) -> None:
+    if (project_dir / WORKFLOW_ROOT_MARKER).exists():
+        resume.satisfied("workflow marker", "marker file exists")
+    else:
+        resume.will_run("workflow marker")
+
+
+def _classify_venv_steps(resume: ResumePlan, config: WorkflowConfig, project_dir: Path) -> None:
+    for agent in config.agents:
+        venv_dir = project_dir / agent.name / ".venv"
+        step = f"venv {agent.name}"
+        if venv_dir.is_dir():
+            resume.needs_continue(step, "exists; pass --continue to recreate (destructive)")
+        else:
+            resume.will_run(step)
+
+
+def _classify_init_steps(
+    resume: ResumePlan,
+    config: WorkflowConfig,
+    project_dir: Path,
+    canon_repo: Path,
+    bare_path: Path,
+) -> None:
+    """Populate *resume* with a classification for every init step (read-only)."""
+    _classify_agents_md_step(resume, config, project_dir)
+    _classify_bare_clone_step(resume, bare_path)
+    _classify_agent_clone_steps(resume, config, project_dir, bare_path)
+    _classify_agent_configure_steps(resume, config, project_dir)
+    _classify_wire_canon_step(resume, canon_repo, bare_path)
+    _classify_marker_step(resume, project_dir)
+    _classify_venv_steps(resume, config, project_dir)
+
+
+def _check_init_preconditions(canon_repo: Path, bare_path: Path) -> None:
+    """Fail fast on cheaply-detectable causes of a broken ``init`` run."""
+    if not (canon_repo / ".git").is_dir():
+        msg = f"{canon_repo} is not a git repository (no .git/ found)."
+        raise WorkflowError(msg)
+    if not (canon_repo / ".git-pre-commit-hook").is_file():
+        msg = f"{canon_repo / '.git-pre-commit-hook'} must exist."
+        raise WorkflowError(msg)
+    require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
+    if bare_path.exists():
+        require(
+            git_is_valid_repo(bare_path, bare=True),
+            f"{bare_path} exists but is not a valid bare clone; remove it or fix it.",
+        )
+
+
+def _run_init_steps(
+    config: WorkflowConfig,
+    project_dir: Path,
+    canon_repo: Path,
+    bare_path: Path,
+    *,
+    dry_run: bool,
+) -> None:
+    """Perform the (already-classified) init steps, each idempotently skipping its own no-op."""
+    # Generate AGENTS.md into canon before the bare clone so all agent clones inherit it.
+    if not dry_run:
+        try:
+            generate_and_write_agents_md(config.model_copy(update={"project_dir": project_dir}))
+            git_add(canon_repo, Path("AGENTS.md"), dry_run=False)
+            # no_verify: at init time the pre-commit hook would run pytest before the
+            # workflow package is even installed in canon; bypassing is required here.
+            git_commit_if_changed(canon_repo, "chore: generate initial AGENTS.md", dry_run=False, no_verify=True)
+        except AgentsMdGenerationError as exc:
+            raise WorkflowError(str(exc)) from exc
+
+    if _dir_needs_clone(bare_path):
+        run_command(["git", "clone", "--bare", RepoName.canon, "bare"], cwd=project_dir, dry_run=dry_run)
+
+    for agent in config.agents:
+        agent_repo = project_dir / agent.name
+        if _dir_needs_clone(agent_repo):
+            run_command(["git", "clone", "bare", agent.name], cwd=project_dir, dry_run=dry_run)
+
+    for agent in config.agents:
+        _ensure_agent_push_config(project_dir / agent.name, dry_run=dry_run)
+
+    _wire_canon_to_bare(canon_repo, bare_path, dry_run=dry_run)
+
+    if not dry_run and not (project_dir / WORKFLOW_ROOT_MARKER).exists():
+        (project_dir / WORKFLOW_ROOT_MARKER).touch()
+
+    # Create venvs (always via --reset: cheap on first creation, destructive-but-
+    # confirmed via --continue when a venv already exists; see _classify_init_steps).
+    script = _find_docker_script(project_dir)
+    project_name = config.project_name or project_dir.name
+    for agent in config.agents:
+        run_command(
+            _create_venv_command(script, project_name, project_dir, agent),
+            cwd=project_dir,
+            dry_run=dry_run,
+        )
+
+
 @register_script("init")
+@click.option("--continue", "cont", is_flag=True, help="Proceed past rough (unverifiable) partial state.")
 @click.pass_context
-def init(ctx: click.Context) -> None:
+def init(ctx: click.Context, *, cont: bool) -> None:
     """Initialise the project directory: create bare and agent git clones."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
     project_dir = (config.project_dir or Path.cwd()).resolve()
+    canon_repo = project_dir / RepoName.canon
+    bare_path = project_dir / "bare"
 
     try:
-        if not (project_dir / RepoName.canon / ".git").is_dir():
-            msg = f"{project_dir / RepoName.canon} is not a git repository (no .git/ found)."
-            raise WorkflowError(msg)
-        if not (project_dir / RepoName.canon / ".git-pre-commit-hook").is_file():
-            msg = f"{project_dir / RepoName.canon / '.git-pre-commit-hook'} must exist."
-            raise WorkflowError(msg)
-        # Generate AGENTS.md into canon before the bare clone so all agent clones inherit it.
-        if not dry_run:
-            try:
-                generate_and_write_agents_md(config.model_copy(update={"project_dir": project_dir}))
-                canon_repo_path = project_dir / RepoName.canon
-                git_add(canon_repo_path, Path("AGENTS.md"), dry_run=False)
-                # no_verify: at init time the pre-commit hook would run pytest before the
-                # workflow package is even installed in canon; bypassing is required here.
-                git_commit_if_changed(
-                    canon_repo_path,
-                    "chore: generate initial AGENTS.md",
-                    dry_run=False,
-                    no_verify=True,
-                )
-            except AgentsMdGenerationError as exc:
-                raise WorkflowError(str(exc)) from exc
-        run_command(["git", "clone", "--bare", RepoName.canon, "bare"], cwd=project_dir, dry_run=dry_run)
-        for agent in config.agents:
-            run_command(["git", "clone", "bare", agent.name], cwd=project_dir, dry_run=dry_run)
-        for agent in config.agents:
-            # Configure push behaviour in each agent clone so feature branches push
-            # to a same-named remote branch without requiring a pre-existing upstream.
-            agent_repo = project_dir / agent.name
-            run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=agent_repo, dry_run=dry_run)
-            run_command(["git", "config", "push.default", "current"], cwd=agent_repo, dry_run=dry_run)
-            # Install pre-commit hook
-            run_command(
-                ["ln", "-s", "../../.git-pre-commit-hook", ".git/hooks/pre-commit"],
-                cwd=agent_repo,
-                dry_run=dry_run,
-            )
-        # Wire canon to bare so git pull/push work in place.
-        bare_path = project_dir / "bare"
-        canon_repo = project_dir / RepoName.canon
-        run_command(["git", "remote", "add", "origin", str(bare_path)], cwd=canon_repo, dry_run=dry_run)
-        run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=canon_repo, dry_run=dry_run)
-        run_command(["git", "config", "push.default", "current"], cwd=canon_repo, dry_run=dry_run)
-        run_command(["git", "push", "-u", "origin", "HEAD"], cwd=canon_repo, dry_run=dry_run)
-        if not dry_run:
-            (project_dir / WORKFLOW_ROOT_MARKER).touch()
+        _check_init_preconditions(canon_repo, bare_path)
 
-        # Create venvs
-        script = _find_docker_script(project_dir)
-        project_name = config.project_name or project_dir.name
-        for agent in config.agents:
-            run_command(
-                _create_venv_command(script, project_name, project_dir, agent),
-                cwd=project_dir,
-                dry_run=dry_run,
-            )
+        resume = ResumePlan(title="init")
+        _classify_init_steps(resume, config, project_dir, canon_repo, bare_path)
+        resume.render()
+        if resume.abort_unless_continue(cont=cont):
+            ctx.exit(1)
+            return
+
+        _run_init_steps(config, project_dir, canon_repo, bare_path, dry_run=dry_run)
         _write_script_audit_log(config.model_copy(update={"project_dir": project_dir}), "init", dry_run=dry_run)
     except (subprocess.CalledProcessError, WorkflowError) as exc:
         print_workflow_error(exc)
@@ -265,11 +436,31 @@ def _create_venv_command(script: str, project_name: str, project_dir: Path, agen
     return [script, project_name, agent.name, "--project-dir", str(project_dir), "--venv", "--reset"]
 
 
+def _build_start_windows(
+    config: WorkflowConfig,
+    project_dir: Path,
+    *,
+    reset: bool,
+) -> list[tuple[str, str]]:
+    project_name = config.project_name or project_dir.name
+    script = _find_docker_script(project_dir)
+    windows = [
+        (agent.name, _agent_docker_command(script, project_name, project_dir, agent, reset=reset))
+        for agent in config.agents
+    ]
+    windows.append(("builder-shell", _builder_shell_command(script, project_name, project_dir)))
+    return windows
+
+
 @register_script("start")
-@click.option("--reset", is_flag=True, default=False, help="Remove existing containers instead of restarting.")
+@click.option("--reset", is_flag=True, default=False, help="Kill the existing session and containers, then recreate.")
 @click.pass_context
 def start(ctx: click.Context, *, reset: bool) -> None:
-    """Start tmux windows for all configured agents."""
+    """Create the workflow tmux session, or attach to it if it already exists.
+
+    ``start`` is the control pane's entry point, not a command run from inside the
+    session, so unlike other script commands it must not require an existing session.
+    """
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
 
@@ -278,15 +469,30 @@ def start(ctx: click.Context, *, reset: bool) -> None:
         if not config.agents:
             msg = "No agents configured."
             raise WorkflowError(msg)
-        project_name = config.project_name or project_dir.name
-        script = _find_docker_script(project_dir)
-        first_agent = config.agents[0]
-        windows = [
-            (agent.name, _agent_docker_command(script, project_name, project_dir, agent, reset=reset))
-            for agent in config.agents
-        ]
-        windows.append(("builder-shell", _builder_shell_command(script, project_name, project_dir)))
-        create_workflow_session(config, windows, first_agent.name, dry_run=dry_run)
+        session_exists = workflow_session_exists(config)
+        if session_exists and reset:
+            require(
+                not is_inside_workflow_session(config),
+                "refusing to kill the session you are attached to; detach first, or run without --reset.",
+            )
+
+        resume = ResumePlan(title="start")
+        if session_exists and not reset:
+            resume.satisfied("create session", "session already exists; attaching")
+        elif session_exists:
+            resume.will_run("kill existing session")
+            resume.will_run("create session")
+        else:
+            resume.will_run("create session")
+        resume.render()
+
+        if session_exists and reset:
+            kill_workflow_session(config, dry_run=dry_run)
+        if not session_exists or reset:
+            first_agent = config.agents[0]
+            windows = _build_start_windows(config, project_dir, reset=reset)
+            create_workflow_session(config, windows, first_agent.name, dry_run=dry_run)
+
         _write_script_audit_log(config, "start", dry_run=dry_run)
         attach_workflow_session(config, dry_run=dry_run)
     except (subprocess.CalledProcessError, WorkflowError) as exc:

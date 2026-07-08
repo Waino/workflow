@@ -107,6 +107,23 @@ def test_git_commit_if_changed_returns_sentinel_on_nothing_to_commit(
     assert result is CommitResult.NOTHING_TO_COMMIT
 
 
+def test_git_commit_if_changed_returns_sentinel_when_untracked_files_present(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Git phrases the no-op differently when untracked (but unstaged) files exist."""
+    exc = subprocess.CalledProcessError(
+        1,
+        ["git", "commit"],
+        output=b'nothing added to commit but untracked files present (use "git add" to track)\n',
+    )
+    fake = MagicMock(side_effect=exc)
+    monkeypatch.setattr(git_helpers.subprocess, "run", fake)
+
+    result = git_commit_if_changed(tmp_path, "msg")
+    assert result is CommitResult.NOTHING_TO_COMMIT
+
+
 def test_git_commit_if_changed_reraises_on_real_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     exc = subprocess.CalledProcessError(128, ["git", "commit"], output=b"", stderr=b"fatal: not a git repository")
     fake = MagicMock(side_effect=exc)

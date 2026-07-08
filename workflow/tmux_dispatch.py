@@ -353,6 +353,18 @@ def _resolve_session(config: WorkflowConfig) -> libtmux.Session:
     return session
 
 
+def _is_inside_session(session: libtmux.Session) -> bool:
+    """Return whether the calling process's current tmux pane belongs to *session*."""
+    if not os.environ.get("TMUX"):
+        return False
+    pane_id = os.environ.get("TMUX_PANE")
+    if pane_id is None:
+        # Inside tmux but no pane id available (unusual): assume not the target session.
+        return False
+    pane = session.server.panes.get(pane_id=pane_id, default=None)
+    return pane is not None and pane.session_id == session.session_id
+
+
 def assert_in_workflow_session(config: WorkflowConfig) -> None:
     """Verify the caller is running inside the workflow tmux session.
 
@@ -366,13 +378,55 @@ def assert_in_workflow_session(config: WorkflowConfig) -> None:
         )
         raise WorkflowError(msg)
     session = _resolve_session(config)
-    pane_id = os.environ.get("TMUX_PANE")
-    if pane_id is None:
-        return
-    pane = session.server.panes.get(pane_id=pane_id, default=None)
-    if pane is None or pane.session_id != session.session_id:
+    if os.environ.get("TMUX_PANE") is not None and not _is_inside_session(session):
         msg = f"must be run from inside the {config.tmux.session_name!r} tmux session."
         raise WorkflowError(msg)
+
+
+def workflow_session_exists(config: WorkflowConfig) -> bool:
+    """Return whether the workflow tmux session currently exists.
+
+    Read-only guard query: always runs for real, even in dry-run.
+    """
+    server = libtmux.Server()
+    if not server.is_alive():
+        return False
+    return server.sessions.get(session_name=config.tmux.session_name, default=None) is not None
+
+
+def is_inside_workflow_session(config: WorkflowConfig) -> bool:
+    """Return whether the calling process is currently inside the workflow tmux session.
+
+    Returns ``False`` (rather than raising) when the session does not exist.
+    Read-only guard query: always runs for real, even in dry-run.
+    """
+    server = libtmux.Server()
+    if not server.is_alive():
+        return False
+    session = server.sessions.get(session_name=config.tmux.session_name, default=None)
+    if session is None:
+        return False
+    return _is_inside_session(session)
+
+
+def kill_workflow_session(config: WorkflowConfig, *, dry_run: bool = False) -> None:
+    """Kill the workflow tmux session if it exists.
+
+    In dry-run mode prints the intended ``kill-session`` command only.
+    Raises :class:`WorkflowError` if the kill call fails.
+    """
+    session_name = config.tmux.session_name
+    if dry_run:
+        _preview_tmux(["tmux", "kill-session", "-t", session_name])
+        return
+    try:
+        server = libtmux.Server()
+        session = server.sessions.get(session_name=session_name, default=None) if server.is_alive() else None
+        if session is not None:
+            session.kill()
+    except (OSError, libtmux.exc.LibTmuxException) as exc:
+        msg = f"failed to kill tmux session {session_name!r}: {exc}"
+        raise WorkflowError(msg) from exc
 
 
 def create_workflow_session(

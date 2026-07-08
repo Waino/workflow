@@ -35,6 +35,56 @@ def _git(
     return subprocess.run([_GIT, *args], cwd=cwd, check=check, capture_output=True, **kwargs)  # noqa: S603
 
 
+def _git_commit_without_noverify(
+    repo_path: Path,
+    msg: str,
+    *,
+    dry_run: bool = False,
+    no_verify: bool = False,  # noqa: ARG001 — preserves git_commit signature
+) -> None:
+    """Real-git stand-in for git_commit: the sandbox git wrapper rejects --no-verify."""
+    if not dry_run:
+        _git(["commit", "-m", msg], cwd=repo_path)
+
+
+def _git_commit_if_changed_without_noverify(
+    repo_path: Path,
+    msg: str,
+    *,
+    dry_run: bool = False,
+    no_verify: bool = False,  # noqa: ARG001 — preserves signature
+) -> CommitResult:
+    """Real-git stand-in for git_commit_if_changed: the sandbox git wrapper rejects --no-verify."""
+    if dry_run:
+        return CommitResult.COMMITTED
+    proc = subprocess.run(  # noqa: S603
+        [_GIT, "commit", "-m", msg],
+        cwd=repo_path,
+        check=False,
+        capture_output=True,
+    )
+    output = proc.stdout + proc.stderr
+    if proc.returncode != 0 and (b"nothing to commit" in output or b"nothing added to commit" in output):
+        return CommitResult.NOTHING_TO_COMMIT
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, proc.args, proc.stdout, proc.stderr)
+    return CommitResult.COMMITTED
+
+
+def _init_canon_repo(tmp_path: Path) -> Path:
+    """Create canon/ as a real git repo with one initial commit on 'main', return its path."""
+    canon = tmp_path / "canon"
+    canon.mkdir()
+    _git(["init", str(canon)])
+    _git(["config", "user.email", "test@example.com"], cwd=canon)
+    _git(["config", "user.name", "Test"], cwd=canon)
+    _git(["checkout", "-b", "main"], cwd=canon, check=False)
+    (canon / "README.md").write_text("initial\n", encoding="utf-8")
+    _git(["add", "."], cwd=canon)
+    _git(["commit", "-m", "initial commit"], cwd=canon)
+    return canon
+
+
 def _make_integration_config(tmp_path: Path) -> Path:
     """Write a minimal workflow config derived from the default, return its path."""
     with (tmp_path / "run_agent_in_docker.sh").open("w") as dummy_script:
@@ -56,17 +106,7 @@ def _make_integration_config(tmp_path: Path) -> Path:
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: PLR0915
     """Full happy path: init -> planner edit -> todo -> implement -> builder edit -> check -> accept."""
-    # Step 1: create canon/ git repo with one initial commit on 'main'
-    canon = tmp_path / "canon"
-    canon.mkdir()
-    _git(["init", str(canon)])
-    _git(["config", "user.email", "test@example.com"], cwd=canon)
-    _git(["config", "user.name", "Test"], cwd=canon)
-    # Ensure we are on 'main'
-    _git(["checkout", "-b", "main"], cwd=canon, check=False)
-    (canon / "README.md").write_text("initial\n", encoding="utf-8")
-    _git(["add", "."], cwd=canon)
-    _git(["commit", "-m", "initial commit"], cwd=canon)
+    canon = _init_canon_repo(tmp_path)
 
     config_path = _make_integration_config(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -76,38 +116,6 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(wc, "run_validate", MagicMock(return_value=passing))
     monkeypatch.setattr(wc, "_run_pre_commit_in_sandbox", MagicMock())
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
-
-    # The sandbox git wrapper rejects --no-verify; use a plain commit instead.
-    def _git_commit_without_noverify(
-        repo_path: Path,
-        msg: str,
-        *,
-        dry_run: bool = False,
-        no_verify: bool = False,  # noqa: ARG001 — preserves git_commit signature
-    ) -> None:
-        if not dry_run:
-            _git(["commit", "-m", msg], cwd=repo_path)
-
-    def _git_commit_if_changed_without_noverify(
-        repo_path: Path,
-        msg: str,
-        *,
-        dry_run: bool = False,
-        no_verify: bool = False,  # noqa: ARG001 — preserves signature
-    ) -> CommitResult:
-        if dry_run:
-            return CommitResult.COMMITTED
-        proc = subprocess.run(  # noqa: S603
-            [_GIT, "commit", "-m", msg],
-            cwd=repo_path,
-            check=False,
-            capture_output=True,
-        )
-        if proc.returncode != 0 and b"nothing to commit" in (proc.stdout + proc.stderr):
-            return CommitResult.NOTHING_TO_COMMIT
-        if proc.returncode != 0:
-            raise subprocess.CalledProcessError(proc.returncode, proc.args, proc.stdout, proc.stderr)
-        return CommitResult.COMMITTED
 
     monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
     monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
@@ -195,39 +203,10 @@ def test_check_agents_md_detects_branch_modification(tmp_path: Path, monkeypatch
     After init, _check_agents_md must fail when AGENTS.md is modified on a feature
     branch and pass once reverted.
     """
-    canon = tmp_path / "canon"
-    canon.mkdir()
-    _git(["init", str(canon)])
-    _git(["config", "user.email", "test@example.com"], cwd=canon)
-    _git(["config", "user.name", "Test"], cwd=canon)
-    _git(["checkout", "-b", "main"], cwd=canon, check=False)
-    (canon / "README.md").write_text("initial\n", encoding="utf-8")
-    _git(["add", "."], cwd=canon)
-    _git(["commit", "-m", "initial commit"], cwd=canon)
+    _init_canon_repo(tmp_path)
 
     config_path = _make_integration_config(tmp_path)
     monkeypatch.chdir(tmp_path)
-
-    def _git_commit_if_changed_without_noverify(
-        repo_path: Path,
-        msg: str,
-        *,
-        dry_run: bool = False,
-        no_verify: bool = False,  # noqa: ARG001
-    ) -> CommitResult:
-        if dry_run:
-            return CommitResult.COMMITTED
-        proc = subprocess.run(  # noqa: S603
-            [_GIT, "commit", "-m", msg],
-            cwd=repo_path,
-            check=False,
-            capture_output=True,
-        )
-        if proc.returncode != 0 and b"nothing to commit" in (proc.stdout + proc.stderr):
-            return CommitResult.NOTHING_TO_COMMIT
-        if proc.returncode != 0:
-            raise subprocess.CalledProcessError(proc.returncode, proc.args, proc.stdout, proc.stderr)
-        return CommitResult.COMMITTED
 
     monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
 
@@ -253,3 +232,89 @@ def test_check_agents_md_detects_branch_modification(tmp_path: Path, monkeypatch
     (builder / "AGENTS.md").write_text(pristine, encoding="utf-8")
     result_pass = _check_agents_md(builder, tmp_path, [])
     assert result_pass.status == "pass"
+
+
+# ---------------------------------------------------------------------------
+# init resume / --continue tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_init_rerun_without_continue_aborts_and_prints_preview(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-running `init` once the agent clones exist must abort with the resume preview, unmutated."""
+    _init_canon_repo(tmp_path)
+    config_path = _make_integration_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
+    monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
+
+    first = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+    assert first.exit_code == 0, first.output
+
+    bare_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "bare").stdout
+    planner_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "planner").stdout
+
+    second = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+
+    assert second.exit_code == 1
+    assert "Resume plan for `init`:" in second.output
+    assert "--continue" in second.output
+    # Nothing should have been mutated by the aborted rerun.
+    assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "bare").stdout == bare_head_before
+    assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "planner").stdout == planner_head_before
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_init_rerun_with_continue_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`init --continue` accepts the existing clones as-is and completes successfully."""
+    _init_canon_repo(tmp_path)
+    config_path = _make_integration_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
+    monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
+
+    first = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+    assert first.exit_code == 0, first.output
+
+    second = CliRunner().invoke(main, ["--config", str(config_path), "init", "--continue"])
+
+    assert second.exit_code == 0, second.output
+    assert (tmp_path / WORKFLOW_ROOT_MARKER).exists()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_init_dry_run_previews_resume_without_mutating(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A partially-completed init followed by a dry-run must preview accurately without mutating."""
+    _init_canon_repo(tmp_path)
+    config_path = _make_integration_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
+    monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
+
+    first = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+    assert first.exit_code == 0, first.output
+
+    marker_before = (tmp_path / WORKFLOW_ROOT_MARKER).exists()
+    bare_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "bare").stdout
+
+    # Rerunning without --continue hits the rough (clone-exists) gate even in dry-run;
+    # the point of this test is that the *read-only* guards still ran for real and
+    # produced an accurate preview, and nothing was mutated either way.
+    result = CliRunner().invoke(main, ["--dry-run", "--config", str(config_path), "init"])
+
+    assert result.exit_code == 1
+    assert "[skip] bare clone" in result.output
+    assert "[skip] AGENTS.md committed" in result.output
+    assert "--continue" in result.output
+    assert marker_before == (tmp_path / WORKFLOW_ROOT_MARKER).exists()
+    assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "bare").stdout == bare_head_before
+
+    # With --continue, dry-run previews the same plan and completes without mutating.
+    result_cont = CliRunner().invoke(main, ["--dry-run", "--config", str(config_path), "init", "--continue"])
+    assert result_cont.exit_code == 0, result_cont.output
+    assert "[skip] bare clone" in result_cont.output
+    assert marker_before == (tmp_path / WORKFLOW_ROOT_MARKER).exists()
+    assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "bare").stdout == bare_head_before
