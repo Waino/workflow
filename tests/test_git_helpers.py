@@ -1,5 +1,6 @@
 """Tests for workflow.git_helpers."""
 
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -8,7 +9,32 @@ import pytest
 
 from workflow import git_helpers
 from workflow.exceptions import WorkflowError
-from workflow.git_helpers import CommitResult, git_commit_if_changed
+from workflow.git_helpers import (
+    CommitResult,
+    git_commit_if_changed,
+    git_index_lock_present,
+    git_is_ancestor,
+    git_is_valid_repo,
+    git_ref_exists_remote,
+    git_remote_url,
+)
+
+_GIT = shutil.which("git") or "git"
+
+
+def _git(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run([_GIT, *args], cwd=cwd, check=True, capture_output=True)  # noqa: S603
+
+
+def _init_repo(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    _git(["init", "-b", "main"], cwd=path)
+    _git(["config", "user.email", "test@example.com"], cwd=path)
+    _git(["config", "user.name", "Test"], cwd=path)
+    (path / "README.md").write_text("initial\n", encoding="utf-8")
+    _git(["add", "."], cwd=path)
+    _git(["commit", "-m", "initial commit"], cwd=path)
+    return path
 
 
 def test_transfer_branch_to_main_runs_steps_in_order(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -103,3 +129,89 @@ def test_git_commit_if_changed_dry_run_does_not_invoke_subprocess(
     assert result is CommitResult.COMMITTED
     assert calls == [["git", "commit", "-m", "msg", "--no-verify"]]
     fake_subprocess.assert_not_called()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_is_valid_repo_true_for_worktree(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    assert git_is_valid_repo(repo) is True
+    assert git_is_valid_repo(repo, bare=True) is False
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_is_valid_repo_true_for_bare_clone(tmp_path: Path) -> None:
+    source = _init_repo(tmp_path / "source")
+    bare = tmp_path / "bare"
+    _git(["clone", "--bare", str(source), str(bare)], cwd=tmp_path)
+    assert git_is_valid_repo(bare, bare=True) is True
+    assert git_is_valid_repo(bare, bare=False) is False
+
+
+def test_git_is_valid_repo_false_for_non_repo(tmp_path: Path) -> None:
+    not_a_repo = tmp_path / "not_a_repo"
+    not_a_repo.mkdir()
+    assert git_is_valid_repo(not_a_repo) is False
+
+
+def test_git_is_valid_repo_false_for_missing_dir(tmp_path: Path) -> None:
+    assert git_is_valid_repo(tmp_path / "missing") is False
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_ref_exists_remote(tmp_path: Path) -> None:
+    source = _init_repo(tmp_path / "source")
+    bare = tmp_path / "bare"
+    _git(["clone", "--bare", str(source), str(bare)], cwd=tmp_path)
+    clone = tmp_path / "clone"
+    _git(["clone", str(bare), str(clone)], cwd=tmp_path)
+
+    assert git_ref_exists_remote(clone, "main") is True
+    assert git_ref_exists_remote(clone, "does-not-exist") is False
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_is_ancestor(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    base_sha = _git(["rev-parse", "HEAD"], cwd=repo).stdout.decode().strip()
+    (repo / "more.txt").write_text("more\n", encoding="utf-8")
+    _git(["add", "."], cwd=repo)
+    _git(["commit", "-m", "second commit"], cwd=repo)
+    head_sha = _git(["rev-parse", "HEAD"], cwd=repo).stdout.decode().strip()
+
+    assert git_is_ancestor(repo, base_sha, head_sha) is True
+    assert git_is_ancestor(repo, head_sha, base_sha) is False
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_remote_url_returns_configured_url(tmp_path: Path) -> None:
+    source = _init_repo(tmp_path / "source")
+    bare = tmp_path / "bare"
+    _git(["clone", "--bare", str(source), str(bare)], cwd=tmp_path)
+    clone = tmp_path / "clone"
+    _git(["clone", str(bare), str(clone)], cwd=tmp_path)
+
+    assert git_remote_url(clone, "origin") == str(bare)
+
+
+def test_git_remote_url_returns_none_when_unset(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    assert git_remote_url(repo, "origin") is None
+
+
+def test_git_index_lock_present_false_by_default(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    assert git_index_lock_present(repo) is False
+
+
+def test_git_index_lock_present_true_for_worktree(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    (repo / ".git" / "index.lock").touch()
+    assert git_index_lock_present(repo) is True
+
+
+def test_git_index_lock_present_true_for_bare(tmp_path: Path) -> None:
+    source = _init_repo(tmp_path / "source")
+    bare = tmp_path / "bare"
+    _git(["clone", "--bare", str(source), str(bare)], cwd=tmp_path)
+    (bare / "index.lock").touch()
+    assert git_index_lock_present(bare) is True

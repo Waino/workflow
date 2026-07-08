@@ -2,6 +2,10 @@
 
 Provides thin wrappers around git commands that respect dry-run mode.
 All helpers that run git operations use cwd=repo_path and the remote named 'origin'.
+
+Read-only guard queries (status/existence/ancestry checks used as preconditions or
+resume postconditions) always run for real, even in dry-run mode, so resume previews
+stay accurate. Only helpers that perform mutations honor dry_run.
 """
 
 from __future__ import annotations
@@ -83,28 +87,25 @@ def git_status(repo_path: Path, *, dry_run: bool = False) -> None:
     run_command(["git", "status", "--short", "--branch"], cwd=repo_path, dry_run=dry_run)
 
 
-def git_status_porcelain(repo_path: Path, *, dry_run: bool = False) -> str:
+def git_status_porcelain(repo_path: Path) -> str:
     """Return ``git status --porcelain`` output for *repo_path* (empty == clean tree).
 
-    In dry-run mode prints the command and returns an empty string (treated as clean).
+    Read-only guard query: always runs for real, even in dry-run (see module docstring).
     """
-    if dry_run:
-        run_command(["git", "status", "--porcelain"], cwd=repo_path, dry_run=True)
-        return ""
-    result = run_command(["git", "status", "--porcelain"], cwd=repo_path, capture_output=True, text=True)
-    assert result is not None
-    stdout = result.stdout.decode() if isinstance(result.stdout, bytes) else result.stdout
-    return stdout.strip()
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout.decode().strip()
 
 
-def git_branch_exists(repo_path: Path, branch: str, *, dry_run: bool = False) -> bool:
+def git_branch_exists(repo_path: Path, branch: str) -> bool:
     """Return whether *branch* exists locally in *repo_path*.
 
-    In dry-run mode prints the command and returns ``False`` (treated as absent).
+    Read-only guard query: always runs for real, even in dry-run (see module docstring).
     """
-    if dry_run:
-        run_command(["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=repo_path, dry_run=True)
-        return False
     result = subprocess.run(  # noqa: S603
         ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],  # noqa: S607
         cwd=repo_path,
@@ -112,6 +113,82 @@ def git_branch_exists(repo_path: Path, branch: str, *, dry_run: bool = False) ->
         check=False,
     )
     return result.returncode == 0
+
+
+def git_ref_exists_remote(repo_path: Path, ref: str) -> bool:
+    """Return whether ``origin`` has a branch named *ref* in *repo_path*.
+
+    Queries the remote directly (``git ls-remote --heads``) rather than relying on
+    local remote-tracking refs, since a prior ``fetch`` cannot be assumed. Read-only
+    guard query: always runs for real, even in dry-run.
+    """
+    result = subprocess.run(  # noqa: S603
+        ["git", "ls-remote", "--exit-code", "--heads", "origin", ref],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def git_is_ancestor(repo_path: Path, ancestor: str, descendant: str) -> bool:
+    """Return whether *ancestor* is an ancestor of (or equal to) *descendant* in *repo_path*.
+
+    Read-only guard query: always runs for real, even in dry-run.
+    """
+    result = subprocess.run(  # noqa: S603
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def git_remote_url(repo_path: Path, name: str) -> str | None:
+    """Return the configured URL for remote *name* in *repo_path*, or ``None`` if unset.
+
+    Read-only guard query: always runs for real, even in dry-run.
+    """
+    result = subprocess.run(  # noqa: S603
+        ["git", "config", "--get", f"remote.{name}.url"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.decode().strip()
+
+
+def git_index_lock_present(repo_path: Path) -> bool:
+    """Return whether a leftover ``index.lock`` is present in *repo_path*'s git dir.
+
+    Handles both worktree repos (lock at ``.git/index.lock``) and bare repos (lock at
+    ``index.lock`` directly under *repo_path*). Read-only guard query: always runs for
+    real, even in dry-run.
+    """
+    git_dir = repo_path / ".git"
+    lock_dir = git_dir if git_dir.is_dir() else repo_path
+    return (lock_dir / "index.lock").exists()
+
+
+def git_is_valid_repo(repo_path: Path, *, bare: bool = False) -> bool:
+    """Return whether *repo_path* is a valid git repository, matching the expected *bare*-ness.
+
+    Read-only guard query: always runs for real, even in dry-run.
+    """
+    if not repo_path.is_dir():
+        return False
+    result = subprocess.run(
+        ["git", "rev-parse", "--is-bare-repository"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    return (result.stdout.decode().strip() == "true") == bare
 
 
 def git_merge(repo_path: Path, branch: str, *, dry_run: bool = False) -> None:

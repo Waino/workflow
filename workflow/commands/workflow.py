@@ -398,10 +398,10 @@ def implement(ctx: click.Context, plan_path: str) -> None:
         # Preconditions (checked before any state change, so a failure leaves no state change).
         builder_repo = project_dir / RepoName.builder
         feature_branch = f"feat/{plan.name}"
-        if git_status_porcelain(builder_repo, dry_run=dry_run):
+        if git_status_porcelain(builder_repo):
             msg = "builder working tree is dirty; commit or discard changes before implement"
             raise WorkflowError(msg)
-        if git_branch_exists(builder_repo, feature_branch, dry_run=dry_run):
+        if git_branch_exists(builder_repo, feature_branch):
             msg = f"branch {feature_branch} already exists in builder"
             raise WorkflowError(msg)
         if plan.state == PlanState.PLANNING:
