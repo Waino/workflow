@@ -607,7 +607,7 @@ def _transition_if_needed(  # noqa: PLR0913
     commit_repo: str | None = None,
     dry_run: bool,
 ) -> Plan:
-    """Move *plan* to *target_state*, skipping the ``git mv`` when already done (decision 4).
+    """Move *plan* to *target_state*, skipping the ``git mv`` when already done.
 
     Always (re)commits via :func:`git_commit_if_changed`, which safely no-ops when
     there is nothing staged. This also finishes a prior run that moved the file but
