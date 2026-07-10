@@ -139,7 +139,17 @@ def _run_pre_commit_in_sandbox(config: WorkflowConfig, repo_name: str, *, dry_ru
     container_name = f"pi-{project_name}-{repo_name}"
     repo_path = shlex.quote(f"/home/auggie/projects/{project_name}/{repo_name}")
     run_command(
-        ["docker", "exec", container_name, "bash", "-lc", f"cd {repo_path} && ./.git-pre-commit-hook"],
+        [
+            "docker", "exec",
+            "--user",
+            "auggie",
+            "--workdir",
+            repo_path,
+            container_name,
+            "bash",
+            "-lc",
+            "./.git-pre-commit-hook"
+        ],
         dry_run=dry_run,
     )
 
