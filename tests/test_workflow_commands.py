@@ -13,7 +13,7 @@ from click.testing import CliRunner
 
 import workflow.commands.info as wi
 import workflow.commands.workflow as wc
-from workflow import main
+from workflow import git_helpers, main
 from workflow.audit import read_audit_log, write_audit_log
 from workflow.commands.info import _parse_datetime
 from workflow.config import WORKFLOW_ROOT_MARKER
@@ -502,7 +502,7 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     monkeypatch.chdir(tmp_path)
     fake_push = MagicMock()
     fake_pull = MagicMock()
-    fake_merge = MagicMock()
+    fake_transfer = MagicMock()
     fake_commit = MagicMock()
     fake_checkout = MagicMock()
 
@@ -520,7 +520,7 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     )
     monkeypatch.setattr(wc, "git_push", fake_push)
     monkeypatch.setattr(wc, "git_pull", fake_pull)
-    monkeypatch.setattr(wc, "git_merge", fake_merge)
+    monkeypatch.setattr(wc, "transfer_branch_to_main", fake_transfer)
     monkeypatch.setattr(wc, "git_commit", fake_commit)
     monkeypatch.setattr(wc, "git_commit_if_changed", fake_commit)
     monkeypatch.setattr(wc, "git_checkout", fake_commit)
@@ -533,6 +533,8 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
 
     assert accept_result.exit_code == 0
     assert reject_result.exit_code == 0
+    assert fake_transfer.call_args.args == (tmp_path / "reviewer", tmp_path / "canon")
+    assert fake_transfer.call_args.kwargs["branch"] == "feat/005_foo"
     all_repos = (
         [c.args[0] for c in fake_push.call_args_list]
         + [c.args[0] for c in fake_pull.call_args_list]
@@ -901,15 +903,37 @@ def test_implement_from_planning_branch_transfers_and_transitions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Implement from a PLANNING plan: transfer planner->canon (inlined+guarded), then TODO, IMPLEMENTING."""
+    """Implement from a PLANNING plan: transfer planner->canon (via shared helper), then TODO, IMPLEMENTING."""
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "planner", "planning", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     call_order: list[str] = []
-    monkeypatch.setattr(wc, "git_push", MagicMock(side_effect=lambda *_a, **_kw: call_order.append("push")))
-    monkeypatch.setattr(wc, "git_pull", MagicMock(side_effect=lambda *_a, **_kw: call_order.append("pull")))
-    monkeypatch.setattr(wc, "git_merge", MagicMock(side_effect=lambda *_a, **_kw: call_order.append("merge")))
-    monkeypatch.setattr(wc, "git_checkout", MagicMock(side_effect=lambda *_a, **_kw: call_order.append("checkout")))
+
+    # transfer_branch_to_main is implemented in git_helpers and calls its own module-level
+    # git_push/git_pull/git_merge/git_checkout/git_current_branch, not wc's imported aliases --
+    # patch both modules so the shared call_order captures the whole implement pipeline.
+    def _push(_repo: Path, **_kw: object) -> None:
+        call_order.append("push")
+
+    def _pull(_repo: Path, **_kw: object) -> None:
+        call_order.append("pull")
+
+    def _merge(*_a: object, **_kw: object) -> None:
+        call_order.append("merge")
+
+    def _checkout(*_a: object, **_kw: object) -> None:
+        call_order.append("checkout")
+
+    def _current_branch(repo_path: Path) -> str:
+        return "main" if repo_path == tmp_path / "canon" else "feat/planner-branch"
+
+    for module in (wc, git_helpers):
+        monkeypatch.setattr(module, "git_push", _push)
+        monkeypatch.setattr(module, "git_pull", _pull)
+        monkeypatch.setattr(module, "git_current_branch", _current_branch)
+    monkeypatch.setattr(wc, "git_checkout", _checkout)
+    monkeypatch.setattr(git_helpers, "git_checkout", _checkout)
+    monkeypatch.setattr(git_helpers, "git_merge", _merge)
 
     def _commit_if_changed(*_a: object, **_kw: object) -> CommitResult:
         call_order.append("commit")
@@ -928,7 +952,6 @@ def test_implement_from_planning_branch_transfers_and_transitions(
     )
     monkeypatch.setattr(wc, "git_status_porcelain", MagicMock(return_value=""))
     monkeypatch.setattr(wc, "git_branch_exists", MagicMock(return_value=False))
-    monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="feat/planner-branch"))
     monkeypatch.setattr(wc, "git_index_lock_present", MagicMock(return_value=False))
     monkeypatch.setattr(wc, "git_fetch", MagicMock())
     monkeypatch.setattr(wc, "rotate_control_pane", MagicMock())

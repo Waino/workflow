@@ -37,7 +37,6 @@ from workflow.git_helpers import (
     git_index_lock_present,
     git_is_ancestor,
     git_is_valid_repo,
-    git_merge,
     git_pull,
     git_push,
     git_remote_url,
@@ -698,18 +697,9 @@ def _run_implement_steps(
 ) -> Plan:
     """Run the (already-classified) implement steps, each idempotently skipping its own no-op."""
     if plan.state == PlanState.PLANNING:
-        # Inlined, guarded equivalent of transfer_branch_to_main: each git op below is
-        # naturally idempotent (safe to always re-run), unlike the shared helper (used
-        # unguarded by `todo`, out of scope for resume -- see plan 020 build sequence).
         planner_repo = project_dir / RepoName.planner
         canon_repo = project_dir / RepoName.canon
-        planner_branch = git_current_branch(planner_repo)
-        git_push(planner_repo, dry_run=dry_run)
-        git_pull(canon_repo, dry_run=dry_run)
-        git_merge(canon_repo, f"origin/{planner_branch}", dry_run=dry_run)
-        git_push(canon_repo, dry_run=dry_run)
-        _ensure_branch_checked_out(planner_repo, "main", dry_run=dry_run)
-        git_pull(planner_repo, dry_run=dry_run)
+        transfer_branch_to_main(planner_repo, canon_repo, dry_run=dry_run)
         plan = _transition_if_needed(plan, PlanState.TODO, project_dir, repo_override=RepoName.canon, dry_run=dry_run)
 
     new_plan = _transition_if_needed(plan, PlanState.IMPLEMENTING, project_dir, dry_run=dry_run)
@@ -1011,14 +1001,14 @@ def push(ctx: click.Context, plan_path: str) -> None:
 
 def _classify_accept_steps(resume: ResumePlan, plan: Plan, project_dir: Path, branch: str) -> None:
     canon_repo = project_dir / RepoName.canon
-    reviewer_repo = project_dir / RepoName.reviewer
 
-    resume.will_run("push reviewer branch")
-    resume.will_run("pull canon")
+    # transfer_branch_to_main is one guarded+idempotent unit (Fix 3); classify it as a
+    # single step so classify- and run-granularity stay aligned (see plan 020.1 Fix 3
+    # granularity note).
     if git_is_ancestor(canon_repo, f"origin/{branch}", "main"):
-        resume.satisfied("merge into canon main", "origin/<branch> already merged into main")
+        resume.satisfied("transfer reviewer branch to main", "origin/<branch> already merged into main")
     else:
-        resume.will_run("merge into canon main")
+        resume.will_run("transfer reviewer branch to main")
 
     target_path = project_dir / RepoName.canon / "docs" / "plans" / "done" / plan.path.name
     if target_path.exists():
@@ -1027,10 +1017,6 @@ def _classify_accept_steps(resume: ResumePlan, plan: Plan, project_dir: Path, br
         resume.will_run("transition to done")
 
     resume.will_run("push canon")
-    if git_current_branch(reviewer_repo) == "main":
-        resume.satisfied("checkout main in reviewer", "reviewer already on main")
-    else:
-        resume.will_run("checkout main in reviewer")
 
 
 @register_script("accept")
@@ -1064,10 +1050,13 @@ def accept(ctx: click.Context, plan_path: str) -> None:
         _classify_accept_steps(resume, plan, project_dir, branch)
         resume.render()
 
-        git_push(reviewer_repo, dry_run=dry_run)
-        git_pull(canon_repo, dry_run=dry_run)
-        # Merge via remote-tracking ref: the branch is not checked out locally in canon.
-        git_merge(canon_repo, f"origin/{branch}", dry_run=dry_run)
+        # transfer_branch_to_main also checks reviewer out to 'main' and pulls it, making
+        # it ready for the next task (reordered ahead of the done-transition vs. before;
+        # adds one harmless extra canon push -- both inconsequential). Gated on should_run:
+        # unlike a fresh run, a resume where this already landed must not re-push reviewer's
+        # (by-then-stale) main over the done-transition commit already pushed to bare.
+        if resume.should_run("transfer reviewer branch to main"):
+            transfer_branch_to_main(reviewer_repo, canon_repo, branch=branch, dry_run=dry_run)
         new_plan = _transition_if_needed(
             plan,
             PlanState.DONE,
@@ -1076,9 +1065,6 @@ def accept(ctx: click.Context, plan_path: str) -> None:
             dry_run=dry_run,
         )
         git_push(canon_repo, dry_run=dry_run)
-        # checkout main in reviewer to make it ready for the next task
-        _ensure_branch_checked_out(reviewer_repo, "main", dry_run=dry_run)
-        git_pull(reviewer_repo, dry_run=dry_run)
         _write_script_audit_log(config, "accept", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.CHECKING, "accept", new_plan.name)
     except (

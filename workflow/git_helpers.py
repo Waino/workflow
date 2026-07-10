@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
-from workflow.exceptions import WorkflowError
 from workflow.shell import error_console, run_command, run_condition_command
+from workflow.steps import require
 
 GIT_REVPARSE_NO_UPSTREAM = 128
 
@@ -294,34 +294,45 @@ def transfer_branch_to_main(
     source_repo: Path,
     canon_repo: Path,
     *,
+    branch: str | None = None,
     dry_run: bool = False,
 ) -> None:
-    """Push *source_repo*'s current branch to bare, pull to canon, merge, and push back.
+    """Push *source_repo*'s branch to bare, pull to canon, merge, and push back.
 
-    Reads the current branch from *source_repo*.
-    Raises :class:`~workflow.exceptions.WorkflowError` if that branch is ``'main'``.
+    Uses *branch* as the merge ref when given (so callers with a fixed feature-branch
+    convention, e.g. ``accept``, don't depend on what *source_repo* happens to be
+    checked out to); otherwise reads *source_repo*'s current branch.
+
+    Every step is individually idempotent (a merge of an already-merged ref is a
+    harmless no-op, checkout/pull no-op when already on ``main``), so re-running the
+    whole helper on a partially-completed prior transfer is safe -- including when
+    *source_repo* is already on ``main`` (a mid-transfer resume), which reduces to a
+    harmless main-into-main merge. Callers that want to skip the transfer altogether
+    on resume should not call this at all (see each command's classify step).
+
+    Raises :class:`~workflow.exceptions.WorkflowError` if *canon_repo* is not on
+    ``'main'`` (it always should be at rest; this guards against clobbering a feature
+    branch checked out there by mistake).
 
     Steps:
     1. ``git push origin`` in *source_repo*
     2. ``git pull`` in *canon_repo*
     3. ``git merge <branch>`` in *canon_repo*
     4. ``git push origin`` in *canon_repo*
-    5. ``git checkout main`` in *source_repo*
-    2. ``git pull`` in *source_repo*
+    5. ``git checkout main`` in *source_repo* (skipped if already on ``main``)
+    6. ``git pull`` in *source_repo*
     """
-    branch = git_current_branch(source_repo)
-    canon_branch = git_current_branch(canon_repo)
-    if branch == "main":
-        msg = "transfer_branch_to_main: source_repo is on 'main'; expected a feature branch"
-        raise WorkflowError(msg)
-    if canon_branch != "main":
-        msg = "transfer_branch_to_main: canon_repo is not on 'main'; won't clobber a feature branch"
-        raise WorkflowError(msg)
+    require(
+        git_current_branch(canon_repo) == "main",
+        "transfer_branch_to_main: canon_repo is not on 'main'; won't clobber a feature branch",
+    )
+    merge_ref = f"origin/{branch or git_current_branch(source_repo)}"
 
     git_push(source_repo, dry_run=dry_run)
     git_pull(canon_repo, dry_run=dry_run)
     # Merge via the remote-tracking ref so the branch need not exist locally.
-    git_merge(canon_repo, f"origin/{branch}", dry_run=dry_run)
+    git_merge(canon_repo, merge_ref, dry_run=dry_run)
     git_push(canon_repo, dry_run=dry_run)
-    git_checkout(source_repo, "main", create=False, dry_run=dry_run)
+    if git_current_branch(source_repo) != "main":
+        git_checkout(source_repo, "main", create=False, dry_run=dry_run)
     git_pull(source_repo, dry_run=dry_run)

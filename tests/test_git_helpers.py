@@ -67,11 +67,69 @@ def test_transfer_branch_to_main_runs_steps_in_order(monkeypatch: pytest.MonkeyP
     ]
 
 
-def test_transfer_branch_to_main_rejects_main_branch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(git_helpers, "git_current_branch", lambda _repo: "main")
+def test_transfer_branch_to_main_rejects_canon_not_on_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(git_helpers, "git_current_branch", lambda _repo: "feat/other")
 
-    with pytest.raises(WorkflowError, match="expected a feature branch"):
+    with pytest.raises(WorkflowError, match="won't clobber a feature branch"):
         git_helpers.transfer_branch_to_main(tmp_path / "builder", tmp_path / "canon")
+
+
+def test_transfer_branch_to_main_idempotent_rerun_when_source_already_on_main(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A resumed transfer where source_repo already advanced to 'main' must not crash or checkout."""
+    source_repo = tmp_path / "builder"
+    canon_repo = tmp_path / "canon"
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(git_helpers, "git_current_branch", lambda _repo: "main")
+    monkeypatch.setattr(git_helpers, "git_push", lambda repo, *, dry_run=False: calls.append(("push", repo, dry_run)))
+    monkeypatch.setattr(git_helpers, "git_pull", lambda repo, *, dry_run=False: calls.append(("pull", repo, dry_run)))
+    monkeypatch.setattr(
+        git_helpers,
+        "git_merge",
+        lambda repo, branch, *, dry_run=False: calls.append(("merge", repo, branch, dry_run)),
+    )
+    monkeypatch.setattr(git_helpers, "git_checkout", MagicMock(side_effect=AssertionError("must not checkout")))
+
+    git_helpers.transfer_branch_to_main(source_repo, canon_repo, dry_run=True)
+
+    assert calls == [
+        ("push", source_repo, True),
+        ("pull", canon_repo, True),
+        ("merge", canon_repo, "origin/main", True),
+        ("push", canon_repo, True),
+        ("pull", source_repo, True),
+    ]
+
+
+def test_transfer_branch_to_main_branch_override_takes_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An explicit branch= is used as the merge ref regardless of source_repo's current branch."""
+    source_repo = tmp_path / "reviewer"
+    canon_repo = tmp_path / "canon"
+    merges: list[tuple[str, bool]] = []
+
+    monkeypatch.setattr(
+        git_helpers,
+        "git_current_branch",
+        lambda repo: "main" if repo == canon_repo else "some-other-branch",
+    )
+    monkeypatch.setattr(git_helpers, "git_push", MagicMock())
+    monkeypatch.setattr(git_helpers, "git_pull", MagicMock())
+    monkeypatch.setattr(git_helpers, "git_checkout", MagicMock())
+    monkeypatch.setattr(
+        git_helpers,
+        "git_merge",
+        lambda _repo, branch, *, dry_run=False: merges.append((branch, dry_run)),
+    )
+
+    git_helpers.transfer_branch_to_main(source_repo, canon_repo, branch="feat/005_foo", dry_run=True)
+
+    assert merges == [("origin/feat/005_foo", True)]
 
 
 def test_git_merge_includes_double_dash_separator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
