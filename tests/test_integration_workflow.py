@@ -286,6 +286,53 @@ def test_init_rerun_with_continue_succeeds(tmp_path: Path, monkeypatch: pytest.M
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_init_rerun_with_continue_does_not_redo_satisfied_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resumed init must not regenerate AGENTS.md or re-push canon's already-wired origin.
+
+    Regression test for Fix 2 (020.1): _run_init_steps used to re-derive postconditions
+    instead of consulting the classify pass, so a fully-satisfied resume still rewrote
+    AGENTS.md and re-ran `git push -u origin HEAD` every time.
+    """
+    _init_canon_repo(tmp_path)
+    config_path = _make_integration_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
+    monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
+
+    first = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+    assert first.exit_code == 0, first.output
+
+    agents_md_mtime_before = (tmp_path / "canon" / "AGENTS.md").stat().st_mtime_ns
+    canon_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout
+    bare_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "bare").stdout
+
+    fake_generate = MagicMock(side_effect=wc.generate_and_write_agents_md)
+    monkeypatch.setattr(wc, "generate_and_write_agents_md", fake_generate)
+    run_command_calls: list[list[str]] = []
+    real_run_command = wc.run_command
+
+    def _spy_run_command(
+        cmd: list[str], *, dry_run: bool = False, **kwargs: Any,
+    ) -> subprocess.CompletedProcess[bytes] | None:
+        run_command_calls.append(cmd)
+        return real_run_command(cmd, dry_run=dry_run, **kwargs)
+
+    monkeypatch.setattr(wc, "run_command", _spy_run_command)
+
+    second = CliRunner().invoke(main, ["--config", str(config_path), "init", "--continue"])
+
+    assert second.exit_code == 0, second.output
+    fake_generate.assert_not_called()
+    assert ["git", "push", "-u", "origin", "HEAD"] not in run_command_calls
+    assert (tmp_path / "canon" / "AGENTS.md").stat().st_mtime_ns == agents_md_mtime_before
+    assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout == canon_head_before
+    assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "bare").stdout == bare_head_before
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_init_dry_run_previews_resume_without_mutating(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A partially-completed init followed by a dry-run must preview accurately without mutating."""
     _init_canon_repo(tmp_path)

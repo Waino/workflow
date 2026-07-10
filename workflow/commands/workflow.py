@@ -228,12 +228,19 @@ def _wire_canon_to_bare(canon_repo: Path, bare_path: Path, *, dry_run: bool) -> 
     run_command(["git", "push", "-u", "origin", "HEAD"], cwd=canon_repo, dry_run=dry_run)
 
 
+# Step-name constants: the join key between _classify_init_steps and _run_init_steps.
+_STEP_AGENTS_MD = "AGENTS.md committed"
+_STEP_BARE_CLONE = "bare clone"
+_STEP_WIRE_CANON = "wire canon to bare"
+_STEP_MARKER = "workflow marker"
+
+
 def _classify_agents_md_step(resume: ResumePlan, config: WorkflowConfig, project_dir: Path) -> None:
     update = prepare_agents_md_update(config.model_copy(update={"project_dir": project_dir}))
     if update.agents_md_unchanged:
-        resume.satisfied("AGENTS.md committed", "already up to date")
+        resume.satisfied(_STEP_AGENTS_MD, "already up to date")
     else:
-        resume.will_run("AGENTS.md committed")
+        resume.will_run(_STEP_AGENTS_MD)
 
 
 def _dir_needs_clone(path: Path) -> bool:
@@ -247,9 +254,9 @@ def _dir_needs_clone(path: Path) -> bool:
 
 def _classify_bare_clone_step(resume: ResumePlan, bare_path: Path) -> None:
     if _dir_needs_clone(bare_path):
-        resume.will_run("bare clone")
+        resume.will_run(_STEP_BARE_CLONE)
     else:
-        resume.satisfied("bare clone", "bare is a valid clone of canon")
+        resume.satisfied(_STEP_BARE_CLONE, "bare is a valid clone of canon")
 
 
 def _classify_agent_clone_steps(resume: ResumePlan, config: WorkflowConfig, project_dir: Path, bare_path: Path) -> None:
@@ -281,16 +288,16 @@ def _classify_wire_canon_step(resume: ResumePlan, canon_repo: Path, bare_path: P
         msg = f"canon 'origin' remote points at {origin_url!r}, expected {bare_path}; fix or remove it."
         raise WorkflowError(msg)
     if origin_url is not None:
-        resume.satisfied("wire canon to bare", "origin already points at bare")
+        resume.satisfied(_STEP_WIRE_CANON, "origin already points at bare")
     else:
-        resume.will_run("wire canon to bare")
+        resume.will_run(_STEP_WIRE_CANON)
 
 
 def _classify_marker_step(resume: ResumePlan, project_dir: Path) -> None:
     if (project_dir / WORKFLOW_ROOT_MARKER).exists():
-        resume.satisfied("workflow marker", "marker file exists")
+        resume.satisfied(_STEP_MARKER, "marker file exists")
     else:
-        resume.will_run("workflow marker")
+        resume.will_run(_STEP_MARKER)
 
 
 def _classify_venv_steps(resume: ResumePlan, config: WorkflowConfig, project_dir: Path) -> None:
@@ -336,7 +343,8 @@ def _check_init_preconditions(canon_repo: Path, bare_path: Path) -> None:
         )
 
 
-def _run_init_steps(
+def _run_init_steps(  # noqa: PLR0913
+    resume: ResumePlan,
     config: WorkflowConfig,
     project_dir: Path,
     canon_repo: Path,
@@ -344,9 +352,9 @@ def _run_init_steps(
     *,
     dry_run: bool,
 ) -> None:
-    """Perform the (already-classified) init steps, each idempotently skipping its own no-op."""
+    """Perform the (already-classified) init steps, gated on resume.should_run."""
     # Generate AGENTS.md into canon before the bare clone so all agent clones inherit it.
-    if not dry_run:
+    if resume.should_run(_STEP_AGENTS_MD) and not dry_run:
         try:
             generate_and_write_agents_md(config.model_copy(update={"project_dir": project_dir}))
             git_add(canon_repo, Path("AGENTS.md"), dry_run=False)
@@ -356,9 +364,12 @@ def _run_init_steps(
         except AgentsMdGenerationError as exc:
             raise WorkflowError(str(exc)) from exc
 
-    if _dir_needs_clone(bare_path):
+    if resume.should_run(_STEP_BARE_CLONE):
         run_command(["git", "clone", "--bare", RepoName.canon, "bare"], cwd=project_dir, dry_run=dry_run)
 
+    # Clone/configure/venv steps below keep their own _dir_needs_clone-style guards (shared
+    # verbatim with _classify_*) rather than gating on should_run: a `needs_continue` clone
+    # step means "leave the existing clone as-is" (would fail if re-cloned), not "run it".
     for agent in config.agents:
         agent_repo = project_dir / agent.name
         if _dir_needs_clone(agent_repo):
@@ -367,9 +378,10 @@ def _run_init_steps(
     for agent in config.agents:
         _ensure_agent_push_config(project_dir / agent.name, dry_run=dry_run)
 
-    _wire_canon_to_bare(canon_repo, bare_path, dry_run=dry_run)
+    if resume.should_run(_STEP_WIRE_CANON):
+        _wire_canon_to_bare(canon_repo, bare_path, dry_run=dry_run)
 
-    if not dry_run and not (project_dir / WORKFLOW_ROOT_MARKER).exists():
+    if resume.should_run(_STEP_MARKER) and not dry_run:
         (project_dir / WORKFLOW_ROOT_MARKER).touch()
 
     # Create venvs (always via --reset: cheap on first creation, destructive-but-
@@ -405,7 +417,7 @@ def init(ctx: click.Context, *, cont: bool) -> None:
             ctx.exit(1)
             return
 
-        _run_init_steps(config, project_dir, canon_repo, bare_path, dry_run=dry_run)
+        _run_init_steps(resume, config, project_dir, canon_repo, bare_path, dry_run=dry_run)
         _write_script_audit_log(config.model_copy(update={"project_dir": project_dir}), "init", dry_run=dry_run)
     except (subprocess.CalledProcessError, WorkflowError) as exc:
         print_workflow_error(exc)
@@ -642,6 +654,14 @@ def _transition_if_needed(  # noqa: PLR0913
     return new_plan
 
 
+# Step-name constants: the join key between _classify_implement_steps and _run_implement_steps.
+_STEP_IMPLEMENT_TRANSFER = "transfer planner branch to main"
+_STEP_IMPLEMENT_TRANSITION_TODO = "transition to todo"
+_STEP_IMPLEMENT_TRANSITION_IMPLEMENTING = "transition to implementing"
+_STEP_IMPLEMENT_FETCH_BUILDER = "fetch builder"
+_STEP_IMPLEMENT_CHECKOUT_MAIN_BUILDER = "checkout main in builder"
+
+
 def _classify_implement_steps(
     resume: ResumePlan,
     plan: Plan,
@@ -650,17 +670,17 @@ def _classify_implement_steps(
     feature_branch: str,
 ) -> None:
     if plan.state == PlanState.PLANNING:
-        resume.will_run("transfer planner branch to main")
-        resume.will_run("transition to todo")
+        resume.will_run(_STEP_IMPLEMENT_TRANSFER)
+        resume.will_run(_STEP_IMPLEMENT_TRANSITION_TODO)
     else:
-        resume.satisfied("transfer planner branch to main", "plan already past planning")
-        resume.satisfied("transition to todo", "plan already past planning")
+        resume.satisfied(_STEP_IMPLEMENT_TRANSFER, "plan already past planning")
+        resume.satisfied(_STEP_IMPLEMENT_TRANSITION_TODO, "plan already past planning")
 
     implementing_path = project_dir / RepoName.canon / "docs" / "plans" / "implementing" / plan.path.name
     if implementing_path.exists():
-        resume.satisfied("transition to implementing", "plan file already in implementing/")
+        resume.satisfied(_STEP_IMPLEMENT_TRANSITION_IMPLEMENTING, "plan file already in implementing/")
     else:
-        resume.will_run("transition to implementing")
+        resume.will_run(_STEP_IMPLEMENT_TRANSITION_IMPLEMENTING)
 
     resume.will_run("push canon")
 
@@ -669,15 +689,19 @@ def _classify_implement_steps(
     # a rerun on an already-fully-implemented plan would force builder off its own branch.
     branch_exists = git_branch_exists(builder_repo, feature_branch)
     if branch_exists:
-        resume.satisfied("fetch builder", "feature branch already exists")
-        resume.satisfied("checkout main in builder", "feature branch already exists")
+        resume.satisfied(_STEP_IMPLEMENT_FETCH_BUILDER, "feature branch already exists")
+        resume.satisfied(_STEP_IMPLEMENT_CHECKOUT_MAIN_BUILDER, "feature branch already exists")
     else:
-        resume.will_run("fetch builder")
+        resume.will_run(_STEP_IMPLEMENT_FETCH_BUILDER)
         if git_current_branch(builder_repo) == "main":
-            resume.satisfied("checkout main in builder", "builder already on main")
+            resume.satisfied(_STEP_IMPLEMENT_CHECKOUT_MAIN_BUILDER, "builder already on main")
         else:
-            resume.will_run("checkout main in builder")
+            resume.will_run(_STEP_IMPLEMENT_CHECKOUT_MAIN_BUILDER)
 
+    # Classified for the --continue prompt only (not separately gated at run time: creating
+    # the branch is coupled 1:1 with _STEP_IMPLEMENT_FETCH_BUILDER, see _run_implement_steps).
+    # needs_continue here means "leave the existing branch as-is", not "recreate it" -- unlike
+    # a plain resume step, so it must not drive its own should_run-gated git checkout -b.
     step = f"create {feature_branch}"
     if not branch_exists:
         resume.will_run(step)
@@ -687,7 +711,8 @@ def _classify_implement_steps(
         resume.needs_continue(step, "branch exists but plan not yet implementing; pass --continue to accept it as-is")
 
 
-def _run_implement_steps(
+def _run_implement_steps(  # noqa: PLR0913
+    resume: ResumePlan,
     plan: Plan,
     project_dir: Path,
     builder_repo: Path,
@@ -695,19 +720,23 @@ def _run_implement_steps(
     *,
     dry_run: bool,
 ) -> Plan:
-    """Run the (already-classified) implement steps, each idempotently skipping its own no-op."""
-    if plan.state == PlanState.PLANNING:
+    """Run the (already-classified) implement steps, gated on resume.should_run."""
+    if resume.should_run(_STEP_IMPLEMENT_TRANSFER):
         planner_repo = project_dir / RepoName.planner
         canon_repo = project_dir / RepoName.canon
         transfer_branch_to_main(planner_repo, canon_repo, dry_run=dry_run)
         plan = _transition_if_needed(plan, PlanState.TODO, project_dir, repo_override=RepoName.canon, dry_run=dry_run)
 
+    # Value-returning transition: always call (idempotent), regardless of should_run, so
+    # new_plan reflects the target dir even when the git mv itself is a no-op (see Fix 2
+    # "value-returning steps" nuance).
     new_plan = _transition_if_needed(plan, PlanState.IMPLEMENTING, project_dir, dry_run=dry_run)
 
     canon_repo = project_dir / RepoName.canon
     git_push(canon_repo, dry_run=dry_run)
-    # Leave an existing feature branch (and any work in progress on it) untouched.
-    if not git_branch_exists(builder_repo, feature_branch):
+    # Leave an existing feature branch (and any work in progress on it) untouched: the branch
+    # creation is coupled to this same gate, not classified/gated separately (see above).
+    if resume.should_run(_STEP_IMPLEMENT_FETCH_BUILDER):
         git_fetch(builder_repo, dry_run=dry_run)
         _ensure_branch_checked_out(builder_repo, "main", dry_run=dry_run)
         git_pull(builder_repo, dry_run=dry_run)
@@ -749,7 +778,7 @@ def implement(ctx: click.Context, plan_path: str, *, cont: bool) -> None:
             ctx.exit(1)
             return
 
-        new_plan = _run_implement_steps(plan, project_dir, builder_repo, feature_branch, dry_run=dry_run)
+        new_plan = _run_implement_steps(resume, plan, project_dir, builder_repo, feature_branch, dry_run=dry_run)
         _write_script_audit_log(config, "implement", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.TODO, "implement", new_plan.name)
         if not dry_run:
@@ -847,12 +876,18 @@ def _print_validate_next_step(plan: object) -> None:
         )
 
 
+# Step-name constants: the join key between _classify_check_steps and check()'s run phase.
+_STEP_CHECK_TRANSITION = "transition to checking"
+_STEP_CHECK_CHECKOUT_REVIEWER = "checkout branch in reviewer"
+_STEP_CHECK_CHECKOUT_MAIN_BUILDER = "checkout main in builder"
+
+
 def _classify_check_steps(resume: ResumePlan, plan: Plan, project_dir: Path, target_repo: AgentName) -> None:
     target_path = project_dir / target_repo / "docs" / "plans" / "checking" / plan.path.name
     if target_path.exists():
-        resume.satisfied("transition to checking", "plan file already in checking/")
+        resume.satisfied(_STEP_CHECK_TRANSITION, "plan file already in checking/")
     else:
-        resume.will_run("transition to checking")
+        resume.will_run(_STEP_CHECK_TRANSITION)
 
     resume.will_run(f"push {target_repo} branch")
     resume.will_run("fetch reviewer")
@@ -860,15 +895,15 @@ def _classify_check_steps(resume: ResumePlan, plan: Plan, project_dir: Path, tar
     branch = f"feat/{plan.name}"
     reviewer_repo = project_dir / RepoName.reviewer
     if git_current_branch(reviewer_repo) == branch:
-        resume.satisfied("checkout branch in reviewer", "reviewer already on branch")
+        resume.satisfied(_STEP_CHECK_CHECKOUT_REVIEWER, "reviewer already on branch")
     else:
-        resume.will_run("checkout branch in reviewer")
+        resume.will_run(_STEP_CHECK_CHECKOUT_REVIEWER)
     resume.will_run("pull reviewer")
 
     if git_current_branch(project_dir / RepoName.builder) == "main":
-        resume.satisfied("checkout main in builder", "builder already on main")
+        resume.satisfied(_STEP_CHECK_CHECKOUT_MAIN_BUILDER, "builder already on main")
     else:
-        resume.will_run("checkout main in builder")
+        resume.will_run(_STEP_CHECK_CHECKOUT_MAIN_BUILDER)
 
 
 @register_script("check")
@@ -920,6 +955,8 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force: 
         _classify_check_steps(resume, plan, project_dir, target_repo)
         resume.render()
 
+        # Value-returning transition: always call (idempotent) so new_plan reflects the
+        # target dir even when the git mv itself is a no-op (Fix 2 "value-returning steps").
         new_plan = _transition_if_needed(
             plan,
             PlanState.CHECKING,
@@ -930,10 +967,12 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force: 
         git_push(target_repo_path, dry_run=dry_run)
         branch = f"feat/{new_plan.name}"
         git_fetch(reviewer_repo, dry_run=dry_run)
-        _ensure_branch_checked_out(reviewer_repo, branch, dry_run=dry_run)
+        if resume.should_run(_STEP_CHECK_CHECKOUT_REVIEWER):
+            _ensure_branch_checked_out(reviewer_repo, branch, dry_run=dry_run)
         git_pull(reviewer_repo, dry_run=dry_run)
         # checkout main in builder to make it ready for the next task
-        _ensure_branch_checked_out(builder_repo, "main", dry_run=dry_run)
+        if resume.should_run(_STEP_CHECK_CHECKOUT_MAIN_BUILDER):
+            _ensure_branch_checked_out(builder_repo, "main", dry_run=dry_run)
         git_pull(builder_repo, dry_run=dry_run)
         _write_script_audit_log(config, "check", dry_run=dry_run, input_plan=new_plan.name)
         _print_command_reminder(config, PlanState.IMPLEMENTING, "check", new_plan.name)
@@ -999,6 +1038,10 @@ def push(ctx: click.Context, plan_path: str) -> None:
     ctx.exit(0)
 
 
+# Step-name constant: the join key between _classify_accept_steps and accept()'s run phase.
+_STEP_ACCEPT_TRANSFER = "transfer reviewer branch to main"
+
+
 def _classify_accept_steps(resume: ResumePlan, plan: Plan, project_dir: Path, branch: str) -> None:
     canon_repo = project_dir / RepoName.canon
 
@@ -1006,9 +1049,9 @@ def _classify_accept_steps(resume: ResumePlan, plan: Plan, project_dir: Path, br
     # single step so classify- and run-granularity stay aligned (see plan 020.1 Fix 3
     # granularity note).
     if git_is_ancestor(canon_repo, f"origin/{branch}", "main"):
-        resume.satisfied("transfer reviewer branch to main", "origin/<branch> already merged into main")
+        resume.satisfied(_STEP_ACCEPT_TRANSFER, "origin/<branch> already merged into main")
     else:
-        resume.will_run("transfer reviewer branch to main")
+        resume.will_run(_STEP_ACCEPT_TRANSFER)
 
     target_path = project_dir / RepoName.canon / "docs" / "plans" / "done" / plan.path.name
     if target_path.exists():
@@ -1055,8 +1098,10 @@ def accept(ctx: click.Context, plan_path: str) -> None:
         # adds one harmless extra canon push -- both inconsequential). Gated on should_run:
         # unlike a fresh run, a resume where this already landed must not re-push reviewer's
         # (by-then-stale) main over the done-transition commit already pushed to bare.
-        if resume.should_run("transfer reviewer branch to main"):
+        if resume.should_run(_STEP_ACCEPT_TRANSFER):
             transfer_branch_to_main(reviewer_repo, canon_repo, branch=branch, dry_run=dry_run)
+        # Value-returning transition: always call (idempotent) so new_plan reflects the
+        # target dir even when the git mv itself is a no-op (Fix 2 "value-returning steps").
         new_plan = _transition_if_needed(
             plan,
             PlanState.DONE,
