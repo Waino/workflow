@@ -29,7 +29,6 @@ from workflow.git_helpers import (
     git_add,
     git_branch_exists,
     git_checkout,
-    git_commit,
     git_commit_if_changed,
     git_config_get,
     git_current_branch,
@@ -68,7 +67,7 @@ from workflow.validate import validate as run_validate
 # Each command also accepts its own transition's *target* state, so a plan already
 # moved by a prior (partially-failed) run of the same command can be resumed.
 _EXPECTED_STATES_FOR: dict[str, set[PlanState]] = {
-    "todo": {PlanState.PLANNING},
+    "todo": {PlanState.PLANNING, PlanState.TODO},
     "implement": {PlanState.PLANNING, PlanState.TODO, PlanState.IMPLEMENTING},
     "check": {PlanState.IMPLEMENTING, PlanState.CHECKING},
     "accept": {PlanState.CHECKING, PlanState.DONE},
@@ -545,6 +544,8 @@ def new(ctx: click.Context, slug: str) -> None:
             raise WorkflowError(msg)
         number = next_intent_number(project_dir)
         intent_path = project_dir / RepoName.canon / "docs" / "plans" / "intent" / f"{number:03d}_{slug}.md"
+        # Auto-increment should make this unreachable; a cheap safety net against clobbering.
+        require(not intent_path.exists(), f"{intent_path} already exists; refusing to overwrite it.")
         template_text = (
             importlib.resources.files("workflow.templates").joinpath("intent.md.j2").read_text(encoding="utf-8")
         )
@@ -570,6 +571,26 @@ def new(ctx: click.Context, slug: str) -> None:
     ctx.exit(0)
 
 
+# Step-name constants: the join key between _classify_todo_steps and todo()'s run phase.
+_STEP_TODO_TRANSFER = "transfer planner branch to main"
+_STEP_TODO_TRANSITION = "transition to todo"
+
+
+def _classify_todo_steps(resume: ResumePlan, plan: Plan, project_dir: Path) -> None:
+    if plan.state == PlanState.PLANNING:
+        resume.will_run(_STEP_TODO_TRANSFER)
+    else:
+        resume.satisfied(_STEP_TODO_TRANSFER, "plan already past planning")
+
+    todo_path = project_dir / RepoName.canon / "docs" / "plans" / "todo" / plan.path.name
+    if todo_path.exists():
+        resume.satisfied(_STEP_TODO_TRANSITION, "plan file already in todo/")
+    else:
+        resume.will_run(_STEP_TODO_TRANSITION)
+
+    resume.will_run("push canon")
+
+
 @register_script("todo")
 @click.argument("plan_path")
 @click.option("--force", is_flag=True, help="Continue even when validation fails")
@@ -583,6 +604,12 @@ def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
         project_dir = _require_project_dir(config)
         plan = resolve_plan(plan_path, project_dir, config=config, command_name="todo")
         _enforce_expected_state(plan, "todo")
+        planner_repo = project_dir / RepoName.planner
+        canon_repo = project_dir / RepoName.canon
+        require(not git_index_lock_present(planner_repo), f"leftover git lock in {planner_repo}; remove it first.")
+        require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
+        require(git_current_branch(canon_repo) == "main", "todo: canon must be on 'main'.")
+
         results = run_validate(plan, project_dir, config, target_repo_override="planner", dry_run=dry_run)
         if not dry_run:
             _print_results(results)
@@ -590,15 +617,22 @@ def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
                 ctx.exit(1)
                 return
 
-        transfer_branch_to_main(project_dir / RepoName.planner, project_dir / RepoName.canon, dry_run=dry_run)
-        new_plan = transition_plan(plan, PlanState.TODO, project_dir, repo_override=RepoName.canon, dry_run=dry_run)
-        git_commit(
-            project_dir / RepoName.canon,
-            _transition_commit_message(plan, PlanState.TODO),
+        resume = ResumePlan(title="todo")
+        _classify_todo_steps(resume, plan, project_dir)
+        resume.render()
+
+        if resume.should_run(_STEP_TODO_TRANSFER):
+            transfer_branch_to_main(planner_repo, canon_repo, dry_run=dry_run)
+        # Value-returning transition: always call (idempotent) so new_plan reflects the
+        # target dir even when the git mv itself is a no-op (Fix 2 "value-returning steps").
+        new_plan = _transition_if_needed(
+            plan,
+            PlanState.TODO,
+            project_dir,
+            repo_override=RepoName.canon,
             dry_run=dry_run,
-            no_verify=True,
         )
-        git_push(project_dir / RepoName.canon, dry_run=dry_run)
+        git_push(canon_repo, dry_run=dry_run)
         _write_script_audit_log(config, "todo", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.PLANNING, "todo", new_plan.name)
     except (
@@ -1010,12 +1044,14 @@ def push(ctx: click.Context, plan_path: str) -> None:
             git_provides_repo=True,
         )
         repo = RepoName(plan.path.parts[0])
+        repo_path = project_dir / repo
+        require(not git_index_lock_present(repo_path), f"leftover git lock in {repo_path}; remove it first.")
         if not dry_run and repo != RepoName.canon:
-            branch = git_current_branch(project_dir / repo)
+            branch = git_current_branch(repo_path)
             if branch == "main":
                 msg = f"push: {repo} is on 'main'; expected a feature branch"
                 raise WorkflowError(msg)
-        git_push(project_dir / repo, dry_run=dry_run)
+        git_push(repo_path, dry_run=dry_run)
         script_cmd = find_command(config, plan.state, "push")
         if (
             isinstance(script_cmd, _ScriptCommand)
@@ -1144,15 +1180,23 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
         project_dir = _require_project_dir(config)
         plan = resolve_plan(plan_path, project_dir, config=config)
         _enforce_expected_state(plan, "reject")
-        if plan.state == PlanState.REJECTED:
-            ctx.exit(0)
-            return
-        new_plan = transition_plan(plan, PlanState.REJECTED, project_dir, repo_override=target_repo, dry_run=dry_run)
-        git_commit(
-            project_dir / target_repo,
-            _transition_commit_message(new_plan, PlanState.REJECTED),
+        target_repo_path = project_dir / target_repo
+        require(
+            not git_index_lock_present(target_repo_path),
+            f"leftover git lock in {target_repo_path}; remove it first.",
+        )
+        # _transition_if_needed (idempotent) rather than a raw transition_plan + git_commit,
+        # and no early-exit shortcut on plan.state == REJECTED: a fully-qualified path can
+        # resolve to REJECTED purely from the file's current directory even when the git mv
+        # landed but the commit didn't (an interrupted prior run) -- _transition_if_needed's
+        # own idempotent skip-the-mv-still-commit logic is the single source of truth for
+        # both "nothing to do" and "finish the interrupted commit".
+        _transition_if_needed(
+            plan,
+            PlanState.REJECTED,
+            project_dir,
+            repo_override=target_repo,
             dry_run=dry_run,
-            no_verify=True,
         )
         git_push(project_dir / target_repo, dry_run=dry_run)
         _write_script_audit_log(config, "reject", dry_run=dry_run, input_plan=plan.name)

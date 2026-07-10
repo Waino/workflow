@@ -332,12 +332,18 @@ def test_todo_transitions_and_prints_implement_reminder(tmp_path: Path, monkeypa
         MagicMock(return_value=[CheckResult(check_name="x", status="pass", message="ok")]),
     )
     fake_transfer = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("transfer"))
-    fake_commit = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("commit"))
+
+    def _fake_commit_if_changed(*_a: object, **_kw: object) -> CommitResult:
+        call_order.append("commit")
+        return CommitResult.COMMITTED
+
     fake_push = MagicMock(side_effect=lambda *_a, **_kw: call_order.append("push"))
     monkeypatch.setattr(wc, "transfer_branch_to_main", fake_transfer)
     monkeypatch.setattr(wc, "transition_plan", MagicMock(return_value=_plan("canon", PlanState.TODO)))
-    monkeypatch.setattr(wc, "git_commit", fake_commit)
+    monkeypatch.setattr(wc, "git_commit_if_changed", _fake_commit_if_changed)
     monkeypatch.setattr(wc, "git_push", fake_push)
+    monkeypatch.setattr(wc, "git_index_lock_present", MagicMock(return_value=False))
+    monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="main"))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "todo", "005"])
 
@@ -364,7 +370,6 @@ def test_implement_prints_explicit_ask_reminder(tmp_path: Path, monkeypatch: pyt
     _make_plan(tmp_path, "canon", "todo", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(wc, "transition_plan", MagicMock(return_value=_plan("canon", PlanState.IMPLEMENTING)))
-    monkeypatch.setattr(wc, "git_commit", MagicMock())
     monkeypatch.setattr(wc, "git_push", MagicMock())
     _stub_implement_builder_setup(monkeypatch)
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
@@ -423,7 +428,6 @@ def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkey
         MagicMock(return_value=[CheckResult(check_name="x", status="pass", message="ok")]),
     )
     monkeypatch.setattr(wc, "transition_plan", lambda _p, ts, *_a, **_kw: _plan("builder", ts))
-    monkeypatch.setattr(wc, "git_commit", MagicMock())
     monkeypatch.setattr(wc, "git_commit_if_changed", MagicMock(return_value=CommitResult.COMMITTED))
     monkeypatch.setattr(wc, "git_push", MagicMock())
     monkeypatch.setattr(wc, "git_fetch", MagicMock())
@@ -521,7 +525,6 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(wc, "git_push", fake_push)
     monkeypatch.setattr(wc, "git_pull", fake_pull)
     monkeypatch.setattr(wc, "transfer_branch_to_main", fake_transfer)
-    monkeypatch.setattr(wc, "git_commit", fake_commit)
     monkeypatch.setattr(wc, "git_commit_if_changed", fake_commit)
     monkeypatch.setattr(wc, "git_checkout", fake_commit)
 
@@ -595,6 +598,28 @@ def test_new_renders_template_and_calls_git_add(tmp_path: Path, monkeypatch: pyt
     assert [(c.args[0], c.args[1]) for c in fake_git_add.call_args_list] == [
         (tmp_path / "canon", Path("docs/plans/intent/001_flux_capacitor.md")),
     ]
+
+
+def test_new_refuses_to_overwrite_existing_target_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pre-existing target path (should be unreachable given auto-increment) fails fast.
+
+    next_intent_number always skips numbers already on disk, so force a collision by
+    stubbing it directly rather than relying on a naturally-reachable duplicate.
+    """
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wc, "_open_in_editor", MagicMock())
+    monkeypatch.setattr(wc, "git_add", MagicMock())
+    monkeypatch.setattr(wc, "next_intent_number", MagicMock(return_value=1))
+    existing = tmp_path / "canon" / "docs" / "plans" / "intent" / "001_flux_capacitor.md"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("pre-existing\n", encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "new", "flux_capacitor"])
+
+    assert result.exit_code == 1
+    assert "already exists" in result.output
+    assert existing.read_text(encoding="utf-8") == "pre-existing\n"
 
 
 # ---------------------------------------------------------------------------
@@ -1014,7 +1039,6 @@ def test_todo_resolver_error_exits_nonzero(tmp_path: Path, monkeypatch: pytest.M
     fake_push = MagicMock()
     fake_commit = MagicMock()
     monkeypatch.setattr(wc, "git_push", fake_push)
-    monkeypatch.setattr(wc, "git_commit", fake_commit)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "todo", "999_does_not_exist"])
 
@@ -1157,7 +1181,6 @@ def test_rotate_best_effort_downgrades_error_to_warning(
         MagicMock(return_value=[CheckResult(check_name="x", status="pass", message="ok")]),
     )
     monkeypatch.setattr(wc, "transition_plan", lambda _p, ts, *_a, **_kw: _plan("builder", ts))
-    monkeypatch.setattr(wc, "git_commit", MagicMock())
     monkeypatch.setattr(wc, "git_commit_if_changed", MagicMock(return_value=CommitResult.COMMITTED))
     monkeypatch.setattr(wc, "git_push", MagicMock())
     monkeypatch.setattr(wc, "git_fetch", MagicMock())

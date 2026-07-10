@@ -117,7 +117,6 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(wc, "_run_pre_commit_in_sandbox", MagicMock())
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
 
-    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
     monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
 
     # Step 2: workflow init (also wires origin remote and push config in all repos)
@@ -248,7 +247,6 @@ def test_init_rerun_without_continue_aborts_and_prints_preview(
     _init_canon_repo(tmp_path)
     config_path = _make_integration_config(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
     monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
 
     first = CliRunner().invoke(main, ["--config", str(config_path), "init"])
@@ -273,7 +271,6 @@ def test_init_rerun_with_continue_succeeds(tmp_path: Path, monkeypatch: pytest.M
     _init_canon_repo(tmp_path)
     config_path = _make_integration_config(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
     monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
 
     first = CliRunner().invoke(main, ["--config", str(config_path), "init"])
@@ -299,7 +296,6 @@ def test_init_rerun_with_continue_does_not_redo_satisfied_steps(
     _init_canon_repo(tmp_path)
     config_path = _make_integration_config(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
     monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
 
     first = CliRunner().invoke(main, ["--config", str(config_path), "init"])
@@ -315,7 +311,10 @@ def test_init_rerun_with_continue_does_not_redo_satisfied_steps(
     real_run_command = wc.run_command
 
     def _spy_run_command(
-        cmd: list[str], *, dry_run: bool = False, **kwargs: Any,
+        cmd: list[str],
+        *,
+        dry_run: bool = False,
+        **kwargs: Any,
     ) -> subprocess.CompletedProcess[bytes] | None:
         run_command_calls.append(cmd)
         return real_run_command(cmd, dry_run=dry_run, **kwargs)
@@ -338,7 +337,6 @@ def test_init_dry_run_previews_resume_without_mutating(tmp_path: Path, monkeypat
     _init_canon_repo(tmp_path)
     config_path = _make_integration_config(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
     monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
 
     first = CliRunner().invoke(main, ["--config", str(config_path), "init"])
@@ -382,7 +380,6 @@ def _drive_pipeline_through_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(wc, "run_validate", MagicMock(return_value=passing))
     monkeypatch.setattr(wc, "_run_pre_commit_in_sandbox", MagicMock())
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
-    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
     monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
@@ -413,6 +410,57 @@ def _drive_pipeline_through_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005_foo"])
     assert result.exit_code == 0, result.output
+
+
+def _drive_pipeline_through_todo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run init -> planner edit -> todo, for real."""
+    _init_canon_repo(tmp_path)
+    config_path = _make_integration_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    passing = [CheckResult(check_name="ok", status="pass", message="ok")]
+    monkeypatch.setattr(wc, "run_validate", MagicMock(return_value=passing))
+    monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+    assert result.exit_code == 0, result.output
+
+    for repo_name in ("planner", "builder", "reviewer"):
+        repo = tmp_path / repo_name
+        _git(["config", "user.email", "test@example.com"], cwd=repo)
+        _git(["config", "user.name", "Test"], cwd=repo)
+
+    planner = tmp_path / "planner"
+    _git(["checkout", "-b", "plan/005_foo"], cwd=planner)
+    plan_dir = planner / "docs" / "plans" / "planning"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "005_foo.md").write_text("# 005: Foo\n\n## Goal\nDo stuff.\n", encoding="utf-8")
+    _git(["add", "."], cwd=planner)
+    _git(["commit", "-m", "add planning plan"], cwd=planner)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "todo", "005_foo"])
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_todo_rerun_after_full_success_is_a_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-running `todo` after it already fully succeeded must be idempotent."""
+    _drive_pipeline_through_todo(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.yaml"
+    assert (tmp_path / "canon" / "docs" / "plans" / "todo" / "005_foo.md").exists()
+
+    canon_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout
+    planner_branch_before = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path / "planner").stdout
+
+    # See the qualified-path comment in test_check_rerun_after_full_success_is_a_noop.
+    result = CliRunner().invoke(
+        main,
+        ["--config", str(config_path), "todo", "canon/docs/plans/todo/005_foo.md"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout == canon_head_before
+    assert _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path / "planner").stdout == planner_branch_before
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
@@ -464,6 +512,40 @@ def test_accept_rerun_after_full_success_is_a_noop(tmp_path: Path, monkeypatch: 
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_reject_resumes_after_mv_without_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A resumed `reject` (file already `git mv`-ed but not committed) must complete."""
+    _drive_pipeline_through_check(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.yaml"
+    reviewer = tmp_path / "reviewer"
+
+    # Simulate a prior reject run interrupted right after `git mv`, before the commit.
+    rejected_dir = reviewer / "docs" / "plans" / "rejected"
+    rejected_dir.mkdir(parents=True)
+    _git(["mv", "docs/plans/checking/005_foo.md", "docs/plans/rejected/005_foo.md"], cwd=reviewer)
+    assert not (reviewer / "docs" / "plans" / "checking" / "005_foo.md").exists()
+    assert (rejected_dir / "005_foo.md").exists()
+
+    # Fully-qualified path (see the qualified-path comment on test_check_rerun_after_full_
+    # success_is_a_noop): resolves straight to REJECTED from the file's current directory,
+    # exercising the no-early-exit-shortcut path in `reject`.
+    result = CliRunner().invoke(
+        main,
+        [
+            "--config",
+            str(config_path),
+            "reject",
+            "--target-repo",
+            "reviewer",
+            "reviewer/docs/plans/rejected/005_foo.md",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (rejected_dir / "005_foo.md").exists()
+    assert not _git(["status", "--porcelain"], cwd=reviewer).stdout.strip()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_implement_rerun_after_full_success_leaves_builder_on_feature_branch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -472,7 +554,6 @@ def test_implement_rerun_after_full_success_leaves_builder_on_feature_branch(
     _init_canon_repo(tmp_path)
     config_path = _make_integration_config(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
     monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
 
@@ -522,7 +603,6 @@ def test_implement_needs_continue_for_leftover_branch(tmp_path: Path, monkeypatc
     _init_canon_repo(tmp_path)
     config_path = _make_integration_config(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(wc, "git_commit", _git_commit_without_noverify)
     monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
 
