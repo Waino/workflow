@@ -440,11 +440,41 @@ def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkey
     assert result.exit_code == 0, result.output
     first_call_args = fake_run_command.call_args_list[0].args[0]
     assert first_call_args[:2] == ["docker", "exec"]
-    assert first_call_args[2].endswith("-builder")
+    assert first_call_args[6].endswith("-builder")
     assert "Next step" in result.output
     assert "review" in result.output
     # The reviewer window is rotated into view after the handoff.
     assert fake_rotate.call_args.args[1] == "reviewer"
+
+
+def test_check_resume_skips_precommit_and_validate_when_already_checking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resumed `check` (plan already transitioned) must not re-run pre-commit/validate."""
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "builder", "checking", "005_foo.md")
+    monkeypatch.chdir(tmp_path)
+    fake_precommit = MagicMock()
+    fake_validate = MagicMock()
+    monkeypatch.setattr(wc, "_run_pre_commit_in_sandbox", fake_precommit)
+    monkeypatch.setattr(wc, "run_validate", fake_validate)
+    monkeypatch.setattr(wc, "transition_plan", MagicMock())
+    monkeypatch.setattr(wc, "git_commit_if_changed", MagicMock(return_value=CommitResult.COMMITTED))
+    monkeypatch.setattr(wc, "git_push", MagicMock())
+    monkeypatch.setattr(wc, "git_fetch", MagicMock())
+    monkeypatch.setattr(wc, "git_index_lock_present", MagicMock(return_value=False))
+    monkeypatch.setattr(wc, "rotate_control_pane", MagicMock())
+    monkeypatch.setattr(wc.time, "sleep", MagicMock())
+    monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="main"))
+    monkeypatch.setattr(wc, "git_checkout", MagicMock())
+    monkeypatch.setattr(wc, "git_pull", MagicMock())
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005"])
+
+    assert result.exit_code == 0, result.output
+    fake_precommit.assert_not_called()
+    fake_validate.assert_not_called()
 
 
 def test_push_pushes_resolved_repo_without_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

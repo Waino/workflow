@@ -29,6 +29,12 @@ if TYPE_CHECKING:
 
 _ACTIVE_FEATURE_BRANCH_STATES = (PlanState.IMPLEMENTING, PlanState.CHECKING)
 
+# Plan states that occupy a single pipeline slot per (sequence, slug); a plan
+# legitimately co-exists with its originating INTENT file and/or REVIEW documents,
+# so those are excluded rather than enumerated positively (avoids drift if a new
+# pipeline state is added to PlanState).
+_PIPELINE_STATES = frozenset(PlanState) - {PlanState.INTENT, PlanState.REVIEW}
+
 
 @dataclass
 class RepoCheck:
@@ -115,6 +121,8 @@ def _duplicate_plan_anomalies(project_dir: Path) -> list[str]:
             continue
         by_key: dict[str, list[str]] = {}
         for plan in plans:
+            if plan.state not in _PIPELINE_STATES:
+                continue
             key = f"{plan.sequence_number_str}:{plan.slug}"
             by_key.setdefault(key, []).append(plan.state.value)
         for key, states in by_key.items():

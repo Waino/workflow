@@ -39,7 +39,7 @@ class _AgentsMdUpdate:
     hash_unchanged: bool  # True when on-disk hash already matches new_hash
 
 
-def _prepare_agents_md_update(
+def prepare_agents_md_update(
     config: WorkflowConfig,
     agents_md_path: Path | None = None,
 ) -> _AgentsMdUpdate:
@@ -108,7 +108,7 @@ def generate_and_write_agents_md(
     Performs no git operations. The caller is responsible for any staging,
     committing, or pushing.
     """
-    update = _prepare_agents_md_update(config, agents_md_path)
+    update = prepare_agents_md_update(config, agents_md_path)
     # Write atomically. AGENTS.md is committed to git, so use 0o644;
     # the hash file is a local trust anchor that does not need to be world-readable.
     _atomic_write(update.resolved_path, update.new_text.encode("utf-8"), mode=0o644)
@@ -148,7 +148,7 @@ def agents_md(ctx: click.Context, check: bool) -> None:  # noqa: FBT001
         return
 
     try:
-        update = _prepare_agents_md_update(config)
+        update = prepare_agents_md_update(config)
 
         if update.agents_md_unchanged and update.hash_unchanged:
             click.echo("AGENTS.md is up to date.")

@@ -139,6 +139,17 @@ def test_duplicate_plan_anomalies_clean_when_one_copy_per_repo(tmp_path: Path) -
     assert _duplicate_plan_anomalies(tmp_path) == []
 
 
+def test_duplicate_plan_anomalies_ignores_intent_and_review_siblings(tmp_path: Path) -> None:
+    canon = _init_repo(tmp_path / "canon")
+    _make_plan(canon, "todo", "005_foo.md")
+    _make_plan(canon, "intent", "005_foo.md")
+    review_dir = canon / "docs" / "plans" / "reviews" / "pr"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    (review_dir / "005_foo_abcd.md").write_text("# review\n", encoding="utf-8")
+
+    assert _duplicate_plan_anomalies(tmp_path) == []
+
+
 def _make_doctor_config(tmp_path: Path) -> Path:
     src = Path(__file__).parent.parent / "docs" / "default_config.yaml"
     dest = tmp_path / "config.yaml"

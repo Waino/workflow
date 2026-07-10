@@ -15,7 +15,7 @@ import click
 import jinja2
 
 from workflow.audit import write_audit_log
-from workflow.commands.agents_md import _prepare_agents_md_update, generate_and_write_agents_md
+from workflow.commands.agents_md import generate_and_write_agents_md, prepare_agents_md_update
 from workflow.config import WORKFLOW_ROOT_MARKER, AgentConfig, WorkflowConfig
 from workflow.config import ScriptCommand as _ScriptCommand
 from workflow.exceptions import (
@@ -140,7 +140,8 @@ def _run_pre_commit_in_sandbox(config: WorkflowConfig, repo_name: str, *, dry_ru
     repo_path = shlex.quote(f"/home/auggie/projects/{project_name}/{repo_name}")
     run_command(
         [
-            "docker", "exec",
+            "docker",
+            "exec",
             "--user",
             "auggie",
             "--workdir",
@@ -148,7 +149,7 @@ def _run_pre_commit_in_sandbox(config: WorkflowConfig, repo_name: str, *, dry_ru
             container_name,
             "bash",
             "-lc",
-            "./.git-pre-commit-hook"
+            "./.git-pre-commit-hook",
         ],
         dry_run=dry_run,
     )
@@ -229,7 +230,7 @@ def _wire_canon_to_bare(canon_repo: Path, bare_path: Path, *, dry_run: bool) -> 
 
 
 def _classify_agents_md_step(resume: ResumePlan, config: WorkflowConfig, project_dir: Path) -> None:
-    update = _prepare_agents_md_update(config.model_copy(update={"project_dir": project_dir}))
+    update = prepare_agents_md_update(config.model_copy(update={"project_dir": project_dir}))
     if update.agents_md_unchanged:
         resume.satisfied("AGENTS.md committed", "already up to date")
     else:
@@ -622,6 +623,10 @@ def _transition_if_needed(  # noqa: PLR0913
     Always (re)commits via :func:`git_commit_if_changed`, which safely no-ops when
     there is nothing staged. This also finishes a prior run that moved the file but
     was interrupted before committing.
+
+    Assumes the ``git mv`` (when it runs) is staged before this is called:
+    :func:`~workflow.git_helpers.git_commit_if_changed` does not ``git add -u``, so an
+    unstaged rename would silently no-op the commit.
     """
     repo_name = repo_override or plan.path.parts[0]
     target_rel = Path(repo_name) / "docs" / "plans" / target_state.value / plan.path.name
@@ -908,13 +913,18 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force: 
             branch = git_current_branch(target_repo_path)
             require(branch.startswith("feat/"), f"{target_repo} must be on a feat/* branch, currently on {branch!r}.")
 
-        _run_pre_commit_in_sandbox(config, target_repo, dry_run=dry_run)
-        results = run_validate(plan, project_dir, config, target_repo_override=target_repo, dry_run=dry_run)
-        if not dry_run:
-            _print_results(results)
-            if not force and any(result.status == "fail" for result in results):
-                ctx.exit(1)
-                return
+        # On a resume where a prior run already transitioned the plan to checking, these
+        # checks either already passed or are moot (builder may already be on main); skip
+        # them unconditionally rather than re-running pre-commit/validate against 'main'.
+        # An operator who wants to re-run validation post-transition can use `workflow validate`.
+        if plan.state == PlanState.IMPLEMENTING:
+            _run_pre_commit_in_sandbox(config, target_repo, dry_run=dry_run)
+            results = run_validate(plan, project_dir, config, target_repo_override=target_repo, dry_run=dry_run)
+            if not dry_run:
+                _print_results(results)
+                if not force and any(result.status == "fail" for result in results):
+                    ctx.exit(1)
+                    return
 
         resume = ResumePlan(title="check")
         _classify_check_steps(resume, plan, project_dir, target_repo)
