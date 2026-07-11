@@ -179,10 +179,11 @@ case "$SUBCOMMAND" in
             # NOTE: --env-file intentionally omitted; venv creation needs no secrets.
             exec docker run --rm --user auggie \
                 -v "${PROJECT_DIR}/canon:${REPO_PATH}" --workdir "$REPO_PATH" \
+                --env PROJECT="$PROJECT" --env AGENT="$REPO" \
                 --env UV_VENV_CLEAR=1 --env UV_LINK_MODE=copy \
                 gronsti-pi bash -c "$VENV_CMD"
         else
-            exec docker exec -it --user auggie --workdir "$REPO_PATH" \
+            exec docker exec --user auggie --workdir "$REPO_PATH" \
                 --env UV_VENV_CLEAR=1 --env UV_LINK_MODE=copy "$CONTAINER" bash -c "$VENV_CMD"
         fi
         ;;
@@ -191,12 +192,12 @@ case "$SUBCOMMAND" in
         # NOTE: --env-file intentionally omitted; the hook needs no secrets.
         exec docker run --rm --user auggie \
             -v "${PROJECT_DIR}/${REPO}:${REPO_PATH}" --workdir "$REPO_PATH" \
+            --env PROJECT="$PROJECT" --env AGENT="$REPO" \
             gronsti-pi bash -lc "./.git-pre-commit-hook"
         ;;
     agent)
         EXEC_CMD=(docker exec -it --user auggie --workdir "$REPO_PATH" "$CONTAINER" \
-            bash -c "source ~/.bashrc && pi")
-        [[ -n "$MODEL" ]] && EXEC_CMD+=(--model "$MODEL")
+            bash -lc "pi${MODEL:+ --model $MODEL}")
         exec "${EXEC_CMD[@]}"
         ;;
 esac
