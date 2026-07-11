@@ -150,11 +150,13 @@ if [[ "$THROWAWAY" != true ]]; then
                     --env-file "$ENV_LIST" \
                     --env PROJECT="$PROJECT" \
                     --env AGENT="$REPO" \
+                    -v "/home/auggie/pi_agents/${AGENT}:/home/auggie/.pi" \
+                    -v /home/auggie/dot_cache:/home/auggie/.cache \
+                    -v /home/auggie/dot_local/share/uv/python:/home/auggie/.local/share/uv/python \
                     -v "${PROJECT_DIR}/${REPO}:${REPO_PATH}" \
                     --workdir "/home/auggie/projects/${PROJECT}" \
                     --detach \
-                    gronsti-pi \
-                    sleep infinity
+                    gronsti-pi
             fi
             ;;
         *)
@@ -173,7 +175,8 @@ case "$SUBCOMMAND" in
         ;;
     venv)
         [[ -d "${PROJECT_DIR}/${REPO}/.venv" ]] && rm -rf "${PROJECT_DIR}/${REPO}/.venv"
-        VENV_CMD="source ~/.bashrc && uv venv --seed && source .venv/bin/activate && uv pip install -e ."
+        VENV_CMD="source ~/.bashrc && uv venv --seed && source .venv/bin/activate && uv sync --group dev"
+        # VENV_CMD="source ~/.bashrc && uv venv --seed && source .venv/bin/activate && uv pip install -e ."
         if [[ "$REPO" == canon ]]; then
             # Throwaway container: canon has no persistent sandbox.
             # NOTE: --env-file intentionally omitted; venv creation needs no secrets.
