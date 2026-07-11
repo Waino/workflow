@@ -129,28 +129,11 @@ def _open_in_editor(path: Path) -> None:
     subprocess.run([editor, str(path)], check=True)  # noqa: S603
 
 
-def _run_pre_commit_in_sandbox(config: WorkflowConfig, repo_name: str, *, dry_run: bool) -> None:
-    if repo_name == RepoName.canon:
-        msg = "Target repo 'canon' has no sandbox container."
-        raise WorkflowError(msg)
-    project_name = config.project_name or _require_project_dir(config).name
-    container_name = f"pi-{project_name}-{repo_name}"
-    repo_path = shlex.quote(f"/home/auggie/projects/{project_name}/{repo_name}")
-    run_command(
-        [
-            "docker",
-            "exec",
-            "--user",
-            "auggie",
-            "--workdir",
-            repo_path,
-            container_name,
-            "bash",
-            "-lc",
-            "./.git-pre-commit-hook",
-        ],
-        dry_run=dry_run,
-    )
+def _run_pre_commit_hook(config: WorkflowConfig, repo_name: str, *, dry_run: bool) -> None:
+    project_dir = _require_project_dir(config)
+    project_name = config.project_name or project_dir.name
+    script = _find_docker_script(project_dir)
+    run_command(_hook_command(script, project_name, project_dir, repo_name), dry_run=dry_run)
 
 
 def _transition_commit_message(plan: Plan, target_state: PlanState) -> str:
@@ -300,9 +283,10 @@ def _classify_marker_step(resume: ResumePlan, project_dir: Path) -> None:
 
 
 def _classify_venv_steps(resume: ResumePlan, config: WorkflowConfig, project_dir: Path) -> None:
-    for agent in config.agents:
-        venv_dir = project_dir / agent.name / ".venv"
-        step = f"venv {agent.name}"
+    repo_names = [agent.name for agent in config.agents] + [RepoName.canon]
+    for repo_name in repo_names:
+        venv_dir = project_dir / repo_name / ".venv"
+        step = f"venv {repo_name}"
         if venv_dir.is_dir():
             resume.needs_continue(step, "exists; pass --continue to recreate (destructive)")
         else:
@@ -389,10 +373,15 @@ def _run_init_steps(  # noqa: PLR0913
     project_name = config.project_name or project_dir.name
     for agent in config.agents:
         run_command(
-            _create_venv_command(script, project_name, project_dir, agent),
+            _create_venv_command(script, project_name, project_dir, agent.name),
             cwd=project_dir,
             dry_run=dry_run,
         )
+    run_command(
+        _create_venv_command(script, project_name, project_dir, RepoName.canon),
+        cwd=project_dir,
+        dry_run=dry_run,
+    )
 
 
 @register_script("init")
@@ -442,7 +431,7 @@ def _agent_docker_command(
     reset: bool,
 ) -> str:
     """Build the tmux window command string for an agent."""
-    parts = [script, project_name, agent.name, "--project-dir", str(project_dir)]
+    parts = [script, "agent", project_name, agent.name, "--project-dir", str(project_dir)]
     if agent.model:
         parts.extend(["--model", agent.model])
     if reset:
@@ -452,12 +441,17 @@ def _agent_docker_command(
 
 def _builder_shell_command(script: str, project_name: str, project_dir: Path) -> str:
     """Build the tmux window command string for the builder-shell window."""
-    return shlex.join([script, project_name, "builder", "--project-dir", str(project_dir), "--shell"])
+    return shlex.join([script, "shell", project_name, "builder", "--project-dir", str(project_dir)])
 
 
-def _create_venv_command(script: str, project_name: str, project_dir: Path, agent: AgentConfig) -> list[str]:
-    """Build the command string for creating the agent-specific virtual env."""
-    return [script, project_name, agent.name, "--project-dir", str(project_dir), "--venv", "--reset"]
+def _create_venv_command(script: str, project_name: str, project_dir: Path, repo_name: str) -> list[str]:
+    """Build the command for creating the repo's virtual env (agent name or 'canon')."""
+    return [script, "venv", project_name, repo_name, "--project-dir", str(project_dir), "--reset"]
+
+
+def _hook_command(script: str, project_name: str, project_dir: Path, repo_name: str) -> list[str]:
+    """Build the command for running the pre-commit hook in a throwaway container."""
+    return [script, "hook", project_name, repo_name, "--project-dir", str(project_dir)]
 
 
 def _build_start_windows(
@@ -977,7 +971,7 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force: 
         # them unconditionally rather than re-running pre-commit/validate against 'main'.
         # An operator who wants to re-run validation post-transition can use `workflow validate`.
         if plan.state == PlanState.IMPLEMENTING:
-            _run_pre_commit_in_sandbox(config, target_repo, dry_run=dry_run)
+            _run_pre_commit_hook(config, target_repo, dry_run=dry_run)
             results = run_validate(plan, project_dir, config, target_repo_override=target_repo, dry_run=dry_run)
             if not dry_run:
                 _print_results(results)
@@ -1207,6 +1201,22 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
         PlanCollisionError,
         WorkflowError,
     ) as exc:
+        print_workflow_error(exc)
+        ctx.exit(1)
+        return
+    ctx.exit(0)
+
+
+@register_script("canon_pre_commit")
+@click.pass_context
+def canon_pre_commit(ctx: click.Context) -> None:
+    """Run the pre-commit hook against canon in a throwaway container."""
+    config: WorkflowConfig = ctx.obj["config"]
+    dry_run: bool = ctx.obj["dry_run"]
+    try:
+        _run_pre_commit_hook(config, RepoName.canon, dry_run=dry_run)
+        _write_script_audit_log(config, "canon_pre_commit", dry_run=dry_run)
+    except (subprocess.CalledProcessError, WorkflowError) as exc:
         print_workflow_error(exc)
         ctx.exit(1)
         return

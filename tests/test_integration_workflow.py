@@ -114,7 +114,7 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
     # Patch out expensive / unavailable side-effects
     passing = [CheckResult(check_name="ok", status="pass", message="ok")]
     monkeypatch.setattr(wc, "run_validate", MagicMock(return_value=passing))
-    monkeypatch.setattr(wc, "_run_pre_commit_in_sandbox", MagicMock())
+    monkeypatch.setattr(wc, "_run_pre_commit_hook", MagicMock())
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
 
     monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
@@ -378,7 +378,7 @@ def _drive_pipeline_through_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     passing = [CheckResult(check_name="ok", status="pass", message="ok")]
     monkeypatch.setattr(wc, "run_validate", MagicMock(return_value=passing))
-    monkeypatch.setattr(wc, "_run_pre_commit_in_sandbox", MagicMock())
+    monkeypatch.setattr(wc, "_run_pre_commit_hook", MagicMock())
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
     monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
 

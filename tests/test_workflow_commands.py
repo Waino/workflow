@@ -102,29 +102,38 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
         ["git", "push", "-u", "origin", "HEAD"],
         [
             "run_agent_in_docker.sh",
+            "venv",
             "test_init_runs_clone_commands_0",
             "planner",
             "--project-dir",
             str(project_dir),
-            "--venv",
             "--reset",
         ],
         [
             "run_agent_in_docker.sh",
+            "venv",
             "test_init_runs_clone_commands_0",
             "builder",
             "--project-dir",
             str(project_dir),
-            "--venv",
             "--reset",
         ],
         [
             "run_agent_in_docker.sh",
+            "venv",
             "test_init_runs_clone_commands_0",
             "reviewer",
             "--project-dir",
             str(project_dir),
-            "--venv",
+            "--reset",
+        ],
+        [
+            "run_agent_in_docker.sh",
+            "venv",
+            "test_init_runs_clone_commands_0",
+            "canon",
+            "--project-dir",
+            str(project_dir),
             "--reset",
         ],
     ]
@@ -201,10 +210,10 @@ def test_start_runs_tmux_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     project = tmp_path.name
     project_dir = str(tmp_path.resolve())
     cmds = dict(windows)
-    assert cmds["planner"] == f"{script} {project} planner --project-dir {project_dir}"
-    assert cmds["builder"] == f"{script} {project} builder --project-dir {project_dir}"
-    assert cmds["reviewer"] == f"{script} {project} reviewer --project-dir {project_dir}"
-    assert cmds["builder-shell"] == f"{script} {project} builder --project-dir {project_dir} --shell"
+    assert cmds["planner"] == f"{script} agent {project} planner --project-dir {project_dir}"
+    assert cmds["builder"] == f"{script} agent {project} builder --project-dir {project_dir}"
+    assert cmds["reviewer"] == f"{script} agent {project} reviewer --project-dir {project_dir}"
+    assert cmds["builder-shell"] == f"{script} shell {project} builder --project-dir {project_dir}"
 
 
 def test_start_reset_flag_threads_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -443,8 +452,7 @@ def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkey
 
     assert result.exit_code == 0, result.output
     first_call_args = fake_run_command.call_args_list[0].args[0]
-    assert first_call_args[:2] == ["docker", "exec"]
-    assert first_call_args[6].endswith("-builder")
+    assert first_call_args[:4] == ["run_agent_in_docker.sh", "hook", tmp_path.name, "builder"]
     assert "Next step" in result.output
     assert "review" in result.output
     # The reviewer window is rotated into view after the handoff.
@@ -461,7 +469,7 @@ def test_check_resume_skips_precommit_and_validate_when_already_checking(
     monkeypatch.chdir(tmp_path)
     fake_precommit = MagicMock()
     fake_validate = MagicMock()
-    monkeypatch.setattr(wc, "_run_pre_commit_in_sandbox", fake_precommit)
+    monkeypatch.setattr(wc, "_run_pre_commit_hook", fake_precommit)
     monkeypatch.setattr(wc, "run_validate", fake_validate)
     monkeypatch.setattr(wc, "transition_plan", MagicMock())
     monkeypatch.setattr(wc, "git_commit_if_changed", MagicMock(return_value=CommitResult.COMMITTED))
@@ -479,6 +487,28 @@ def test_check_resume_skips_precommit_and_validate_when_already_checking(
     assert result.exit_code == 0, result.output
     fake_precommit.assert_not_called()
     fake_validate.assert_not_called()
+
+
+def test_canon_pre_commit_runs_hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    fake_run_command = MagicMock()
+    monkeypatch.setattr(wc, "run_command", fake_run_command)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "canon_pre_commit"])
+
+    assert result.exit_code == 0, result.output
+    fake_run_command.assert_called_once_with(
+        [
+            "run_agent_in_docker.sh",
+            "hook",
+            tmp_path.name,
+            "canon",
+            "--project-dir",
+            str(tmp_path.resolve()),
+        ],
+        dry_run=False,
+    )
 
 
 def test_push_pushes_resolved_repo_without_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
