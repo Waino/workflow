@@ -261,7 +261,10 @@ def git_commit_if_changed(
     except subprocess.CalledProcessError as exc:
         output = (exc.stdout or b"") + (exc.stderr or b"")
         # Git phrases the no-op differently when untracked (but unstaged) files are present.
-        if b"nothing to commit" in output or b"nothing added to commit" in output:
+        if any(
+            pattern in output
+            for pattern in (b"nothing to commit", b"nothing added to commit", b"no changes added to commit")
+        ):
             return CommitResult.NOTHING_TO_COMMIT
         raise
     return CommitResult.COMMITTED

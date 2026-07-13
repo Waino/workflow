@@ -144,7 +144,7 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
     planner = tmp_path / "planner"
     _git(["checkout", "-b", "plan/005_foo"], cwd=planner)
     plan_dir = planner / "docs" / "plans" / "planning"
-    plan_dir.mkdir(parents=True)
+    plan_dir.mkdir(parents=True, exist_ok=True)
     (plan_dir / "005_foo.md").write_text("# 005: Foo\n\n## Goal\nDo stuff.\n", encoding="utf-8")
     _git(["add", "."], cwd=planner)
     _git(["commit", "-m", "add planning plan"], cwd=planner)
@@ -393,7 +393,7 @@ def _drive_pipeline_through_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     planner = tmp_path / "planner"
     _git(["checkout", "-b", "plan/005_foo"], cwd=planner)
     plan_dir = planner / "docs" / "plans" / "planning"
-    plan_dir.mkdir(parents=True)
+    plan_dir.mkdir(parents=True, exist_ok=True)
     (plan_dir / "005_foo.md").write_text("# 005: Foo\n\n## Goal\nDo stuff.\n", encoding="utf-8")
     _git(["add", "."], cwd=planner)
     _git(["commit", "-m", "add planning plan"], cwd=planner)
@@ -433,7 +433,7 @@ def _drive_pipeline_through_todo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     planner = tmp_path / "planner"
     _git(["checkout", "-b", "plan/005_foo"], cwd=planner)
     plan_dir = planner / "docs" / "plans" / "planning"
-    plan_dir.mkdir(parents=True)
+    plan_dir.mkdir(parents=True, exist_ok=True)
     (plan_dir / "005_foo.md").write_text("# 005: Foo\n\n## Goal\nDo stuff.\n", encoding="utf-8")
     _git(["add", "."], cwd=planner)
     _git(["commit", "-m", "add planning plan"], cwd=planner)
@@ -520,7 +520,7 @@ def test_reject_resumes_after_mv_without_commit(tmp_path: Path, monkeypatch: pyt
 
     # Simulate a prior reject run interrupted right after `git mv`, before the commit.
     rejected_dir = reviewer / "docs" / "plans" / "rejected"
-    rejected_dir.mkdir(parents=True)
+    rejected_dir.mkdir(parents=True, exist_ok=True)
     _git(["mv", "docs/plans/checking/005_foo.md", "docs/plans/rejected/005_foo.md"], cwd=reviewer)
     assert not (reviewer / "docs" / "plans" / "checking" / "005_foo.md").exists()
     assert (rejected_dir / "005_foo.md").exists()

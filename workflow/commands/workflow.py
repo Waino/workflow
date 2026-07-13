@@ -326,6 +326,16 @@ def _check_init_preconditions(canon_repo: Path, bare_path: Path) -> None:
         )
 
 
+def _create_and_commit_gitkeep_files(canon_repo: Path, *, dry_run: bool) -> None:
+    for state in PlanState:
+        state_path = canon_repo / "docs" / "plans" / state.value
+        state_path.mkdir(parents=True, exist_ok=True)
+        gitkeep = state_path / ".gitkeep"
+        gitkeep.touch()
+        git_add(canon_repo, gitkeep, dry_run=dry_run)
+    git_commit_if_changed(canon_repo, "chore: .gitkeep files for state dirs", dry_run=dry_run, no_verify=True)
+
+
 def _run_init_steps(  # noqa: PLR0913
     resume: ResumePlan,
     config: WorkflowConfig,
@@ -346,6 +356,8 @@ def _run_init_steps(  # noqa: PLR0913
             git_commit_if_changed(canon_repo, "chore: generate initial AGENTS.md", dry_run=False, no_verify=True)
         except AgentsMdGenerationError as exc:
             raise WorkflowError(str(exc)) from exc
+
+    _create_and_commit_gitkeep_files(canon_repo=canon_repo, dry_run=dry_run)
 
     if resume.should_run(_STEP_BARE_CLONE):
         run_command(["git", "clone", "--bare", RepoName.canon, "bare"], cwd=project_dir, dry_run=dry_run)
