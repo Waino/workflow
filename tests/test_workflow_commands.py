@@ -38,6 +38,7 @@ def _make_project(tmp_path: Path, *, marker: bool = True) -> Path:
     for repo in ("canon", "planner", "builder", "reviewer"):
         (tmp_path / repo).mkdir(exist_ok=True)
     (tmp_path / "canon" / ".git-pre-commit-hook").touch()
+    (tmp_path / "env.list").touch()
     return tmp_path / "config.yaml"
 
 

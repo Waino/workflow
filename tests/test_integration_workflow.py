@@ -95,6 +95,7 @@ def _make_integration_config(tmp_path: Path) -> Path:
     dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
     (tmp_path / WORKFLOW_ROOT_MARKER).touch()
     (tmp_path / "canon" / ".git-pre-commit-hook").touch()
+    (tmp_path / "env.list").touch()
     return dest
 
 

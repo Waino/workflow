@@ -192,6 +192,10 @@ def _ensure_agent_push_config(repo_path: Path, *, dry_run: bool) -> None:
     requiring a pre-existing upstream. Each setting is only (re)applied when not
     already correct, so this is safe to call on every ``init`` run.
     """
+    if dry_run and not repo_path.exists():
+        error_console.print(f"[yellow]_ensure_agent_push_config: repo {repo_path} does not exist (yet)[/yellow]")
+        return
+
     if git_config_get(repo_path, "push.autoSetupRemote") != "true":
         run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=repo_path, dry_run=dry_run)
     if git_config_get(repo_path, "push.default") != "current":
@@ -310,13 +314,17 @@ def _classify_init_steps(
     _classify_venv_steps(resume, config, project_dir)
 
 
-def _check_init_preconditions(canon_repo: Path, bare_path: Path) -> None:
+def _check_init_preconditions(project_dir: Path, bare_path: Path) -> None:
     """Fail fast on cheaply-detectable causes of a broken ``init`` run."""
+    canon_repo = project_dir / "canon"
     if not (canon_repo / ".git").is_dir():
         msg = f"{canon_repo} is not a git repository (no .git/ found)."
         raise WorkflowError(msg)
     if not (canon_repo / ".git-pre-commit-hook").is_file():
         msg = f"{canon_repo / '.git-pre-commit-hook'} must exist."
+        raise WorkflowError(msg)
+    if not (project_dir / "env.list").is_file():
+        msg = f"{project_dir / 'env.list'} must exist."
         raise WorkflowError(msg)
     require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
     if bare_path.exists():
@@ -408,7 +416,7 @@ def init(ctx: click.Context, *, cont: bool) -> None:
     bare_path = project_dir / "bare"
 
     try:
-        _check_init_preconditions(canon_repo, bare_path)
+        _check_init_preconditions(project_dir, bare_path)
 
         resume = ResumePlan(title="init")
         _classify_init_steps(resume, config, project_dir, canon_repo, bare_path)

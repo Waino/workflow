@@ -128,6 +128,7 @@ states:
         prompt: |
           Read the plan at {{ plan.path }}.
           Ask any questions until you have a clear understanding.
+          Do not write code yet.
       - command_type: manual
         name: answer
         description: Human answers questions in chat.
