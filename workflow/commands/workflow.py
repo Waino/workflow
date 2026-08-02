@@ -1243,8 +1243,16 @@ def canon_pre_commit(ctx: click.Context) -> None:
     ctx.exit(0)
 
 
+def complete_standard_agents(ctx: click.Context, param: str, incomplete: str) -> list[str]:
+    """Shell completion for the go target param."""
+    del ctx
+    del param
+    valid = {agent.name for agent in AgentName} | {"manual"}
+    return [k for k in valid if k.startswith(incomplete)]
+
+
 @register_script("go")
-@click.argument("target")
+@click.argument("target", shell_complete=complete_standard_agents)
 @click.pass_context
 def go(ctx: click.Context, target: str) -> None:
     """Rotate the control pane to a window and print the target repo's git status."""
