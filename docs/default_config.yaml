@@ -29,6 +29,38 @@ states:
         pull_target: planner
         reminder: ask
       - command_type: prompt
+        name: architecture
+        description: Read the idea; discuss critical architectural choices.
+        prompt: |
+          We are starting a new project from a cookiecutter template.
+          Before we start planning the implementation sequence,
+          let's discuss the overall architecture, pinning down any critical architectural choices.
+
+          Start by reading the project idea at `docs/plans/intent/001_idea.md`.
+          Ask any questions until you have a clear understanding.
+          Propose alternative approaches for any open questions, listing pros and cons.
+          Point out gaps, additional architectural decisions that should be made a this point.
+
+          Let's avoid descending too low into implementation details:
+          we don't need the specs to be complete at this point, instead focusing on the high-impact decisions.
+
+          Once ambiguities have been cleared up and decisions have been made,
+          write the fleshed out architecture document into `docs/plans/planning/002_architecture.md`.
+      - command_type: prompt
+        name: mvp
+        description: Create a plan sequence for the MVP slice
+        prompt: |
+          Read the plans at `docs/plans/intent/001_idea.md` and `docs/plans/planning/002_architecture.md`.
+          Begin by asking any questions, until you have a clear understanding.
+
+          We'll create plans for the MVP slice.
+          Begin by determining which features to include in the MVP; ask if unclear.
+          Then break the work down into several detailed implementation plans.
+          Write each plan into `docs/plans/planning/`.
+          Use running numbers starting from 3, e.g. `docs/plans/planning/003_foo.md` and docs/plans/planning/004_bar.md`
+
+          Commit your changes.
+      - command_type: prompt
         name: ask
         description: Read the plan; ask clarifying questions.
         prompt: |
@@ -66,12 +98,8 @@ states:
           Read the plan at {{ plan.path }}.
           Break it down into several detailed implementation plans.
           Write each plan into `docs/plans/planning/`.
-          {% if plan.sequence_number[0] == 1 -%}
-          Use running numbers, e.g. `docs/plans/planning/002_foo.md` and docs/plans/planning/003_bar.md`
-          {% else %}
           Use running numbers in a hierarchy below the input plan,
           e.g. `docs/plans/planning/{{ plan.sequence_number_str }}.1_foo.md` and `docs/plans/planning/{{ plan.sequence_number_str }}.2_bar.md`
-          {%- endif %}
           Commit your changes.
         transition: planning
 
