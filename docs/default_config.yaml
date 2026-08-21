@@ -41,7 +41,7 @@ states:
           Propose alternative approaches for any open questions, listing pros and cons.
           Point out gaps, additional architectural decisions that should be made a this point.
 
-          Let's avoid descending too low into implementation details:
+          Let's avoid descending too low into details:
           we don't need the specs to be complete at this point, instead focusing on the high-impact decisions.
 
           Once ambiguities have been cleared up and decisions have been made,
