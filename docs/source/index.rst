@@ -15,7 +15,10 @@ Documentation on readthedocs:  `<https://workflow.readthedocs.io/en/latest/?vers
    :caption: Contents:
 
    Introduction.rst
- 
+   workflow.rst
+   cli.rst
+   docker.rst
+   caveats.rst
 
 
 Indices and tables
