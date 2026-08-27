@@ -18,6 +18,13 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
+# Project customization
+# ---------------------------------------------------------------------------
+IMAGE=gronsti-pi
+# Docker port exports, e.g. "-p 127.0.0.1:8050:8050"
+BUILDER_PORTS=""
+
+# ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 usage() {
@@ -145,18 +152,21 @@ if [[ "$THROWAWAY" != true ]]; then
                 # NOTE: Add any additional --env flags here for secrets that should not
                 # live in env.list (e.g. per-agent API keys):
                 #   --env ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
+                PORTS=""
+                [[ "$REPO" == builder ]] && PORTS="${BUILDER_PORTS}"
                 docker run \
                     --name "$CONTAINER" \
                     --env-file "$ENV_LIST" \
                     --env PROJECT="$PROJECT" \
                     --env AGENT="$REPO" \
-                    -v "/home/auggie/pi_agents/${AGENT}:/home/auggie/.pi" \
+                    -v "/home/auggie/pi_agents/${REPO}:/home/auggie/.pi" \
                     -v /home/auggie/dot_cache:/home/auggie/.cache \
                     -v /home/auggie/dot_local/share/uv/python:/home/auggie/.local/share/uv/python \
                     -v "${PROJECT_DIR}/${REPO}:${REPO_PATH}" \
+                    ${PORTS} \
                     --workdir "/home/auggie/projects/${PROJECT}" \
                     --detach \
-                    gronsti-pi
+                    "${IMAGE}"
             fi
             ;;
         *)
@@ -182,9 +192,11 @@ case "$SUBCOMMAND" in
             # NOTE: --env-file intentionally omitted; venv creation needs no secrets.
             exec docker run --rm --user auggie \
                 -v "${PROJECT_DIR}/canon:${REPO_PATH}" --workdir "$REPO_PATH" \
+                -v /home/auggie/dot_cache:/home/auggie/.cache \
+                -v /home/auggie/dot_local/share/uv/python:/home/auggie/.local/share/uv/python \
                 --env PROJECT="$PROJECT" --env AGENT="$REPO" \
                 --env UV_VENV_CLEAR=1 --env UV_LINK_MODE=copy \
-                gronsti-pi bash -c "$VENV_CMD"
+                "${IMAGE}" bash -c "$VENV_CMD"
         else
             exec docker exec --user auggie --workdir "$REPO_PATH" \
                 --env UV_VENV_CLEAR=1 --env UV_LINK_MODE=copy "$CONTAINER" bash -c "$VENV_CMD"
@@ -193,10 +205,12 @@ case "$SUBCOMMAND" in
     hook)
         # Throwaway container; warm .venv comes from the mounted repo dir.
         # NOTE: --env-file intentionally omitted; the hook needs no secrets.
-        exec docker run --rm --user auggie \
+        exec docker run -t --rm --user auggie \
             -v "${PROJECT_DIR}/${REPO}:${REPO_PATH}" --workdir "$REPO_PATH" \
+            -v /home/auggie/dot_cache:/home/auggie/.cache \
+            -v /home/auggie/dot_local/share/uv/python:/home/auggie/.local/share/uv/python \
             --env PROJECT="$PROJECT" --env AGENT="$REPO" \
-            gronsti-pi bash -lc "./.git-pre-commit-hook"
+            "${IMAGE}" bash -lc "./.git-pre-commit-hook"
         ;;
     agent)
         EXEC_CMD=(docker exec -it --user auggie --workdir "$REPO_PATH" "$CONTAINER" \
