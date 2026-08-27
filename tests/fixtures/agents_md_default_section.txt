@@ -24,6 +24,8 @@ Outbound: plan -> planning [prompt], subdivide -> planning [prompt]
 Commands:
 - [script] new — Create a new intent file.
 - [script] push — Push pending content to canon.
+- [prompt] architecture — Read the idea; discuss critical architectural choices.
+- [prompt] mvp — Create a plan sequence for the MVP slice
 - [prompt] ask — Read the plan; ask clarifying questions.
 - [manual] answer — Human answers questions in chat.
 - [prompt] critique — Critique the plan.
