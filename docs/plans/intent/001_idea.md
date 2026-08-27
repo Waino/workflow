@@ -433,11 +433,9 @@ Commit your changes. Do not modify the code.
 ### Reject
 
 - script: workflow reject {path_to_plan}
-- Push the branch from `reviewer`
-- Pull to `canon`
-- Transitions ticket into `reject`. Commit.
-- Merge to main
-- Push
+- Transitions the ticket into `rejected` **in canon on `main`**. Commit. Push.
+- The feature branch is *not* merged: rejection means the work is unwanted, and an `--ff-only` merge
+  would drag the whole abandoned implementation into `main`. The branch is left unmerged (see 024).
 
 ### Full review
 
