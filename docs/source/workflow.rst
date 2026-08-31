@@ -40,14 +40,14 @@ The **human operator** drives the pipeline from outside the sandboxes using the
 
 Each participant works out of its own git clone (a **repo**):
 
-* ``canon`` — the human operator's working clone, and the only repo that pushes to
-  the shared bare repository.
+* ``canon`` — the human operator's working clone, and the only repo where transitions
+  are committed.
 * ``bare`` — a bare repository, readable by every sandbox but writable only from
-  ``canon``.
+  the host.
 * ``planner``, ``builder``, ``reviewer`` — one clone per agent, living inside that
   agent's sandbox.
 
-Only ``main`` is long-lived; every other branch is short-lived and deleted after
+Only the ``main`` branch is long-lived; every other branch is short-lived and deleted after
 merge. Plans move through the pipeline as commits on these branches, and the CLI
 performs the push/pull/merge steps needed at each handoff.
 
@@ -88,8 +88,8 @@ by which subdirectory it lives in, and its filename is a sequence number plus a 
      - Closed out without merging. Reachable from any state.
    * - ``review``
      - reviewer
-     - Not a plan state; a home for codebase-wide review/audit reports that are not
-       tied to a single plan.
+     - Not a plan state; a home for review/audit reports, including 
+       codebase-wide ones not tied to a single plan.
 
 Transitions between states are triggered either by a **script** command (a plain
 Python action, e.g. ``workflow todo``) or a **prompt** command (a rendered prompt
