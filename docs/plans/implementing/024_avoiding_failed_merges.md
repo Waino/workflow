@@ -301,3 +301,16 @@ compare SHAs against bare directly:
 
 None on unimplemented plans. Builds on the resume/classification machinery from plan 020.1 and the
 docker script from plans 017/021.
+
+## Deviations
+
+- **Phase 0 reproduction confirmed the diagnosis**, via the "two `todo`s on separate planner
+  branches" candidate, not the literal sequence in the Goal text (a plain `todo` A → `push` a new
+  intent → `todo` B does *not* fail: `push`'s `pull_target: planner` happens to refresh planner's
+  `main` past the missing commit before the second branch is even cut). The failing sequence:
+  `subdivide`/`mvp` cuts `plan/005_foo` and `plan/006_bar` from the same base commit in planner;
+  `todo 005_foo` succeeds but leaves planner's local `main` one commit behind bare's (missing its own
+  "Transition 005_foo to todo" commit, per the ordering hazard); `todo 006_bar` then fails
+  `git merge --ff-only -- origin/plan/006_bar` in canon, because canon's `main` has since advanced
+  past `006_bar`'s base. Regression test:
+  `test_todo_fails_when_second_branch_cut_from_stale_main` in `tests/test_integration_workflow.py`.
