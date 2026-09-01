@@ -213,6 +213,36 @@ def git_merge(repo_path: Path, branch: str, *, dry_run: bool = False) -> None:
     run_command(["git", "merge", "--ff-only", "--", branch], cwd=repo_path, dry_run=dry_run)
 
 
+def git_branch_delete(repo_path: Path, branch: str, *, dry_run: bool = False) -> None:
+    """Delete the local *branch* in *repo_path* via ``git branch -d``.
+
+    ``-d`` (never ``-D``) refuses to delete a branch with unmerged commits -- that
+    refusal is the safety net for callers that delete a branch after merging it.
+    """
+    run_command(["git", "branch", "-d", branch], cwd=repo_path, dry_run=dry_run)
+
+
+def git_delete_remote_branch(repo_path: Path, branch: str, *, dry_run: bool = False) -> None:
+    """Delete *branch* on ``origin`` via ``git push origin --delete``."""
+    run_command(["git", "push", "origin", "--delete", branch], cwd=repo_path, dry_run=dry_run)
+
+
+def git_rev_parse(repo_path: Path, ref: str) -> str | None:
+    """Return the commit hash *ref* resolves to in *repo_path*, or ``None`` if unknown.
+
+    Read-only guard query: always runs for real, even in dry-run.
+    """
+    result = subprocess.run(  # noqa: S603
+        ["git", "rev-parse", "--verify", "--quiet", ref],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.decode().strip()
+
+
 def git_checkout(repo_path: Path, branch: str, *, create: bool = False, dry_run: bool = False) -> None:
     """Check out *branch* in *repo_path*, optionally creating it with ``-b``."""
     args = ["git", "checkout"]
@@ -338,6 +368,42 @@ def park_on_main(repo_path: Path, *, dry_run: bool = False) -> None:
     if git_current_branch(repo_path) != "main":
         git_checkout(repo_path, "main", dry_run=dry_run)
     refresh_main(repo_path, dry_run=dry_run)
+
+
+def delete_merged_branch(
+    canon_repo: Path,
+    reviewer_repo: Path,
+    builder_repo: Path,
+    branch: str,
+    *,
+    dry_run: bool = False,
+) -> None:
+    """Delete *branch* in reviewer, builder, and on bare, once it is merged into ``main``.
+
+    Called after ``accept`` has already landed the merge, so every failure here is
+    downgraded to a warning rather than raised -- the accept itself must not be undone
+    by a cosmetic cleanup problem. No-ops (with a warning) if *branch* is not (yet)
+    known to be merged; a no-op, silently, if it was already cleaned up by a prior run
+    (its absence from ``origin`` is itself the postcondition this function establishes).
+    """
+    if not git_ref_exists_remote(canon_repo, branch):
+        return
+    if not git_is_ancestor(canon_repo, f"origin/{branch}", "main"):
+        error_console.print(
+            f"[yellow]\\[!] {branch} is not (yet) known to be merged into main; skipping branch cleanup.[/yellow]",
+        )
+        return
+    for repo in (reviewer_repo, builder_repo):
+        try:
+            refresh_main(repo, dry_run=dry_run)
+            if git_branch_exists(repo, branch):
+                git_branch_delete(repo, branch, dry_run=dry_run)
+        except subprocess.CalledProcessError as exc:
+            error_console.print(f"[yellow]\\[!] failed to delete {branch} in {repo}: {exc}[/yellow]")
+    try:
+        git_delete_remote_branch(canon_repo, branch, dry_run=dry_run)
+    except subprocess.CalledProcessError as exc:
+        error_console.print(f"[yellow]\\[!] failed to delete {branch} on bare: {exc}[/yellow]")
 
 
 class TransferResult(enum.Enum):

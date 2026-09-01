@@ -15,7 +15,15 @@ import click
 from rich.table import Table
 
 from workflow.exceptions import PlanCollisionError
-from workflow.git_helpers import git_current_branch, git_index_lock_present, git_is_valid_repo, git_status_porcelain
+from workflow.git_helpers import (
+    git_branch_exists,
+    git_current_branch,
+    git_index_lock_present,
+    git_is_ancestor,
+    git_is_valid_repo,
+    git_rev_parse,
+    git_status_porcelain,
+)
 from workflow.models import PlanState
 from workflow.names import RepoName
 from workflow.plan_resolver import find_all_plans_in_repo
@@ -47,10 +55,12 @@ class RepoCheck:
     dirty: bool | None = None  # None for the bare repo
     index_lock: bool | None = None  # None when exists is False
     anomalies: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    """Informational, non-anomalous observations -- rendered but excluded from the exit code."""
 
 
-def _active_feature_branches(project_dir: Path) -> set[str]:
-    """Return `feat/<name>` branches expected for plans currently mid-implementation/review."""
+def _active_branches(project_dir: Path) -> set[str]:
+    """Return `plan/<name>`/`feat/<name>` branches expected for plans currently in flight."""
     branches: set[str] = set()
     for repo in RepoName:
         if not (project_dir / repo).is_dir():
@@ -59,7 +69,11 @@ def _active_feature_branches(project_dir: Path) -> set[str]:
             plans = find_all_plans_in_repo(project_dir, repo)
         except PlanCollisionError:
             continue
-        branches.update(f"feat/{plan.name}" for plan in plans if plan.state in _ACTIVE_FEATURE_BRANCH_STATES)
+        for plan in plans:
+            if plan.state == PlanState.PLANNING:
+                branches.add(f"plan/{plan.name}")
+            elif plan.state in _ACTIVE_FEATURE_BRANCH_STATES:
+                branches.add(f"feat/{plan.name}")
     return branches
 
 
@@ -77,7 +91,27 @@ def _check_bare(bare_path: Path) -> RepoCheck:
     return check
 
 
-def _check_worktree(repo_name: RepoName, repo_path: Path, *, active_feature_branches: set[str]) -> RepoCheck:
+def _check_staleness(check: RepoCheck, repo_path: Path, bare_path: Path, active_branches: set[str]) -> None:
+    """Compare *repo_path* against *bare_path* directly: fetch-free, matching doctor's contract."""
+    if not bare_path.is_dir():
+        return
+    bare_main = git_rev_parse(bare_path, "refs/heads/main")
+    repo_main = git_rev_parse(repo_path, "refs/heads/main")
+    if bare_main is not None and repo_main is not None and bare_main != repo_main:
+        check.anomalies.append("main is stale (differs from bare)")
+
+    branch_on_bare = check.branch in active_branches and git_branch_exists(bare_path, check.branch)
+    if branch_on_bare and not git_is_ancestor(bare_path, "refs/heads/main", f"refs/heads/{check.branch}"):
+        check.notes.append("not based on bare main; accept will rebase")
+
+
+def _check_worktree(
+    repo_name: RepoName,
+    repo_path: Path,
+    *,
+    active_branches: set[str],
+    bare_path: Path,
+) -> RepoCheck:
     check = RepoCheck(name=repo_name.value, exists=repo_path.is_dir())
     if not check.exists:
         check.anomalies.append("missing")
@@ -102,9 +136,11 @@ def _check_worktree(repo_name: RepoName, repo_path: Path, *, active_feature_bran
     elif (
         repo_name in (RepoName.builder, RepoName.reviewer)
         and check.branch != "main"
-        and check.branch not in active_feature_branches
+        and check.branch not in active_branches
     ):
         check.anomalies.append(f"stray branch {check.branch!r}: no plan is implementing/checking on it")
+
+    _check_staleness(check, repo_path, bare_path, active_branches)
     return check
 
 
@@ -140,6 +176,7 @@ def _render_table(checks: list[RepoCheck]) -> Table:
     table.add_column("lock")
     table.add_column("valid")
     table.add_column("anomalies")
+    table.add_column("notes")
     for check in checks:
         table.add_row(
             check.name,
@@ -149,6 +186,7 @@ def _render_table(checks: list[RepoCheck]) -> Table:
             "" if check.index_lock is None else ("yes" if check.index_lock else "no"),
             "" if check.valid is None else ("yes" if check.valid else "no"),
             "; ".join(check.anomalies) if check.anomalies else "",
+            "; ".join(check.notes) if check.notes else "",
         )
     return table
 
@@ -164,11 +202,13 @@ def doctor(ctx: click.Context) -> None:
         ctx.exit(1)
         return
     project_dir: Path = config.project_dir
+    bare_path = project_dir / "bare"
 
-    active_feature_branches = _active_feature_branches(project_dir)
-    checks = [_check_bare(project_dir / "bare")]
+    active_branches = _active_branches(project_dir)
+    checks = [_check_bare(bare_path)]
     checks.extend(
-        _check_worktree(repo, project_dir / repo, active_feature_branches=active_feature_branches) for repo in RepoName
+        _check_worktree(repo, project_dir / repo, active_branches=active_branches, bare_path=bare_path)
+        for repo in RepoName
     )
     console.print(_render_table(checks))
 

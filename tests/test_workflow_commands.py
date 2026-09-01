@@ -565,6 +565,8 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(wc, "park_on_main", fake_pull)
     monkeypatch.setattr(wc, "refresh_main", fake_pull)
     monkeypatch.setattr(wc, "branch_needs_rebase", MagicMock(return_value=False))
+    monkeypatch.setattr(wc, "git_ref_exists_remote", MagicMock(return_value=True))
+    monkeypatch.setattr(wc, "delete_merged_branch", MagicMock())
 
     accept_result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005"])
     reject_result = CliRunner().invoke(

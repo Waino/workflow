@@ -11,7 +11,7 @@ from click.testing import CliRunner
 
 from workflow.cli import main
 from workflow.commands.doctor import (
-    _active_feature_branches,
+    _active_branches,
     _check_bare,
     _check_worktree,
     _duplicate_plan_anomalies,
@@ -72,7 +72,7 @@ def test_check_bare_invalid_reports_anomaly(tmp_path: Path) -> None:
 
 def test_check_worktree_clean_main_has_no_anomalies(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path / "canon")
-    check = _check_worktree(RepoName.canon, repo, active_feature_branches=set())
+    check = _check_worktree(RepoName.canon, repo, active_branches=set(), bare_path=tmp_path / "bare")
     assert check.branch == "main"
     assert check.dirty is False
     assert check.anomalies == []
@@ -81,32 +81,87 @@ def test_check_worktree_clean_main_has_no_anomalies(tmp_path: Path) -> None:
 def test_check_worktree_canon_off_main_is_an_anomaly(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path / "canon")
     _git(["checkout", "-b", "some-branch"], cwd=repo)
-    check = _check_worktree(RepoName.canon, repo, active_feature_branches=set())
+    check = _check_worktree(RepoName.canon, repo, active_branches=set(), bare_path=tmp_path / "bare")
     assert any("expected 'main'" in a for a in check.anomalies)
 
 
 def test_check_worktree_builder_stray_branch_is_an_anomaly(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path / "builder")
     _git(["checkout", "-b", "leftover"], cwd=repo)
-    check = _check_worktree(RepoName.builder, repo, active_feature_branches=set())
+    check = _check_worktree(RepoName.builder, repo, active_branches=set(), bare_path=tmp_path / "bare")
     assert any("stray branch" in a for a in check.anomalies)
 
 
 def test_check_worktree_builder_active_feature_branch_is_not_an_anomaly(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path / "builder")
     _git(["checkout", "-b", "feat/005_foo"], cwd=repo)
-    check = _check_worktree(RepoName.builder, repo, active_feature_branches={"feat/005_foo"})
+    check = _check_worktree(
+        RepoName.builder,
+        repo,
+        active_branches={"feat/005_foo"},
+        bare_path=tmp_path / "bare",
+    )
     assert check.anomalies == []
 
 
 def test_check_worktree_dirty_tree_is_an_anomaly(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path / "canon")
     (repo / "README.md").write_text("changed\n", encoding="utf-8")
-    check = _check_worktree(RepoName.canon, repo, active_feature_branches=set())
+    check = _check_worktree(RepoName.canon, repo, active_branches=set(), bare_path=tmp_path / "bare")
     assert "uncommitted changes" in check.anomalies
 
 
-def test_active_feature_branches_only_includes_implementing_and_checking(tmp_path: Path) -> None:
+def test_check_worktree_stale_main_is_an_anomaly(tmp_path: Path) -> None:
+    canon = _init_repo(tmp_path / "canon")
+    bare = tmp_path / "bare"
+    _git(["clone", "--bare", str(canon), str(bare)], cwd=tmp_path)
+    # Advance bare's main independently, without the worktree ever pulling.
+    pusher = tmp_path / "pusher"
+    _git(["clone", str(bare), str(pusher)], cwd=tmp_path)
+    (pusher / "more.txt").write_text("more\n", encoding="utf-8")
+    _git(["add", "."], cwd=pusher)
+    _git(["commit", "-m", "advance main"], cwd=pusher)
+    _git(["push"], cwd=pusher)
+
+    check = _check_worktree(RepoName.canon, canon, active_branches=set(), bare_path=bare)
+
+    assert "main is stale (differs from bare)" in check.anomalies
+
+
+def test_check_worktree_rebase_pending_branch_is_a_note_not_an_anomaly(tmp_path: Path) -> None:
+    canon = _init_repo(tmp_path / "canon")
+    bare = tmp_path / "bare"
+    _git(["clone", "--bare", str(canon), str(bare)], cwd=tmp_path)
+    reviewer = tmp_path / "reviewer"
+    _git(["clone", str(bare), str(reviewer)], cwd=tmp_path)
+    _git(["checkout", "-b", "feat/005_foo"], cwd=reviewer)
+    (reviewer / "feature.txt").write_text("feature\n", encoding="utf-8")
+    _git(["add", "."], cwd=reviewer)
+    _git(["commit", "-m", "feature work"], cwd=reviewer)
+    _git(["push", "-u", "origin", "feat/005_foo"], cwd=reviewer)
+    # Advance bare's main past the branch's base, without the branch being rebased.
+    pusher = tmp_path / "pusher"
+    _git(["clone", str(bare), str(pusher)], cwd=tmp_path)
+    (pusher / "more.txt").write_text("more\n", encoding="utf-8")
+    _git(["add", "."], cwd=pusher)
+    _git(["commit", "-m", "advance main"], cwd=pusher)
+    _git(["push"], cwd=pusher)
+    # Isolate the rebase-pending note from the (also legitimate) stale-main anomaly: reviewer's
+    # own main *is* up to date, only the feature branch itself has not been rebased onto it.
+    _git(["fetch", "origin", "main:main"], cwd=reviewer)
+
+    check = _check_worktree(
+        RepoName.reviewer,
+        reviewer,
+        active_branches={"feat/005_foo"},
+        bare_path=bare,
+    )
+
+    assert check.anomalies == []
+    assert any("accept will rebase" in note for note in check.notes)
+
+
+def test_active_branches_only_includes_planning_implementing_and_checking(tmp_path: Path) -> None:
     _init_repo(tmp_path / "builder")
     _make_plan(tmp_path / "builder", "implementing", "005_foo.md")
     _init_repo(tmp_path / "reviewer")
@@ -114,9 +169,9 @@ def test_active_feature_branches_only_includes_implementing_and_checking(tmp_pat
     _init_repo(tmp_path / "planner")
     _make_plan(tmp_path / "planner", "planning", "007_baz.md")
 
-    branches = _active_feature_branches(tmp_path)
+    branches = _active_branches(tmp_path)
 
-    assert branches == {"feat/005_foo", "feat/006_bar"}
+    assert branches == {"feat/005_foo", "feat/006_bar", "plan/007_baz"}
 
 
 def test_duplicate_plan_anomalies_flags_same_plan_in_two_state_dirs(tmp_path: Path) -> None:
@@ -162,9 +217,10 @@ def test_doctor_cli_exits_zero_on_clean_setup(tmp_path: Path, monkeypatch: pytes
     config_path = _make_doctor_config(tmp_path)
     monkeypatch.chdir(tmp_path)
     canon = _init_repo(tmp_path / "canon")
-    _git(["clone", "--bare", str(canon), str(tmp_path / "bare")], cwd=tmp_path)
+    bare = tmp_path / "bare"
+    _git(["clone", "--bare", str(canon), str(bare)], cwd=tmp_path)
     for repo in ("planner", "builder", "reviewer"):
-        _init_repo(tmp_path / repo)
+        _git(["clone", str(bare), str(tmp_path / repo)], cwd=tmp_path)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "doctor"])
 

@@ -625,6 +625,35 @@ def test_accept_dry_run_previews_rebase_without_mutating(tmp_path: Path, monkeyp
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_accept_deletes_feature_branch_locally_and_on_bare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`accept` deletes the merged feature branch in reviewer, builder, and on bare."""
+    _drive_pipeline_through_check(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.yaml"
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005_foo"])
+
+    assert result.exit_code == 0, result.output
+    reviewer_check = _git(
+        ["rev-parse", "--verify", "--quiet", "refs/heads/feat/005_foo"],
+        cwd=tmp_path / "reviewer",
+        check=False,
+    )
+    builder_check = _git(
+        ["rev-parse", "--verify", "--quiet", "refs/heads/feat/005_foo"],
+        cwd=tmp_path / "builder",
+        check=False,
+    )
+    remote_check = _git(
+        ["ls-remote", "--exit-code", "--heads", "origin", "feat/005_foo"],
+        cwd=tmp_path / "canon",
+        check=False,
+    )
+    assert reviewer_check.returncode != 0
+    assert builder_check.returncode != 0
+    assert remote_check.returncode != 0
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_reject_checking_plan_through_default_canon_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

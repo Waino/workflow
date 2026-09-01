@@ -12,6 +12,9 @@ from workflow.exceptions import WorkflowError
 from workflow.git_helpers import (
     CommitResult,
     TransferResult,
+    delete_merged_branch,
+    git_branch_delete,
+    git_branch_exists,
     git_commit_if_changed,
     git_current_branch,
     git_index_lock_present,
@@ -19,6 +22,7 @@ from workflow.git_helpers import (
     git_is_valid_repo,
     git_ref_exists_remote,
     git_remote_url,
+    git_rev_parse,
     git_status_porcelain,
     park_on_main,
     refresh_main,
@@ -492,3 +496,90 @@ def test_park_on_main_falls_back_to_refresh_when_dirty(tmp_path: Path) -> None:
     # Left on the dirty feature branch, but 'main' was still refreshed via fetch.
     assert git_current_branch(clone) == "feat/x"
     assert _git(["rev-parse", "refs/heads/main"], cwd=clone).stdout.decode().strip() == new_sha
+
+
+# ---------------------------------------------------------------------------
+# git_rev_parse / delete_merged_branch
+# ---------------------------------------------------------------------------
+
+
+def test_git_rev_parse_returns_sha_for_known_ref(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    expected = _git(["rev-parse", "HEAD"], cwd=repo).stdout.decode().strip()
+    assert git_rev_parse(repo, "main") == expected
+
+
+def test_git_rev_parse_returns_none_for_unknown_ref(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    assert git_rev_parse(repo, "refs/heads/does-not-exist") is None
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_branch_delete_removes_merged_branch(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    _git(["checkout", "-b", "feat/x"], cwd=repo)
+    _git(["checkout", "main"], cwd=repo)
+    _git(["merge", "--ff-only", "feat/x"], cwd=repo)
+
+    git_branch_delete(repo, "feat/x")
+
+    assert not git_branch_exists(repo, "feat/x")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_branch_delete_refuses_unmerged_branch(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    _git(["checkout", "-b", "feat/x"], cwd=repo)
+    (repo / "unmerged.txt").write_text("wip\n", encoding="utf-8")
+    _git(["add", "."], cwd=repo)
+    _git(["commit", "-m", "unmerged work"], cwd=repo)
+    _git(["checkout", "main"], cwd=repo)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        git_branch_delete(repo, "feat/x")
+    assert git_branch_exists(repo, "feat/x")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_delete_merged_branch_removes_locally_and_on_bare(tmp_path: Path) -> None:
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    transfer_branch_to_main(source, canon, branch="feat/x")
+    builder = tmp_path / "builder"
+    _git(["clone", str(bare), str(builder)], cwd=tmp_path)
+    _git(["checkout", "feat/x"], cwd=builder)
+    # Real callers park reviewer/builder on 'main' before cleanup (git branch -d refuses to
+    # delete the branch a worktree currently has checked out).
+    _git(["checkout", "main"], cwd=source)
+    _git(["checkout", "main"], cwd=builder)
+
+    delete_merged_branch(canon, source, builder, "feat/x")
+
+    assert not git_branch_exists(source, "feat/x")
+    assert not git_branch_exists(builder, "feat/x")
+    assert not git_ref_exists_remote(canon, "feat/x")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_delete_merged_branch_warns_without_raising_when_not_merged(tmp_path: Path) -> None:
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    other = tmp_path / "other"
+    _git(["clone", str(bare), str(other)], cwd=tmp_path)
+    del bare
+
+    delete_merged_branch(canon, source, other, "feat/x")  # must not raise
+
+    assert git_branch_exists(source, "feat/x")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_delete_merged_branch_is_a_noop_when_already_deleted(tmp_path: Path) -> None:
+    """Resumed cleanup: a branch already deleted from bare must not be reported as unmerged."""
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    transfer_branch_to_main(source, canon, branch="feat/x")
+    other = tmp_path / "other"
+    _git(["clone", str(bare), str(other)], cwd=tmp_path)
+    _git(["checkout", "main"], cwd=source)
+    delete_merged_branch(canon, source, other, "feat/x")
+    del bare
+
+    delete_merged_branch(canon, source, other, "feat/x")  # must not raise

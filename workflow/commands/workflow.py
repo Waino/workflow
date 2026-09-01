@@ -28,6 +28,7 @@ from workflow.exceptions import (
 from workflow.git_helpers import (
     TransferResult,
     branch_needs_rebase,
+    delete_merged_branch,
     git_add,
     git_branch_exists,
     git_checkout,
@@ -40,6 +41,7 @@ from workflow.git_helpers import (
     git_is_valid_repo,
     git_pull,
     git_push,
+    git_ref_exists_remote,
     git_remote_url,
     git_status,
     git_status_porcelain,
@@ -1191,8 +1193,14 @@ def _classify_accept_steps(resume: ResumePlan, plan: Plan, project_dir: Path, br
 
     # transfer_branch_to_main is one guarded+idempotent unit (Fix 3); classify it as a
     # single step so classify- and run-granularity stay aligned (see plan 020.1 Fix 3
-    # granularity note).
-    transfer_will_run = not git_is_ancestor(canon_repo, f"origin/{branch}", "main")
+    # granularity note). A branch already deleted from bare (by a prior accept's
+    # cleanup) has nothing left to transfer, regardless of what a now-meaningless
+    # ancestry check against a dangling origin/<branch> ref would say.
+    transfer_will_run = git_ref_exists_remote(canon_repo, branch) and not git_is_ancestor(
+        canon_repo,
+        f"origin/{branch}",
+        "main",
+    )
     if transfer_will_run:
         resume.will_run(_STEP_ACCEPT_TRANSFER)
     else:
@@ -1271,6 +1279,8 @@ def accept(ctx: click.Context, plan_path: str) -> None:
         # Parks reviewer on 'main' (fixing issue 1's ordering hazard) only after the
         # done-transition commit has itself reached bare.
         park_on_main(reviewer_repo, dry_run=dry_run)
+        builder_repo = project_dir / RepoName.builder
+        delete_merged_branch(canon_repo, reviewer_repo, builder_repo, branch, dry_run=dry_run)
         _write_script_audit_log(config, "accept", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.CHECKING, "accept", new_plan.name)
     except (
