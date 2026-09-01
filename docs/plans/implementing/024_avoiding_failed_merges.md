@@ -325,3 +325,18 @@ docker script from plans 017/021.
   after their final canon push (both are idempotent no-ops on a resume where nothing changed); only
   `implement`'s `park_on_main(planner_repo)` is gated on whether the transfer actually ran, since
   without a transfer there is no planner branch involved at all.
+- **Phase 3 conflict messaging uses `REBASE_HEAD`, not `HEAD`.** Mid a paused, conflicted rebase,
+  `HEAD` is detached at the `onto` commit (`origin/main`) itself, so `git merge-tree --write-tree
+  origin/main HEAD` reports zero conflicts (both sides are identical). `REBASE_HEAD` is git's own
+  ref for "the commit currently being replayed" and is what must be diffed against `origin/main` to
+  see the real conflict. Verified with a real conflicting rebase in
+  `test_transfer_branch_to_main_rebase_conflict_aborts_and_raises`.
+- **`rebase` prompt placement**: inserted as the last prompt command in each state (after `revise`
+  in `planning`, after `fix` in `checking`), immediately before that state's script commands --
+  preserves the plan's "script/prompt grouping" instruction while keeping it next to the other
+  recovery-oriented prompts.
+- **This repo's own `AGENTS.md`** has no accompanying `.agents_md_hash` (this is the tool's source
+  checkout, not a live workflow project instance with a `bare`/agent-repo layout), so only the
+  managed section was resynced against the golden fixture -- which incidentally also picked up two
+  unrelated pre-existing entries (`architecture`, `mvp`) that had drifted out of sync with
+  `docs/default_config.yaml` before this plan.

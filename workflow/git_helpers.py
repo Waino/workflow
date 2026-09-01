@@ -6,18 +6,27 @@ All helpers that run git operations use cwd=repo_path and the remote named 'orig
 Read-only guard queries (status/existence/ancestry checks used as preconditions or
 resume postconditions) always run for real, even in dry-run mode, so resume previews
 stay accurate. Only helpers that perform mutations honor dry_run.
+
+One deliberate exception: deciding whether `transfer_branch_to_main` will fast-forward
+or need a rebase requires a `git fetch origin` in the source repo. That fetch mutates
+only remote-tracking refs (never the working tree or local branches), so it also runs
+for real during resume classification (see each command's `_classify_*_steps`) -- an
+accurate preview is impossible without it.
 """
 
 from __future__ import annotations
 
 import enum
+import re
 import subprocess
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
     from pathlib import Path
 
-from workflow.shell import error_console, run_command, run_condition_command
+from workflow.exceptions import WorkflowError
+from workflow.shell import console, error_console, run_command, run_condition_command
 from workflow.steps import require
 
 GIT_REVPARSE_NO_UPSTREAM = 128
@@ -331,18 +340,139 @@ def park_on_main(repo_path: Path, *, dry_run: bool = False) -> None:
     refresh_main(repo_path, dry_run=dry_run)
 
 
-def transfer_branch_to_main(
+class TransferResult(enum.Enum):
+    """Which path :func:`transfer_branch_to_main` took."""
+
+    FAST_FORWARD = "fast_forward"
+    REBASED = "rebased"
+
+
+def branch_needs_rebase(source_repo: Path, branch: str) -> bool:
+    """Fetch *source_repo* and return whether *branch* is **not** based on ``origin/main``.
+
+    Used both by :func:`transfer_branch_to_main` itself and by each command's resume
+    classification, so a `--dry-run` preview can announce the rebase before it happens
+    (see the module docstring's fetch-during-classification exception).
+    """
+    git_fetch(source_repo)
+    head = branch if git_branch_exists(source_repo, branch) else f"origin/{branch}"
+    return not git_is_ancestor(source_repo, "origin/main", head)
+
+
+def _merge_tree_conflict_paths(output: str) -> list[str]:
+    """Best-effort extraction of conflicting paths from ``git merge-tree --write-tree`` output.
+
+    Ponytail: regex-matches the ``CONFLICT (...): ... in <path>`` lines `git merge-tree`
+    prints for content/rename conflicts; upgrade path is a full parse of its machine-readable
+    sections if this ever needs to drive logic rather than just an error message (decision 5:
+    merge-tree is for messaging only, never a gate).
+    """
+    return [m.group(1).strip() for m in re.finditer(r"CONFLICT \([^)]*\):.*?in (.+)$", output, re.MULTILINE)]
+
+
+def _rebase_onto_main(  # noqa: PLR0913
+    source_repo: Path,
+    canon_repo: Path,
+    branch: str,
+    *,
+    allow_rebase: bool,
+    other_worktrees: Sequence[Path],
+    post_rebase_verify: Callable[[], None] | None,
+    dry_run: bool,
+) -> TransferResult:
+    """The rebase path of :func:`transfer_branch_to_main`; see its docstring."""
+    plan_name = branch.split("/", 1)[-1]
+    require(
+        allow_rebase,
+        f"{branch} is not fast-forwardable onto origin/main; rerun with the rebase step "
+        f"enabled (`workflow rebase {plan_name}`) once it has been rebased.",
+    )
+    require(
+        not git_status_porcelain(source_repo),
+        f"{source_repo} has uncommitted changes; commit or discard them before rebasing {branch}.",
+    )
+    require(
+        git_current_branch(source_repo) == branch,
+        f"{source_repo} is not on {branch}; check it out first (git checkout {branch}).",
+    )
+    for worktree in other_worktrees:
+        if worktree.exists() and git_current_branch(worktree) == branch:
+            msg = f"{branch} is checked out in {worktree}; check out a different branch there first."
+            raise WorkflowError(msg)
+
+    if dry_run:
+        console.print(f"[dim]would rebase {branch} onto origin/main in {source_repo}[/dim]")
+        return TransferResult.REBASED
+
+    try:
+        run_command(["git", "rebase", "origin/main"], cwd=source_repo)
+    except subprocess.CalledProcessError as exc:
+        # REBASE_HEAD, not HEAD: mid-rebase, HEAD is detached at the 'onto' commit
+        # (origin/main) itself, which would make merge-tree report no conflicts at all.
+        conflict_result = subprocess.run(
+            ["git", "merge-tree", "--write-tree", "origin/main", "REBASE_HEAD"],  # noqa: S607
+            cwd=source_repo,
+            capture_output=True,
+            check=False,
+        )
+        conflicts = _merge_tree_conflict_paths(conflict_result.stdout.decode())
+        abort = subprocess.run(
+            ["git", "rebase", "--abort"],  # noqa: S607
+            cwd=source_repo,
+            capture_output=True,
+            check=False,
+        )
+        if abort.returncode != 0:
+            error_console.print(
+                f"[yellow]\\[!] git rebase --abort failed in {source_repo}: {abort.stderr.decode()}[/yellow]",
+            )
+        conflict_note = f" Conflicting paths: {', '.join(conflicts)}." if conflicts else ""
+        msg = f"rebase of {branch} onto origin/main failed.{conflict_note} Recovery: workflow rebase {plan_name}"
+        raise WorkflowError(msg) from exc
+
+    if post_rebase_verify is not None:
+        post_rebase_verify()
+
+    run_command(["git", "push", "--force-with-lease", "origin", branch], cwd=source_repo)
+    git_fetch(canon_repo, dry_run=dry_run)
+    git_pull(canon_repo, dry_run=dry_run)
+    git_merge(canon_repo, f"origin/{branch}", dry_run=dry_run)
+    git_push(canon_repo, dry_run=dry_run)
+    return TransferResult.REBASED
+
+
+def transfer_branch_to_main(  # noqa: PLR0913
     source_repo: Path,
     canon_repo: Path,
     *,
     branch: str | None = None,
+    allow_rebase: bool = False,
+    other_worktrees: Sequence[Path] = (),
+    post_rebase_verify: Callable[[], None] | None = None,
     dry_run: bool = False,
-) -> None:
-    """Push *source_repo*'s branch to bare, pull to canon, merge, and push back.
+) -> TransferResult:
+    """Land *source_repo*'s branch on ``main``: fast-forward when possible, else rebase.
 
     Uses *branch* as the merge ref when given (so callers with a fixed feature-branch
     convention, e.g. ``accept``, don't depend on what *source_repo* happens to be
     checked out to); otherwise reads *source_repo*'s current branch.
+
+    Decides fast-forwardability in *source_repo* (via :func:`branch_needs_rebase`)
+    before pushing anything, so the problem is discovered before any push rather than
+    when canon's merge fails. On the fast-forward path (today's behaviour): ``git push``
+    in *source_repo*, ``git pull``/``git merge --ff-only``/``git push`` in *canon_repo*.
+
+    On the rebase path -- refused unless *allow_rebase* is ``True``, since a rebase must
+    never be a surprise -- *source_repo* is rebased onto ``origin/main``, force-pushed
+    with ``--force-with-lease``, then merged into *canon_repo* the same way. Guarded by:
+    *source_repo*'s tree must be clean; *source_repo* must be checked out to *branch*;
+    *branch* must not be checked out in any of *other_worktrees*. Never mutates anything
+    in ``--dry-run``. On a rebase conflict, aborts the rebase (best effort) and raises
+    with the conflicting paths and the recovery (``workflow rebase <plan>``).
+
+    *post_rebase_verify*, when given, runs after a successful rebase and before
+    anything is pushed or merged -- it should raise on failure to abort before publishing
+    a tree nobody has verified. Only invoked on the rebase path.
 
     Every step is individually idempotent (a merge of an already-merged ref is a
     harmless no-op), so re-running the whole helper on a partially-completed prior
@@ -358,21 +488,36 @@ def transfer_branch_to_main(
     Raises :class:`~workflow.exceptions.WorkflowError` if *canon_repo* is not on
     ``'main'`` (it always should be at rest; this guards against clobbering a feature
     branch checked out there by mistake).
-
-    Steps:
-    1. ``git push origin`` in *source_repo*
-    2. ``git pull`` in *canon_repo*
-    3. ``git merge <branch>`` in *canon_repo*
-    4. ``git push origin`` in *canon_repo*
     """
     require(
         git_current_branch(canon_repo) == "main",
         "transfer_branch_to_main: canon_repo is not on 'main'; won't clobber a feature branch",
     )
-    merge_ref = f"origin/{branch or git_current_branch(source_repo)}"
+    branch = branch or git_current_branch(source_repo)
 
-    git_push(source_repo, dry_run=dry_run)
-    git_pull(canon_repo, dry_run=dry_run)
-    # Merge via the remote-tracking ref so the branch need not exist locally.
-    git_merge(canon_repo, merge_ref, dry_run=dry_run)
-    git_push(canon_repo, dry_run=dry_run)
+    if not branch_needs_rebase(source_repo, branch):
+        try:
+            git_push(source_repo, dry_run=dry_run)
+        except subprocess.CalledProcessError:
+            if dry_run:
+                raise
+            # A resumed run: the branch was already rebased locally in a prior attempt
+            # (whose force-push then failed) but never force-pushed, so a plain push is
+            # rejected as non-fast-forward. Safe to force here: branch_needs_rebase just
+            # confirmed origin/main is an ancestor of the local branch.
+            run_command(["git", "push", "--force-with-lease", "origin", branch], cwd=source_repo)
+        git_pull(canon_repo, dry_run=dry_run)
+        # Merge via the remote-tracking ref so the branch need not exist locally.
+        git_merge(canon_repo, f"origin/{branch}", dry_run=dry_run)
+        git_push(canon_repo, dry_run=dry_run)
+        return TransferResult.FAST_FORWARD
+
+    return _rebase_onto_main(
+        source_repo,
+        canon_repo,
+        branch,
+        allow_rebase=allow_rebase,
+        other_worktrees=other_worktrees,
+        post_rebase_verify=post_rebase_verify,
+        dry_run=dry_run,
+    )

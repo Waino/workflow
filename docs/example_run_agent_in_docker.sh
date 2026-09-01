@@ -163,10 +163,15 @@ if [[ "$THROWAWAY" != true ]]; then
                     -v /home/auggie/dot_cache:/home/auggie/.cache \
                     -v /home/auggie/dot_local/share/uv/python:/home/auggie/.local/share/uv/python \
                     -v "${PROJECT_DIR}/${REPO}:${REPO_PATH}" \
+                    -v "${PROJECT_DIR}/bare:${PROJECT_DIR}/bare:ro" \
                     ${PORTS} \
                     --workdir "/home/auggie/projects/${PROJECT}" \
                     --detach \
                     "${IMAGE}"
+                # NOTE: 'bare' is mounted at its host path so it matches the absolute
+                # 'origin' URL recorded at clone time. Read-only by design: it makes
+                # 'git fetch'/'git rebase' work (needed for the 'rebase' prompt) while
+                # 'git push' fails by construction -- agents have no write access.
             fi
             ;;
         *)

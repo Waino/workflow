@@ -11,6 +11,7 @@ from workflow import git_helpers
 from workflow.exceptions import WorkflowError
 from workflow.git_helpers import (
     CommitResult,
+    TransferResult,
     git_commit_if_changed,
     git_current_branch,
     git_index_lock_present,
@@ -18,8 +19,10 @@ from workflow.git_helpers import (
     git_is_valid_repo,
     git_ref_exists_remote,
     git_remote_url,
+    git_status_porcelain,
     park_on_main,
     refresh_main,
+    transfer_branch_to_main,
 )
 
 _GIT = shutil.which("git") or "git"
@@ -40,35 +43,6 @@ def _init_repo(path: Path) -> Path:
     return path
 
 
-def test_transfer_branch_to_main_runs_steps_in_order(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    source_repo = tmp_path / "builder"
-    canon_repo = tmp_path / "canon"
-    calls: list[tuple[object, ...]] = []
-
-    monkeypatch.setattr(
-        git_helpers,
-        "git_current_branch",
-        lambda repo: "feat/005_plan_state_and_git" if repo == source_repo else "main",
-    )
-    monkeypatch.setattr(git_helpers, "git_push", lambda repo, *, dry_run=False: calls.append(("push", repo, dry_run)))
-    monkeypatch.setattr(git_helpers, "git_pull", lambda repo, *, dry_run=False: calls.append(("pull", repo, dry_run)))
-    monkeypatch.setattr(
-        git_helpers,
-        "git_merge",
-        lambda repo, branch, *, dry_run=False: calls.append(("merge", repo, branch, dry_run)),
-    )
-
-    git_helpers.transfer_branch_to_main(source_repo, canon_repo, dry_run=True)
-
-    assert calls == [
-        ("push", source_repo, True),
-        ("pull", canon_repo, True),
-        # origin/ prefix because the branch is only a remote tracking ref in target repo
-        ("merge", canon_repo, "origin/feat/005_plan_state_and_git", True),
-        ("push", canon_repo, True),
-    ]
-
-
 def test_transfer_branch_to_main_rejects_canon_not_on_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(git_helpers, "git_current_branch", lambda _repo: "feat/other")
 
@@ -76,32 +50,197 @@ def test_transfer_branch_to_main_rejects_canon_not_on_main(monkeypatch: pytest.M
         git_helpers.transfer_branch_to_main(tmp_path / "builder", tmp_path / "canon")
 
 
-def test_transfer_branch_to_main_branch_override_takes_precedence(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """An explicit branch= is used as the merge ref regardless of source_repo's current branch."""
-    source_repo = tmp_path / "reviewer"
-    canon_repo = tmp_path / "canon"
-    merges: list[tuple[str, bool]] = []
+# ---------------------------------------------------------------------------
+# transfer_branch_to_main: rebase path (real git repos)
+# ---------------------------------------------------------------------------
 
-    monkeypatch.setattr(
-        git_helpers,
-        "git_current_branch",
-        lambda repo: "main" if repo == canon_repo else "some-other-branch",
+
+def _setup_transfer_scenario(tmp_path: Path, branch: str) -> tuple[Path, Path, Path]:
+    """Return (bare, source, canon): source has *branch* pushed, canon is a fresh clone on main."""
+    origin = _init_repo(tmp_path / "origin")
+    bare = tmp_path / "bare"
+    _git(["clone", "--bare", str(origin), str(bare)], cwd=tmp_path)
+    source = tmp_path / "source"
+    _git(["clone", str(bare), str(source)], cwd=tmp_path)
+    _git(["checkout", "-b", branch], cwd=source)
+    (source / "feature.txt").write_text("feature\n", encoding="utf-8")
+    _git(["add", "."], cwd=source)
+    _git(["commit", "-m", "feature work"], cwd=source)
+    _git(["push", "-u", "origin", branch], cwd=source)
+    canon = tmp_path / "canon"
+    _git(["clone", str(bare), str(canon)], cwd=tmp_path)
+    return bare, source, canon
+
+
+def _advance_main_unrelated(bare: Path, tmp_path: Path, *, name: str = "pusher") -> None:
+    """Push an unrelated commit to bare's main, diverging any branch cut before it."""
+    pusher = tmp_path / name
+    _git(["clone", str(bare), str(pusher)], cwd=tmp_path)
+    (pusher / "unrelated.txt").write_text("unrelated\n", encoding="utf-8")
+    _git(["add", "."], cwd=pusher)
+    _git(["commit", "-m", "unrelated main commit"], cwd=pusher)
+    _git(["push"], cwd=pusher)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_fast_forward_with_real_repos(tmp_path: Path) -> None:
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+
+    result = transfer_branch_to_main(source, canon, branch="feat/x")
+
+    assert result is TransferResult.FAST_FORWARD
+    assert (canon / "feature.txt").exists()
+    bare_main = _git(["rev-parse", "refs/heads/main"], cwd=bare).stdout.decode().strip()
+    canon_main = _git(["rev-parse", "HEAD"], cwd=canon).stdout.decode().strip()
+    assert bare_main == canon_main
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_rebase_refused_without_allow_rebase(tmp_path: Path) -> None:
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    _advance_main_unrelated(bare, tmp_path)
+    _git(["checkout", "feat/x"], cwd=source)
+
+    with pytest.raises(WorkflowError, match="workflow rebase"):
+        transfer_branch_to_main(source, canon, branch="feat/x")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_rebase_succeeds(tmp_path: Path) -> None:
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    _advance_main_unrelated(bare, tmp_path)
+    _git(["checkout", "feat/x"], cwd=source)
+
+    result = transfer_branch_to_main(source, canon, branch="feat/x", allow_rebase=True)
+
+    assert result is TransferResult.REBASED
+    assert (canon / "feature.txt").exists()
+    assert (canon / "unrelated.txt").exists()
+    bare_main = _git(["rev-parse", "refs/heads/main"], cwd=bare).stdout.decode().strip()
+    canon_main = _git(["rev-parse", "HEAD"], cwd=canon).stdout.decode().strip()
+    assert bare_main == canon_main
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_rebase_conflict_aborts_and_raises(tmp_path: Path) -> None:
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    # Conflicting edit to the same file on main.
+    pusher = tmp_path / "pusher"
+    _git(["clone", str(bare), str(pusher)], cwd=tmp_path)
+    (pusher / "feature.txt").write_text("main version\n", encoding="utf-8")
+    _git(["add", "."], cwd=pusher)
+    _git(["commit", "-m", "conflicting main commit"], cwd=pusher)
+    _git(["push"], cwd=pusher)
+    _git(["checkout", "feat/x"], cwd=source)
+    head_before = _git(["rev-parse", "HEAD"], cwd=source).stdout.decode().strip()
+
+    with pytest.raises(WorkflowError, match=r"feature\.txt"):
+        transfer_branch_to_main(source, canon, branch="feat/x", allow_rebase=True)
+
+    # The rebase must have been aborted: source is untouched and not mid-rebase.
+    assert _git(["rev-parse", "HEAD"], cwd=source).stdout.decode().strip() == head_before
+    assert not (source / ".git" / "rebase-apply").exists()
+    assert not (source / ".git" / "rebase-merge").exists()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_rebase_dry_run_does_not_mutate(tmp_path: Path) -> None:
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    _advance_main_unrelated(bare, tmp_path)
+    _git(["checkout", "feat/x"], cwd=source)
+    source_head_before = _git(["rev-parse", "HEAD"], cwd=source).stdout.decode().strip()
+    bare_main_before = _git(["rev-parse", "refs/heads/main"], cwd=bare).stdout.decode().strip()
+
+    result = transfer_branch_to_main(source, canon, branch="feat/x", allow_rebase=True, dry_run=True)
+
+    assert result is TransferResult.REBASED
+    assert _git(["rev-parse", "HEAD"], cwd=source).stdout.decode().strip() == source_head_before
+    assert _git(["rev-parse", "refs/heads/main"], cwd=bare).stdout.decode().strip() == bare_main_before
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_rebase_refuses_dirty_tree(tmp_path: Path) -> None:
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    _advance_main_unrelated(bare, tmp_path)
+    _git(["checkout", "feat/x"], cwd=source)
+    (source / "dirty.txt").write_text("wip\n", encoding="utf-8")
+
+    with pytest.raises(WorkflowError, match="uncommitted changes"):
+        transfer_branch_to_main(source, canon, branch="feat/x", allow_rebase=True)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_rebase_refuses_checked_out_elsewhere(tmp_path: Path) -> None:
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    _advance_main_unrelated(bare, tmp_path)
+    _git(["checkout", "feat/x"], cwd=source)
+    other_worktree = tmp_path / "other"
+    _git(["clone", str(bare), str(other_worktree)], cwd=tmp_path)
+    _git(["checkout", "feat/x"], cwd=other_worktree)
+
+    with pytest.raises(WorkflowError, match=str(other_worktree)):
+        transfer_branch_to_main(
+            source,
+            canon,
+            branch="feat/x",
+            allow_rebase=True,
+            other_worktrees=[other_worktree],
+        )
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_post_rebase_verify_runs_before_push(tmp_path: Path) -> None:
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    _advance_main_unrelated(bare, tmp_path)
+    _git(["checkout", "feat/x"], cwd=source)
+    calls: list[str] = []
+
+    transfer_branch_to_main(
+        source,
+        canon,
+        branch="feat/x",
+        allow_rebase=True,
+        post_rebase_verify=lambda: calls.append("verified"),
     )
-    monkeypatch.setattr(git_helpers, "git_push", MagicMock())
-    monkeypatch.setattr(git_helpers, "git_pull", MagicMock())
-    monkeypatch.setattr(git_helpers, "git_checkout", MagicMock())
-    monkeypatch.setattr(
-        git_helpers,
-        "git_merge",
-        lambda _repo, branch, *, dry_run=False: merges.append((branch, dry_run)),
-    )
 
-    git_helpers.transfer_branch_to_main(source_repo, canon_repo, branch="feat/005_foo", dry_run=True)
+    assert calls == ["verified"]
 
-    assert merges == [("origin/feat/005_foo", True)]
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_post_rebase_verify_failure_blocks_push(tmp_path: Path) -> None:
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    _advance_main_unrelated(bare, tmp_path)
+    _git(["checkout", "feat/x"], cwd=source)
+    bare_branch_before = _git(["rev-parse", "refs/heads/feat/x"], cwd=bare).stdout.decode().strip()
+
+    def _failing_verify() -> None:
+        msg = "hook failed"
+        raise WorkflowError(msg)
+
+    with pytest.raises(WorkflowError, match="hook failed"):
+        transfer_branch_to_main(source, canon, branch="feat/x", allow_rebase=True, post_rebase_verify=_failing_verify)
+
+    # Rebase happened locally (that's what verify is checking), but nothing was pushed.
+    assert _git(["rev-parse", "refs/heads/feat/x"], cwd=bare).stdout.decode().strip() == bare_branch_before
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_falls_back_to_force_push_after_local_rebase(tmp_path: Path) -> None:
+    """Resume scenario: rebased locally in a prior run, but that run's force-push failed."""
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    _advance_main_unrelated(bare, tmp_path)
+    _git(["checkout", "feat/x"], cwd=source)
+    _git(["fetch", "origin"], cwd=source)
+    _git(["rebase", "origin/main"], cwd=source)
+    assert git_status_porcelain(source) == ""
+
+    # branch_needs_rebase is now satisfied (local branch already sits on origin/main), so this
+    # must succeed via the fast-forward path's force-push fallback, with allow_rebase left False.
+    result = transfer_branch_to_main(source, canon, branch="feat/x")
+
+    assert result is TransferResult.FAST_FORWARD
+    assert (canon / "unrelated.txt").exists()
+    assert (canon / "feature.txt").exists()
 
 
 def test_git_merge_includes_double_dash_separator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

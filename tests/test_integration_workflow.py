@@ -12,6 +12,7 @@ import pytest
 from click.testing import CliRunner
 
 import workflow.commands.workflow as wc
+import workflow.git_helpers as git_helpers_module
 from workflow.audit import read_audit_log
 from workflow.cli import main
 from workflow.config import WORKFLOW_ROOT_MARKER
@@ -510,6 +511,117 @@ def test_accept_rerun_after_full_success_is_a_noop(tmp_path: Path, monkeypatch: 
     assert result.exit_code == 0, result.output
     assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout == canon_head_before
     assert _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path / "reviewer").stdout == reviewer_branch_before
+
+
+def _advance_canon_main_unrelated(tmp_path: Path, *, filename: str = "unrelated.txt") -> None:
+    """Add and push an unrelated commit to canon's main, simulating an interleaved transition."""
+    canon = tmp_path / "canon"
+    (canon / filename).write_text("unrelated\n", encoding="utf-8")
+    _git(["add", "."], cwd=canon)
+    _git(["commit", "-m", "unrelated main commit"], cwd=canon)
+    _git(["push"], cwd=canon)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_accept_rebases_when_main_has_advanced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`accept` rebases the feature branch when main advanced after check; main fast-forwards."""
+    _drive_pipeline_through_check(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.yaml"
+    _advance_canon_main_unrelated(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005_foo"])
+
+    assert result.exit_code == 0, result.output
+    assert "rebased" in result.output.lower()
+    canon = tmp_path / "canon"
+    assert (canon / "docs" / "plans" / "done" / "005_foo.md").exists()
+    assert (canon / "unrelated.txt").exists()
+    assert (canon / "README.md").read_text(encoding="utf-8") == "builder work\n"
+    bare_main = _git(["rev-parse", "refs/heads/main"], cwd=tmp_path / "bare").stdout.decode().strip()
+    canon_head = _git(["rev-parse", "HEAD"], cwd=canon).stdout.decode().strip()
+    assert bare_main == canon_head
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_accept_conflict_fails_fast_and_leaves_branch_unrebased(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A genuine conflict aborts the rebase; the branch and main are both left untouched."""
+    _drive_pipeline_through_check(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.yaml"
+    canon = tmp_path / "canon"
+    reviewer = tmp_path / "reviewer"
+    reviewer_head_before = _git(["rev-parse", "HEAD"], cwd=reviewer).stdout
+    canon_head_before = _git(["rev-parse", "HEAD"], cwd=canon).stdout
+
+    # Conflicting edit to the same file builder touched (README.md), pushed to main.
+    (canon / "README.md").write_text("conflicting main edit\n", encoding="utf-8")
+    _git(["add", "."], cwd=canon)
+    _git(["commit", "-m", "conflicting main commit"], cwd=canon)
+    _git(["push"], cwd=canon)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005_foo"])
+
+    assert result.exit_code == 1, result.output
+    assert "README.md" in result.output
+    assert "workflow rebase" in result.output
+    assert _git(["rev-parse", "HEAD"], cwd=reviewer).stdout == reviewer_head_before
+    assert _git(["rev-parse", "HEAD"], cwd=canon).stdout != canon_head_before  # canon's own commit landed, untouched
+    assert not (canon / "docs" / "plans" / "done" / "005_foo.md").exists()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_accept_resumes_as_fast_forward_after_canon_merge_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the rebase/force-push succeed but canon's own push fails, a rerun is a plain fast-forward."""
+    _drive_pipeline_through_check(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.yaml"
+    _advance_canon_main_unrelated(tmp_path)
+
+    real_git_push = git_helpers_module.git_push
+    call_count = {"n": 0}
+
+    def _flaky_canon_push(repo_path: Path, *, dry_run: bool = False) -> None:
+        call_count["n"] += 1
+        # Let the source repo's force-push through; fail canon's own push once.
+        if repo_path == tmp_path / "canon":
+            msg = "simulated transient push failure"
+            raise subprocess.CalledProcessError(1, ["git", "push"], msg.encode())
+        real_git_push(repo_path, dry_run=dry_run)
+
+    monkeypatch.setattr(git_helpers_module, "git_push", _flaky_canon_push)
+    first = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005_foo"])
+    assert first.exit_code == 1, first.output
+
+    monkeypatch.setattr(git_helpers_module, "git_push", real_git_push)
+    second = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005_foo"])
+
+    assert second.exit_code == 0, second.output
+    assert "rebased" not in second.output.lower()  # the rerun is a plain fast-forward, not a rebase
+    canon = tmp_path / "canon"
+    assert (canon / "docs" / "plans" / "done" / "005_foo.md").exists()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_accept_dry_run_previews_rebase_without_mutating(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--dry-run on a rebase-pending accept previews the rebase step and mutates nothing."""
+    _drive_pipeline_through_check(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.yaml"
+    _advance_canon_main_unrelated(tmp_path)
+    reviewer_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "reviewer").stdout
+    canon_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout
+    bare_main_before = _git(["rev-parse", "refs/heads/main"], cwd=tmp_path / "bare").stdout
+
+    result = CliRunner().invoke(main, ["--dry-run", "--config", str(config_path), "accept", "005_foo"])
+
+    assert result.exit_code == 0, result.output
+    assert "rebase reviewer branch onto main" in result.output
+    assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "reviewer").stdout == reviewer_head_before
+    assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout == canon_head_before
+    assert _git(["rev-parse", "refs/heads/main"], cwd=tmp_path / "bare").stdout == bare_main_before
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")

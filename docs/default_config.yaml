@@ -123,6 +123,17 @@ states:
       - command_type: manual
         name: revise
         description: Human revises the plan.
+      - command_type: prompt
+        name: rebase
+        description: Rebase the working branch onto current main.
+        prompt: |
+          The branch {{ branch }} can no longer be fast-forward merged into `main`,
+          and the automatic rebase hit conflicts.
+          Fetch from origin and rebase {{ branch }} onto `origin/main`.
+          Resolve the conflicts, preserving the intent of both sides; do not drop changes from `main`.
+          Run the pre-commit hook and make sure it passes.
+          Do not push: you have no write access to the shared repository.
+        reminder: validate
       - command_type: script
         name: todo
         description: Approve for implementation.
@@ -203,6 +214,17 @@ states:
         description: Fix issues from the most recent review.
         prompt: |
           Fix the issues identified in the most recent review `docs/plans/reviews/pr/{{ plan.name }}_*.md`.
+        reminder: validate
+      - command_type: prompt
+        name: rebase
+        description: Rebase the working branch onto current main.
+        prompt: |
+          The branch {{ branch }} can no longer be fast-forward merged into `main`,
+          and the automatic rebase hit conflicts.
+          Fetch from origin and rebase {{ branch }} onto `origin/main`.
+          Resolve the conflicts, preserving the intent of both sides; do not drop changes from `main`.
+          Run the pre-commit hook and make sure it passes.
+          Do not push: you have no write access to the shared repository.
         reminder: validate
       - command_type: script
         name: validate

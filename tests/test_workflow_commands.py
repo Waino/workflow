@@ -355,6 +355,7 @@ def test_todo_transitions_and_prints_implement_reminder(tmp_path: Path, monkeypa
     monkeypatch.setattr(wc, "git_index_lock_present", MagicMock(return_value=False))
     monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="main"))
     monkeypatch.setattr(wc, "park_on_main", MagicMock())
+    monkeypatch.setattr(wc, "branch_needs_rebase", MagicMock(return_value=False))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "todo", "005"])
 
@@ -563,6 +564,7 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(wc, "git_checkout", fake_commit)
     monkeypatch.setattr(wc, "park_on_main", fake_pull)
     monkeypatch.setattr(wc, "refresh_main", fake_pull)
+    monkeypatch.setattr(wc, "branch_needs_rebase", MagicMock(return_value=False))
 
     accept_result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005"])
     reject_result = CliRunner().invoke(
@@ -995,6 +997,12 @@ def test_implement_from_planning_branch_transfers_and_transitions(
     monkeypatch.setattr(wc, "git_checkout", _checkout)
     monkeypatch.setattr(git_helpers, "git_checkout", _checkout)
     monkeypatch.setattr(git_helpers, "git_merge", _merge)
+    # Fast-forward decision is git_helpers' own concern (see its real-git tests); pin it here
+    # so this test can stay focused on implement's transition/branch orchestration. Patch both
+    # names: wc's classify step calls its own imported alias, transfer_branch_to_main calls
+    # git_helpers' module-level one.
+    monkeypatch.setattr(wc, "branch_needs_rebase", lambda *_a, **_kw: False)
+    monkeypatch.setattr(git_helpers, "branch_needs_rebase", lambda *_a, **_kw: False)
 
     def _commit_if_changed(*_a: object, **_kw: object) -> CommitResult:
         call_order.append("commit")

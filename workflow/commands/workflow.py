@@ -26,6 +26,8 @@ from workflow.exceptions import (
     WorkflowError,
 )
 from workflow.git_helpers import (
+    TransferResult,
+    branch_needs_rebase,
     git_add,
     git_branch_exists,
     git_checkout,
@@ -589,14 +591,24 @@ def new(ctx: click.Context, slug: str) -> None:
 
 # Step-name constants: the join key between _classify_todo_steps and todo()'s run phase.
 _STEP_TODO_TRANSFER = "transfer planner branch to main"
+_STEP_TODO_REBASE = "rebase planner branch onto main"
 _STEP_TODO_TRANSITION = "transition to todo"
 
 
 def _classify_todo_steps(resume: ResumePlan, plan: Plan, project_dir: Path) -> None:
-    if plan.state == PlanState.PLANNING:
+    planner_repo = project_dir / RepoName.planner
+    transfer_will_run = plan.state == PlanState.PLANNING
+    if transfer_will_run:
         resume.will_run(_STEP_TODO_TRANSFER)
     else:
         resume.satisfied(_STEP_TODO_TRANSFER, "plan already past planning")
+    _classify_rebase_step(
+        resume,
+        _STEP_TODO_REBASE,
+        planner_repo,
+        git_current_branch(planner_repo),
+        transfer_will_run=transfer_will_run,
+    )
 
     todo_path = project_dir / RepoName.canon / "docs" / "plans" / "todo" / plan.path.name
     if todo_path.exists():
@@ -638,7 +650,17 @@ def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
         resume.render()
 
         if resume.should_run(_STEP_TODO_TRANSFER):
-            transfer_branch_to_main(planner_repo, canon_repo, dry_run=dry_run)
+            planner_branch = git_current_branch(planner_repo)
+            result = transfer_branch_to_main(
+                planner_repo,
+                canon_repo,
+                branch=planner_branch,
+                allow_rebase=resume.should_run(_STEP_TODO_REBASE),
+                other_worktrees=_other_worktrees(project_dir, RepoName.planner),
+                post_rebase_verify=lambda: _run_pre_commit_hook(config, RepoName.planner, dry_run=dry_run),
+                dry_run=dry_run,
+            )
+            _warn_if_rebased(result, planner_branch)
         # Value-returning transition: always call (idempotent) so new_plan reflects the
         # target dir even when the git mv itself is a no-op (Fix 2 "value-returning steps").
         new_plan = _transition_if_needed(
@@ -663,6 +685,36 @@ def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
         ctx.exit(1)
         return
     ctx.exit(0)
+
+
+def _other_worktrees(project_dir: Path, source_repo: str) -> list[Path]:
+    """Return the other three agent repos plus canon, excluding *source_repo* itself."""
+    return [project_dir / repo for repo in RepoName if repo != source_repo]
+
+
+def _classify_rebase_step(
+    resume: ResumePlan,
+    step_name: str,
+    source_repo: Path,
+    branch: str,
+    *,
+    transfer_will_run: bool,
+) -> None:
+    """Classify a transfer's rebase step: probes only when the transfer step itself will run."""
+    if not transfer_will_run:
+        resume.satisfied(step_name, "transfer already done or not needed")
+    elif branch_needs_rebase(source_repo, branch):
+        resume.will_run(step_name)
+    else:
+        resume.satisfied(step_name, "branch already based on current main")
+
+
+def _warn_if_rebased(result: TransferResult, branch: str) -> None:
+    if result is TransferResult.REBASED:
+        error_console.print(
+            f"[yellow]\\[!] {branch} did not fast-forward and was rebased onto main; "
+            "history was rewritten. Review the change.[/yellow]",
+        )
 
 
 def _ensure_branch_checked_out(repo_path: Path, branch: str, *, dry_run: bool) -> None:
@@ -707,6 +759,7 @@ def _transition_if_needed(  # noqa: PLR0913
 
 # Step-name constants: the join key between _classify_implement_steps and _run_implement_steps.
 _STEP_IMPLEMENT_TRANSFER = "transfer planner branch to main"
+_STEP_IMPLEMENT_REBASE = "rebase planner branch onto main"
 _STEP_IMPLEMENT_TRANSITION_TODO = "transition to todo"
 _STEP_IMPLEMENT_TRANSITION_IMPLEMENTING = "transition to implementing"
 _STEP_IMPLEMENT_FETCH_BUILDER = "fetch builder"
@@ -720,12 +773,21 @@ def _classify_implement_steps(
     builder_repo: Path,
     feature_branch: str,
 ) -> None:
-    if plan.state == PlanState.PLANNING:
+    transfer_will_run = plan.state == PlanState.PLANNING
+    if transfer_will_run:
         resume.will_run(_STEP_IMPLEMENT_TRANSFER)
         resume.will_run(_STEP_IMPLEMENT_TRANSITION_TODO)
     else:
         resume.satisfied(_STEP_IMPLEMENT_TRANSFER, "plan already past planning")
         resume.satisfied(_STEP_IMPLEMENT_TRANSITION_TODO, "plan already past planning")
+    planner_repo = project_dir / RepoName.planner
+    _classify_rebase_step(
+        resume,
+        _STEP_IMPLEMENT_REBASE,
+        planner_repo,
+        git_current_branch(planner_repo),
+        transfer_will_run=transfer_will_run,
+    )
 
     implementing_path = project_dir / RepoName.canon / "docs" / "plans" / "implementing" / plan.path.name
     if implementing_path.exists():
@@ -768,6 +830,7 @@ def _run_implement_steps(  # noqa: PLR0913
     project_dir: Path,
     builder_repo: Path,
     feature_branch: str,
+    config: WorkflowConfig,
     *,
     dry_run: bool,
 ) -> Plan:
@@ -776,7 +839,17 @@ def _run_implement_steps(  # noqa: PLR0913
     if transfer_ran:
         planner_repo = project_dir / RepoName.planner
         canon_repo = project_dir / RepoName.canon
-        transfer_branch_to_main(planner_repo, canon_repo, dry_run=dry_run)
+        planner_branch = git_current_branch(planner_repo)
+        result = transfer_branch_to_main(
+            planner_repo,
+            canon_repo,
+            branch=planner_branch,
+            allow_rebase=resume.should_run(_STEP_IMPLEMENT_REBASE),
+            other_worktrees=_other_worktrees(project_dir, RepoName.planner),
+            post_rebase_verify=lambda: _run_pre_commit_hook(config, RepoName.planner, dry_run=dry_run),
+            dry_run=dry_run,
+        )
+        _warn_if_rebased(result, planner_branch)
         plan = _transition_if_needed(plan, PlanState.TODO, project_dir, repo_override=RepoName.canon, dry_run=dry_run)
 
     # Value-returning transition: always call (idempotent), regardless of should_run, so
@@ -835,7 +908,15 @@ def implement(ctx: click.Context, plan_path: str, *, cont: bool) -> None:
             ctx.exit(1)
             return
 
-        new_plan = _run_implement_steps(resume, plan, project_dir, builder_repo, feature_branch, dry_run=dry_run)
+        new_plan = _run_implement_steps(
+            resume,
+            plan,
+            project_dir,
+            builder_repo,
+            feature_branch,
+            config,
+            dry_run=dry_run,
+        )
         _write_script_audit_log(config, "implement", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.TODO, "implement", new_plan.name)
         if not dry_run:
@@ -1102,6 +1183,7 @@ def push(ctx: click.Context, plan_path: str) -> None:
 
 # Step-name constant: the join key between _classify_accept_steps and accept()'s run phase.
 _STEP_ACCEPT_TRANSFER = "transfer reviewer branch to main"
+_STEP_ACCEPT_REBASE = "rebase reviewer branch onto main"
 
 
 def _classify_accept_steps(resume: ResumePlan, plan: Plan, project_dir: Path, branch: str) -> None:
@@ -1110,10 +1192,18 @@ def _classify_accept_steps(resume: ResumePlan, plan: Plan, project_dir: Path, br
     # transfer_branch_to_main is one guarded+idempotent unit (Fix 3); classify it as a
     # single step so classify- and run-granularity stay aligned (see plan 020.1 Fix 3
     # granularity note).
-    if git_is_ancestor(canon_repo, f"origin/{branch}", "main"):
-        resume.satisfied(_STEP_ACCEPT_TRANSFER, "origin/<branch> already merged into main")
-    else:
+    transfer_will_run = not git_is_ancestor(canon_repo, f"origin/{branch}", "main")
+    if transfer_will_run:
         resume.will_run(_STEP_ACCEPT_TRANSFER)
+    else:
+        resume.satisfied(_STEP_ACCEPT_TRANSFER, "origin/<branch> already merged into main")
+    _classify_rebase_step(
+        resume,
+        _STEP_ACCEPT_REBASE,
+        project_dir / RepoName.reviewer,
+        branch,
+        transfer_will_run=transfer_will_run,
+    )
 
     target_path = project_dir / RepoName.canon / "docs" / "plans" / "done" / plan.path.name
     if target_path.exists():
@@ -1158,7 +1248,16 @@ def accept(ctx: click.Context, plan_path: str) -> None:
         # Gated on should_run: unlike a fresh run, a resume where this already landed must
         # not re-transfer a branch already merged into main.
         if resume.should_run(_STEP_ACCEPT_TRANSFER):
-            transfer_branch_to_main(reviewer_repo, canon_repo, branch=branch, dry_run=dry_run)
+            result = transfer_branch_to_main(
+                reviewer_repo,
+                canon_repo,
+                branch=branch,
+                allow_rebase=resume.should_run(_STEP_ACCEPT_REBASE),
+                other_worktrees=_other_worktrees(project_dir, RepoName.reviewer),
+                post_rebase_verify=lambda: _run_pre_commit_hook(config, RepoName.reviewer, dry_run=dry_run),
+                dry_run=dry_run,
+            )
+            _warn_if_rebased(result, branch)
         # Value-returning transition: always call (idempotent) so new_plan reflects the
         # target dir even when the git mv itself is a no-op (Fix 2 "value-returning steps").
         new_plan = _transition_if_needed(

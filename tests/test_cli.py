@@ -149,6 +149,40 @@ def test_pr_uses_reviewer_repo_and_renders_branch_commit_and_plan(
     assert "docs/plans/reviews/pr/004_cli_framework_1e84d3a.md" in prompts[0]
 
 
+@pytest.mark.parametrize(
+    ("state", "repo"),
+    [("planning", "planner"), ("checking", "reviewer")],
+)
+def test_rebase_prompt_renders_target_repo_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+    repo: str,
+) -> None:
+    """The 'rebase' prompt's {{ branch }} is the target repo's branch, in both planning/checking."""
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, repo, state, "004_cli_framework.md")
+    monkeypatch.chdir(tmp_path)
+    prompts: list[str] = []
+
+    def fake_send(_agent_name: str, prompt: str, _config: object, *, dry_run: bool = False) -> None:
+        del dry_run
+        prompts.append(prompt)
+
+    monkeypatch.setattr(tmux_dispatch, "git_pull", MagicMock())
+    monkeypatch.setattr(tmux_dispatch, "refresh_main", MagicMock())
+    monkeypatch.setattr(tmux_dispatch, "git_current_branch", MagicMock(return_value="feat/004_cli_framework"))
+    monkeypatch.setattr(tmux_dispatch, "git_commit_hash", MagicMock(return_value="1e84d3a"))
+    monkeypatch.setattr(tmux_dispatch, "write_audit_log", MagicMock())
+    monkeypatch.setattr(tmux_dispatch, "send_prompt_to_agent", fake_send)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "rebase", "004"])
+
+    assert result.exit_code == 0, result.output
+    assert "feat/004_cli_framework" in prompts[0]
+    assert "Do not push" in prompts[0]
+
+
 def test_full_review_works_without_plan_argument(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)

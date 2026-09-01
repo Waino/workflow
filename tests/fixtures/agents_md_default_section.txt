@@ -41,6 +41,7 @@ Commands:
 - [manual] adjust — Human edits the plan directly.
 - [prompt] critique — Critique the plan.
 - [manual] revise — Human revises the plan.
+- [prompt] rebase — Rebase the working branch onto current main.
 - [script] todo -> todo — Approve for implementation.
 
 ### todo (agent: human operator)
@@ -70,6 +71,7 @@ Commands:
 - [prompt] pr — Write a thorough code review.
 - [manual] adjust — Human edits the review or code directly.
 - [prompt] fix — Fix issues from the most recent review.
+- [prompt] rebase — Rebase the working branch onto current main.
 - [script] validate — Run verification checks.
 - [script] accept -> done — Accept and merge to main.
 - [script] reject -> rejected — Close out without merging.

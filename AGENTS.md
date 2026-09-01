@@ -59,6 +59,8 @@ Outbound: plan -> planning [prompt], subdivide -> planning [prompt]
 Commands:
 - [script] new — Create a new intent file.
 - [script] push — Push pending content to canon.
+- [prompt] architecture — Read the idea; discuss critical architectural choices.
+- [prompt] mvp — Create a plan sequence for the MVP slice
 - [prompt] ask — Read the plan; ask clarifying questions.
 - [manual] answer — Human answers questions in chat.
 - [prompt] critique — Critique the plan.
@@ -74,6 +76,7 @@ Commands:
 - [manual] adjust — Human edits the plan directly.
 - [prompt] critique — Critique the plan.
 - [manual] revise — Human revises the plan.
+- [prompt] rebase — Rebase the working branch onto current main.
 - [script] todo -> todo — Approve for implementation.
 
 ### todo (agent: human operator)
@@ -103,6 +106,7 @@ Commands:
 - [prompt] pr — Write a thorough code review.
 - [manual] adjust — Human edits the review or code directly.
 - [prompt] fix — Fix issues from the most recent review.
+- [prompt] rebase — Rebase the working branch onto current main.
 - [script] validate — Run verification checks.
 - [script] accept -> done — Accept and merge to main.
 - [script] reject -> rejected — Close out without merging.
