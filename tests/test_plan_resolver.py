@@ -27,6 +27,7 @@ from workflow.plan_resolver import (
     _parse_git_log_output,
     find_all_plans,
     find_all_plans_in_repo,
+    find_plan_file_in_repo,
     parse_plan_filename,
     parse_review_filename,
     resolve_plan,
@@ -250,6 +251,26 @@ class TestFindAllPlansInRepo:
         _make_plan(tmp_path, "canon", PlanState.INTENT, "001_idea.md")
         plans = find_all_plans_in_repo(tmp_path, "canon")
         assert plans[0].path == Path("canon/docs/plans/intent/001_idea.md")
+
+
+class TestFindPlanFileInRepo:
+    def test_found(self, tmp_path: Path) -> None:
+        _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "005_foo.md")
+        result = find_plan_file_in_repo(tmp_path, "canon", "005_foo.md")
+        assert result == tmp_path / "canon" / "docs" / "plans" / "implementing" / "005_foo.md"
+
+    def test_absent(self, tmp_path: Path) -> None:
+        assert find_plan_file_in_repo(tmp_path, "canon", "005_foo.md") is None
+
+    def test_duplicated_raises(self, tmp_path: Path) -> None:
+        _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "005_foo.md")
+        _make_plan(tmp_path, "canon", PlanState.CHECKING, "005_foo.md")
+        with pytest.raises(WorkflowError, match="multiple state dirs"):
+            find_plan_file_in_repo(tmp_path, "canon", "005_foo.md")
+
+    def test_excludes_reviews(self, tmp_path: Path) -> None:
+        _make_review(tmp_path, "canon", ReviewSubState.PR, "005_foo_0e6baa9.md")
+        assert find_plan_file_in_repo(tmp_path, "canon", "005_foo_0e6baa9.md") is None
 
 
 # ---------------------------------------------------------------------------

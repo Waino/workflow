@@ -1214,6 +1214,9 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
         )
         git_push(project_dir / target_repo, dry_run=dry_run)
         _write_script_audit_log(config, "reject", dry_run=dry_run, input_plan=plan.name)
+        console.print(
+            f"[yellow]Note:[/yellow] feat/{plan.name} is left unmerged and can be deleted manually.",
+        )
     except (
         subprocess.CalledProcessError,
         PlanNotFoundError,

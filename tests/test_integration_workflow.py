@@ -513,6 +513,34 @@ def test_accept_rerun_after_full_success_is_a_noop(tmp_path: Path, monkeypatch: 
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_reject_checking_plan_through_default_canon_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`reject`'s default invocation (--target-repo canon) on a `checking` plan must succeed.
+
+    Regression test for the path-mismatch defect (plan 024 Phase 1): canon's `main` still
+    has the plan file under `implementing/` (the `checking` transition only ever landed on
+    the feature branch), so the `git mv` source must be located by scanning canon, not by
+    trusting the resolved plan's (feature-branch) state directory.
+    """
+    _drive_pipeline_through_check(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.yaml"
+    canon = tmp_path / "canon"
+    assert (canon / "docs" / "plans" / "implementing" / "005_foo.md").exists()
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "reject", "005_foo"])
+
+    assert result.exit_code == 0, result.output
+    assert (canon / "docs" / "plans" / "rejected" / "005_foo.md").exists()
+    assert not (canon / "docs" / "plans" / "implementing" / "005_foo.md").exists()
+    assert "left unmerged" in result.output
+    # The feature branch must not have been merged into canon's main.
+    canon_log = _git(["log", "--oneline", "-1"], cwd=canon).stdout.decode()
+    assert "builder work" not in canon_log
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_reject_resumes_after_mv_without_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A resumed `reject` (file already `git mv`-ed but not committed) must complete."""
     _drive_pipeline_through_check(tmp_path, monkeypatch)

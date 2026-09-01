@@ -191,6 +191,28 @@ def find_all_plans_in_repo(project_dir: Path, repo: str = RepoName.canon) -> lis
     return plans
 
 
+def find_plan_file_in_repo(project_dir: Path, repo_name: str, plan_file_name: str) -> Path | None:
+    """Return the absolute path of *plan_file_name* under any state dir of *repo_name*, or ``None``.
+
+    Reuses :func:`find_all_plans_in_repo`'s walk rather than re-globbing. Excludes
+    ``docs/plans/reviews/`` (reviews are never transitioned). Raises
+    :class:`~workflow.exceptions.WorkflowError` if *plan_file_name* exists under more
+    than one state dir in *repo_name* -- that is the signature of a botched transition
+    (the same anomaly ``workflow doctor`` flags), and silently picking one would
+    corrupt state.
+    """
+    matches = [
+        project_dir / plan.path
+        for plan in find_all_plans_in_repo(project_dir, repo_name)
+        if not isinstance(plan, Review) and plan.path.name == plan_file_name
+    ]
+    if len(matches) > 1:
+        states = ", ".join(sorted(m.parent.name for m in matches))
+        msg = f"{plan_file_name} appears in multiple state dirs in {repo_name}: {states}"
+        raise WorkflowError(msg)
+    return matches[0] if matches else None
+
+
 def _top_level_number_from_name(plan_name: str) -> int | None:
     """Extract the top-level sequence number from a plan name like '003_foo'.
 
