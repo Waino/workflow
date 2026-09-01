@@ -39,11 +39,17 @@ def transition_plan(
     repo_path = project_dir / repo_name
     source = find_plan_file_in_repo(project_dir, repo_name, plan.path.name)
     if source is None:
-        msg = (
-            f"{plan.path.name} not found in {repo_name}; push it to main first "
-            f"(workflow push {plan.path.name}) or pass --target-repo"
-        )
-        raise WorkflowError(msg)
+        if not dry_run:
+            msg = (
+                f"{plan.path.name} not found in {repo_name}; push it to main first "
+                f"(workflow push {plan.path.name}) or pass --target-repo"
+            )
+            raise WorkflowError(msg)
+        # Preview-only fallback: an earlier step in this same dry run (e.g. the branch
+        # transfer) may not have actually landed the file yet, since dry-run never
+        # pushes for real. Guess the path a real run would find it at -- git_mv only
+        # prints the command in dry-run, so this guess is never touched on disk.
+        source = repo_path / "docs" / "plans" / plan.state.value / plan.path.name
     target_dir = repo_path / "docs" / "plans" / target_state.value
     if not dry_run:
         target_dir.mkdir(parents=True, exist_ok=True)

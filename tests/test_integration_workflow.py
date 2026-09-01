@@ -513,6 +513,32 @@ def test_accept_rerun_after_full_success_is_a_noop(tmp_path: Path, monkeypatch: 
     assert _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path / "reviewer").stdout == reviewer_branch_before
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_todo_dry_run_previews_rebase_without_mutating(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--dry-run on a rebase-pending `todo` previews the rebase step and mutates nothing."""
+    _drive_pipeline_through_todo(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.yaml"
+    planner = tmp_path / "planner"
+
+    _git(["checkout", "-b", "plan/006_bar"], cwd=planner)
+    _make_plan(planner, "planning", "006_bar.md")
+    _git(["add", "."], cwd=planner)
+    _git(["commit", "-m", "add planning plan 006"], cwd=planner)
+    _advance_canon_main_unrelated(tmp_path)
+
+    planner_head_before = _git(["rev-parse", "HEAD"], cwd=planner).stdout
+    canon_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout
+    bare_main_before = _git(["rev-parse", "refs/heads/main"], cwd=tmp_path / "bare").stdout
+
+    result = CliRunner().invoke(main, ["--dry-run", "--config", str(config_path), "todo", "006_bar"])
+
+    assert result.exit_code == 0, result.output
+    assert "rebase planner branch onto main" in result.output
+    assert _git(["rev-parse", "HEAD"], cwd=planner).stdout == planner_head_before
+    assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout == canon_head_before
+    assert _git(["rev-parse", "refs/heads/main"], cwd=tmp_path / "bare").stdout == bare_main_before
+
+
 def _advance_canon_main_unrelated(tmp_path: Path, *, filename: str = "unrelated.txt") -> None:
     """Add and push an unrelated commit to canon's main, simulating an interleaved transition."""
     canon = tmp_path / "canon"

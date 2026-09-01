@@ -335,6 +335,15 @@ docker script from plans 017/021.
   in `planning`, after `fix` in `checking`), immediately before that state's script commands --
   preserves the plan's "script/prompt grouping" instruction while keeping it next to the other
   recovery-oriented prompts.
+- **Phase 1's strict source lookup broke `--dry-run` on a never-before-transferred plan.**
+  `transition_plan`'s scan-based lookup runs even in `--dry-run`, but a dry run never actually
+  pushes, so a plan being `todo`'d (or rebased) for the very first time genuinely isn't in the
+  target repo yet -- the old behaviour (trusting `plan.path`'s directory, unchecked) happened to
+  paper over this because `git_mv` itself never touches disk in dry-run. Fixed in `transition_plan`:
+  in `--dry-run` only, a missing source falls back to the same guessed path the old code used,
+  purely for the preview print. Real runs still get the accurate, strict lookup. Caught by (and
+  regression-tested in) `test_todo_dry_run_previews_rebase_without_mutating` and
+  `test_transition_plan_dry_run_guesses_source_when_not_yet_landed`.
 - **This repo's own `AGENTS.md`** has no accompanying `.agents_md_hash` (this is the tool's source
   checkout, not a live workflow project instance with a `bare`/agent-repo layout), so only the
   managed section was resynced against the golden fixture -- which incidentally also picked up two

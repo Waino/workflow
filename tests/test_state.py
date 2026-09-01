@@ -102,7 +102,27 @@ def test_transition_plan_raises_clear_error_when_source_missing(tmp_path: Path) 
     plan = _plan(repo="canon", state_value=PlanState.IMPLEMENTING)
 
     with pytest.raises(WorkflowError, match="not found in canon"):
-        state.transition_plan(plan, PlanState.CHECKING, tmp_path, repo_override="canon", dry_run=True)
+        state.transition_plan(plan, PlanState.CHECKING, tmp_path, repo_override="canon", dry_run=False)
+
+
+def test_transition_plan_dry_run_guesses_source_when_not_yet_landed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dry-run must preview optimistically when an earlier (also simulated) step hasn't landed the file."""
+    captured: dict[str, object] = {}
+
+    def fake_git_mv(repo_path: Path, source: Path, target: Path, *, dry_run: bool = False) -> None:
+        captured.update(repo_path=repo_path, source=source, target=target, dry_run=dry_run)
+
+    monkeypatch.setattr(state, "git_mv", fake_git_mv)
+    plan = _plan(repo="canon", state_value=PlanState.IMPLEMENTING)
+
+    new_plan = state.transition_plan(plan, PlanState.CHECKING, tmp_path, repo_override="canon", dry_run=True)
+
+    assert captured["source"] == tmp_path / "canon/docs/plans/implementing/005_foo.md"
+    assert captured["target"] == tmp_path / "canon/docs/plans/checking/005_foo.md"
+    assert new_plan.path == Path("canon/docs/plans/checking/005_foo.md")
 
 
 def test_transition_plan_raises_on_duplicate_source(tmp_path: Path) -> None:
