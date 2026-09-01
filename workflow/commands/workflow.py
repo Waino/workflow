@@ -604,13 +604,7 @@ def _classify_todo_steps(resume: ResumePlan, plan: Plan, project_dir: Path) -> N
         resume.will_run(_STEP_TODO_TRANSFER)
     else:
         resume.satisfied(_STEP_TODO_TRANSFER, "plan already past planning")
-    _classify_rebase_step(
-        resume,
-        _STEP_TODO_REBASE,
-        planner_repo,
-        git_current_branch(planner_repo),
-        transfer_will_run=transfer_will_run,
-    )
+    _classify_rebase_step(resume, _STEP_TODO_REBASE, planner_repo, transfer_will_run=transfer_will_run)
 
     todo_path = project_dir / RepoName.canon / "docs" / "plans" / "todo" / plan.path.name
     if todo_path.exists():
@@ -623,9 +617,14 @@ def _classify_todo_steps(resume: ResumePlan, plan: Plan, project_dir: Path) -> N
 
 @register_script("todo")
 @click.argument("plan_path")
-@click.option("--force", is_flag=True, help="Continue even when validation fails")
+@click.option("--force-validation", is_flag=True, help="Continue even when validation fails")
+@click.option(
+    "--force-push",
+    is_flag=True,
+    help="Allow force-pushing a branch an earlier run rebased but failed to publish",
+)
 @click.pass_context
-def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
+def todo(ctx: click.Context, plan_path: str, *, force_validation: bool, force_push: bool) -> None:
     """Approve a ticket: push from planner, pull to canon, transition to todo."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
@@ -643,7 +642,7 @@ def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
         results = run_validate(plan, project_dir, config, target_repo_override="planner", dry_run=dry_run)
         if not dry_run:
             _print_results(results)
-            if not force and any(result.status == "fail" for result in results):
+            if not force_validation and any(result.status == "fail" for result in results):
                 ctx.exit(1)
                 return
 
@@ -658,6 +657,8 @@ def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
                 canon_repo,
                 branch=planner_branch,
                 allow_rebase=resume.should_run(_STEP_TODO_REBASE),
+                force_push=force_push,
+                already_fetched=True,  # the rebase classification step just fetched
                 other_worktrees=_other_worktrees(project_dir, RepoName.planner),
                 post_rebase_verify=lambda: _run_pre_commit_hook(config, RepoName.planner, dry_run=dry_run),
                 dry_run=dry_run,
@@ -673,7 +674,7 @@ def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
             dry_run=dry_run,
         )
         git_push(canon_repo, dry_run=dry_run)
-        park_on_main(planner_repo, dry_run=dry_run)
+        _sync_repos_best_effort(project_dir, park=RepoName.planner, dry_run=dry_run)
         _write_script_audit_log(config, "todo", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.PLANNING, "todo", new_plan.name)
     except (
@@ -690,22 +691,50 @@ def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
 
 
 def _other_worktrees(project_dir: Path, source_repo: str) -> list[Path]:
-    """Return the other three agent repos plus canon, excluding *source_repo* itself."""
+    """Return every repo except *source_repo* itself."""
     return [project_dir / repo for repo in RepoName if repo != source_repo]
+
+
+def _sync_repos_best_effort(project_dir: Path, *, park: RepoName | None = None, dry_run: bool) -> None:
+    """Bring every repo's ``main`` up to date, parking *park* on it; failures only warn.
+
+    Runs after a handoff has already landed, so a sync problem must not fail the command
+    (same rationale as :func:`_rotate_best_effort`). All four clones are refreshed, not
+    just the two the handoff touched: a clone left behind cuts its next branch from a
+    stale ``main``, and ``doctor``'s stale-main check treats any difference from bare as
+    an anomaly. Only *park* is checked out to ``main`` -- the others may be mid-work.
+    """
+    for repo in RepoName:
+        repo_path = project_dir / repo
+        if not repo_path.is_dir():
+            continue
+        try:
+            if repo == park:
+                park_on_main(repo_path, dry_run=dry_run)
+            else:
+                refresh_main(repo_path, dry_run=dry_run)
+        except (subprocess.CalledProcessError, WorkflowError) as exc:
+            error_console.print(f"[yellow]main sync skipped in {repo_path}: {exc}[/yellow]")
 
 
 def _classify_rebase_step(
     resume: ResumePlan,
     step_name: str,
     source_repo: Path,
-    branch: str,
     *,
+    branch: str | None = None,
     transfer_will_run: bool,
 ) -> None:
-    """Classify a transfer's rebase step: probes only when the transfer step itself will run."""
+    """Classify a transfer's rebase step, probing only when the transfer step will run.
+
+    Nothing touches *source_repo* otherwise -- not even to read its current branch, which
+    is what *branch* defaults to. The probe's ``git fetch`` is why the run phase can pass
+    ``already_fetched=True`` to :func:`transfer_branch_to_main`.
+    """
     if not transfer_will_run:
         resume.satisfied(step_name, "transfer already done or not needed")
-    elif branch_needs_rebase(source_repo, branch):
+        return
+    if branch_needs_rebase(source_repo, branch or git_current_branch(source_repo)):
         resume.will_run(step_name)
     else:
         resume.satisfied(step_name, "branch already based on current main")
@@ -782,12 +811,10 @@ def _classify_implement_steps(
     else:
         resume.satisfied(_STEP_IMPLEMENT_TRANSFER, "plan already past planning")
         resume.satisfied(_STEP_IMPLEMENT_TRANSITION_TODO, "plan already past planning")
-    planner_repo = project_dir / RepoName.planner
     _classify_rebase_step(
         resume,
         _STEP_IMPLEMENT_REBASE,
-        planner_repo,
-        git_current_branch(planner_repo),
+        project_dir / RepoName.planner,
         transfer_will_run=transfer_will_run,
     )
 
@@ -834,6 +861,7 @@ def _run_implement_steps(  # noqa: PLR0913
     feature_branch: str,
     config: WorkflowConfig,
     *,
+    force_push: bool,
     dry_run: bool,
 ) -> Plan:
     """Run the (already-classified) implement steps, gated on resume.should_run."""
@@ -847,6 +875,8 @@ def _run_implement_steps(  # noqa: PLR0913
             canon_repo,
             branch=planner_branch,
             allow_rebase=resume.should_run(_STEP_IMPLEMENT_REBASE),
+            force_push=force_push,
+            already_fetched=True,  # the rebase classification step just fetched
             other_worktrees=_other_worktrees(project_dir, RepoName.planner),
             post_rebase_verify=lambda: _run_pre_commit_hook(config, RepoName.planner, dry_run=dry_run),
             dry_run=dry_run,
@@ -861,11 +891,10 @@ def _run_implement_steps(  # noqa: PLR0913
 
     canon_repo = project_dir / RepoName.canon
     git_push(canon_repo, dry_run=dry_run)
-    if transfer_ran:
-        park_on_main(project_dir / RepoName.planner, dry_run=dry_run)
-    # Builder keeps its new feat/* branch (created below), so it is refreshed rather than
-    # parked -- park_on_main would check it back out onto 'main'.
-    refresh_main(project_dir / RepoName.builder, dry_run=dry_run)
+    # Only planner is parked: builder keeps the new feat/* branch created below, so
+    # parking it would check it straight back out onto 'main'. With no transfer there is
+    # no planner branch involved at all, so nothing to park either.
+    _sync_repos_best_effort(project_dir, park=RepoName.planner if transfer_ran else None, dry_run=dry_run)
     # Leave an existing feature branch (and any work in progress on it) untouched: the branch
     # creation is coupled to this same gate, not classified/gated separately (see above).
     if resume.should_run(_STEP_IMPLEMENT_FETCH_BUILDER):
@@ -879,9 +908,14 @@ def _run_implement_steps(  # noqa: PLR0913
 
 @register_script("implement")
 @click.option("--continue", "cont", is_flag=True, help="Proceed past rough (unverifiable) partial state.")
+@click.option(
+    "--force-push",
+    is_flag=True,
+    help="Allow force-pushing a branch an earlier run rebased but failed to publish",
+)
 @click.argument("plan_path")
 @click.pass_context
-def implement(ctx: click.Context, plan_path: str, *, cont: bool) -> None:
+def implement(ctx: click.Context, plan_path: str, *, cont: bool, force_push: bool) -> None:
     """Schedule a ticket for implementation: transition to implementing and push."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
@@ -917,6 +951,7 @@ def implement(ctx: click.Context, plan_path: str, *, cont: bool) -> None:
             builder_repo,
             feature_branch,
             config,
+            force_push=force_push,
             dry_run=dry_run,
         )
         _write_script_audit_log(config, "implement", dry_run=dry_run, input_plan=plan.name)
@@ -1054,10 +1089,10 @@ def _classify_check_steps(resume: ResumePlan, plan: Plan, project_dir: Path, tar
     show_default=True,
     help="Repo whose sandbox and branch should be pushed.",
 )
-@click.option("--force", is_flag=True, help="Continue even when validation fails")
+@click.option("--force-validation", is_flag=True, help="Continue even when validation fails")
 @click.argument("plan_path")
 @click.pass_context
-def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force: bool) -> None:
+def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_validation: bool) -> None:
     """Hand off a ticket from builder to reviewer: push branch, fetch in reviewer."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
@@ -1087,7 +1122,7 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force: 
             results = run_validate(plan, project_dir, config, target_repo_override=target_repo, dry_run=dry_run)
             if not dry_run:
                 _print_results(results)
-                if not force and any(result.status == "fail" for result in results):
+                if not force_validation and any(result.status == "fail" for result in results):
                     ctx.exit(1)
                     return
 
@@ -1164,10 +1199,10 @@ def push(ctx: click.Context, plan_path: str) -> None:
             and script_cmd.pull_target is not None
             and script_cmd.pull_target != repo
         ):
-            # refresh_main, not a plain pull: pull_target is typically on a feature branch
-            # (e.g. planner mid-plan), where a plain 'git pull' would try to pull that
-            # branch rather than advancing 'main'.
-            refresh_main(project_dir / script_cmd.pull_target, dry_run=dry_run)
+            # A whole-project sync, not a plain pull of pull_target: pull_target is
+            # typically on a feature branch (e.g. planner mid-plan), where 'git pull'
+            # advances that branch rather than 'main'.
+            _sync_repos_best_effort(project_dir, dry_run=dry_run)
         _write_script_audit_log(config, "push", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, plan.state, "push", plan.name)
     except (
@@ -1209,7 +1244,7 @@ def _classify_accept_steps(resume: ResumePlan, plan: Plan, project_dir: Path, br
         resume,
         _STEP_ACCEPT_REBASE,
         project_dir / RepoName.reviewer,
-        branch,
+        branch=branch,
         transfer_will_run=transfer_will_run,
     )
 
@@ -1223,9 +1258,14 @@ def _classify_accept_steps(resume: ResumePlan, plan: Plan, project_dir: Path, br
 
 
 @register_script("accept")
+@click.option(
+    "--force-push",
+    is_flag=True,
+    help="Allow force-pushing a branch an earlier run rebased but failed to publish",
+)
 @click.argument("plan_path")
 @click.pass_context
-def accept(ctx: click.Context, plan_path: str) -> None:
+def accept(ctx: click.Context, plan_path: str, *, force_push: bool) -> None:
     """Accept a reviewed ticket: push from reviewer, merge to main, transition to done."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
@@ -1261,6 +1301,8 @@ def accept(ctx: click.Context, plan_path: str) -> None:
                 canon_repo,
                 branch=branch,
                 allow_rebase=resume.should_run(_STEP_ACCEPT_REBASE),
+                force_push=force_push,
+                already_fetched=True,  # the rebase classification step just fetched
                 other_worktrees=_other_worktrees(project_dir, RepoName.reviewer),
                 post_rebase_verify=lambda: _run_pre_commit_hook(config, RepoName.reviewer, dry_run=dry_run),
                 dry_run=dry_run,
@@ -1278,7 +1320,7 @@ def accept(ctx: click.Context, plan_path: str) -> None:
         git_push(canon_repo, dry_run=dry_run)
         # Parks reviewer on 'main' (fixing issue 1's ordering hazard) only after the
         # done-transition commit has itself reached bare.
-        park_on_main(reviewer_repo, dry_run=dry_run)
+        _sync_repos_best_effort(project_dir, park=RepoName.reviewer, dry_run=dry_run)
         builder_repo = project_dir / RepoName.builder
         delete_merged_branch(canon_repo, reviewer_repo, builder_repo, branch, dry_run=dry_run)
         _write_script_audit_log(config, "accept", dry_run=dry_run, input_plan=plan.name)
@@ -1296,13 +1338,13 @@ def accept(ctx: click.Context, plan_path: str) -> None:
     ctx.exit(0)
 
 
-# The agent repo and branch-name prefix for a rejected plan's branch, if any -- states with
-# no open branch (intent/todo/done/rejected) map to nothing, so 'reject' refreshes canon only
-# and prints no unmerged-branch note.
-_BRANCH_OWNER_FOR_STATE: dict[PlanState, tuple[RepoName, str]] = {
-    PlanState.PLANNING: (RepoName.planner, "plan"),
-    PlanState.IMPLEMENTING: (RepoName.builder, "feat"),
-    PlanState.CHECKING: (RepoName.reviewer, "feat"),
+# Branch-name prefix of the branch a rejected plan leaves behind, if any -- states with no
+# open branch (intent/todo/done/rejected) map to nothing, so 'reject' prints no
+# unmerged-branch note.
+_BRANCH_PREFIX_FOR_STATE: dict[PlanState, str] = {
+    PlanState.PLANNING: "plan",
+    PlanState.IMPLEMENTING: "feat",
+    PlanState.CHECKING: "feat",
 }
 
 
@@ -1344,12 +1386,11 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
             dry_run=dry_run,
         )
         git_push(project_dir / target_repo, dry_run=dry_run)
-        # Refresh (never park -- the agent may still be mid-work) the repo owning the
-        # now-abandoned branch, so its 'main'/'origin/main' reflect this rejection.
-        branch_owner = _BRANCH_OWNER_FOR_STATE.get(plan.state)
-        if branch_owner is not None:
-            owner_repo, branch_prefix = branch_owner
-            refresh_main(project_dir / owner_repo, dry_run=dry_run)
+        # Refresh only -- never park: the agent owning the abandoned branch may still be
+        # mid-work on it.
+        _sync_repos_best_effort(project_dir, dry_run=dry_run)
+        branch_prefix = _BRANCH_PREFIX_FOR_STATE.get(plan.state)
+        if branch_prefix is not None:
             console.print(
                 f"[yellow]Note:[/yellow] {branch_prefix}/{plan.name} is left unmerged and can be deleted manually.",
             )

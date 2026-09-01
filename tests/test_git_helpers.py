@@ -228,23 +228,104 @@ def test_transfer_branch_to_main_post_rebase_verify_failure_blocks_push(tmp_path
     assert _git(["rev-parse", "refs/heads/feat/x"], cwd=bare).stdout.decode().strip() == bare_branch_before
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-def test_transfer_branch_to_main_falls_back_to_force_push_after_local_rebase(tmp_path: Path) -> None:
-    """Resume scenario: rebased locally in a prior run, but that run's force-push failed."""
-    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+def _rebase_locally_without_pushing(tmp_path: Path, branch: str = "feat/x") -> tuple[Path, Path, Path]:
+    """Set up the resume scenario: *branch* rebased locally, its force-push never landed."""
+    bare, source, canon = _setup_transfer_scenario(tmp_path, branch)
     _advance_main_unrelated(bare, tmp_path)
-    _git(["checkout", "feat/x"], cwd=source)
+    _git(["checkout", branch], cwd=source)
     _git(["fetch", "origin"], cwd=source)
     _git(["rebase", "origin/main"], cwd=source)
     assert git_status_porcelain(source) == ""
+    return bare, source, canon
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_falls_back_to_force_push_after_local_rebase(tmp_path: Path) -> None:
+    """Resume scenario: rebased locally in a prior run, but that run's force-push failed."""
+    _bare, source, canon = _rebase_locally_without_pushing(tmp_path)
 
     # branch_needs_rebase is now satisfied (local branch already sits on origin/main), so this
     # must succeed via the fast-forward path's force-push fallback, with allow_rebase left False.
-    result = transfer_branch_to_main(source, canon, branch="feat/x")
+    result = transfer_branch_to_main(source, canon, branch="feat/x", force_push=True)
 
     assert result is TransferResult.FAST_FORWARD
     assert (canon / "unrelated.txt").exists()
     assert (canon / "feature.txt").exists()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_force_push_fallback_needs_the_flag(tmp_path: Path) -> None:
+    """The fallback rewrites published history, so it must never happen without --force-push."""
+    bare, source, canon = _rebase_locally_without_pushing(tmp_path)
+    remote_before = _git(["rev-parse", "refs/heads/feat/x"], cwd=bare).stdout
+
+    with pytest.raises(WorkflowError, match="--force-push"):
+        transfer_branch_to_main(source, canon, branch="feat/x")
+
+    assert _git(["rev-parse", "refs/heads/feat/x"], cwd=bare).stdout == remote_before
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_force_push_refused_when_remote_has_own_commits(tmp_path: Path) -> None:
+    """--force-push must not overwrite a remote commit that exists nowhere locally."""
+    bare, source, canon = _rebase_locally_without_pushing(tmp_path)
+    # A second clone adds a commit to the remote branch that `source` has never seen.
+    other = tmp_path / "other"
+    _git(["clone", str(bare), str(other)], cwd=tmp_path)
+    _git(["checkout", "feat/x"], cwd=other)
+    (other / "other_work.txt").write_text("other\n", encoding="utf-8")
+    _git(["add", "."], cwd=other)
+    _git(["commit", "-m", "work only on the remote branch"], cwd=other)
+    _git(["push"], cwd=other)
+    remote_before = _git(["rev-parse", "refs/heads/feat/x"], cwd=bare).stdout
+
+    with pytest.raises(WorkflowError, match="would lose them"):
+        transfer_branch_to_main(source, canon, branch="feat/x", force_push=True)
+
+    assert _git(["rev-parse", "refs/heads/feat/x"], cwd=bare).stdout == remote_before
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_force_push_fallback_reruns_verification(tmp_path: Path) -> None:
+    """The interrupted run never verified its rebase, so the resume must verify before publishing."""
+    bare, source, canon = _rebase_locally_without_pushing(tmp_path)
+    remote_before = _git(["rev-parse", "refs/heads/feat/x"], cwd=bare).stdout
+
+    def _failing_verify() -> None:
+        msg = "hook failed"
+        raise WorkflowError(msg)
+
+    with pytest.raises(WorkflowError, match="hook failed"):
+        transfer_branch_to_main(
+            source,
+            canon,
+            branch="feat/x",
+            force_push=True,
+            post_rebase_verify=_failing_verify,
+        )
+
+    assert _git(["rev-parse", "refs/heads/feat/x"], cwd=bare).stdout == remote_before
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_transfer_branch_to_main_rebase_refused_when_remote_has_own_commits(tmp_path: Path) -> None:
+    """The rebase path force-pushes too, so it checks for remote-only commits before rebasing."""
+    bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    _advance_main_unrelated(bare, tmp_path)
+    _git(["checkout", "feat/x"], cwd=source)
+    other = tmp_path / "other"
+    _git(["clone", str(bare), str(other)], cwd=tmp_path)
+    _git(["checkout", "feat/x"], cwd=other)
+    (other / "other_work.txt").write_text("other\n", encoding="utf-8")
+    _git(["add", "."], cwd=other)
+    _git(["commit", "-m", "work only on the remote branch"], cwd=other)
+    _git(["push"], cwd=other)
+    source_head_before = _git(["rev-parse", "HEAD"], cwd=source).stdout
+
+    with pytest.raises(WorkflowError, match="Pull them into"):
+        transfer_branch_to_main(source, canon, branch="feat/x", allow_rebase=True)
+
+    assert _git(["rev-parse", "HEAD"], cwd=source).stdout == source_head_before
 
 
 def test_git_merge_includes_double_dash_separator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -467,9 +548,15 @@ def test_refresh_main_opportunistically_updates_origin_main_tracking_ref(tmp_pat
     assert _git(["rev-parse", "refs/remotes/origin/main"], cwd=clone).stdout.decode().strip() == new_sha
 
 
-def test_refresh_main_warns_and_returns_when_no_origin_remote(tmp_path: Path) -> None:
+def test_refresh_main_warns_and_returns_when_no_origin_remote(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     repo = _init_repo(tmp_path / "repo")
+
     refresh_main(repo)  # must not raise
+
+    assert "skipping refresh_main" in capsys.readouterr().err
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")

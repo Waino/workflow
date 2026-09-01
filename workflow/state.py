@@ -4,10 +4,26 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from workflow.exceptions import WorkflowError
+from workflow.exceptions import PlanCollisionError, WorkflowError
 from workflow.git_helpers import git_mv
 from workflow.models import Plan, PlanState
 from workflow.plan_resolver import find_plan_file_in_repo
+
+
+def _locate_source(project_dir: Path, repo_name: str, plan_file_name: str) -> Path | None:
+    """Locate *plan_file_name* in *repo_name*, translating a repo-wide collision into advice.
+
+    The lookup scans the whole repo, so an unrelated sequence-number collision elsewhere in
+    it also surfaces here -- with a message about the wrong plan unless it is reframed.
+    """
+    try:
+        return find_plan_file_in_repo(project_dir, repo_name, plan_file_name)
+    except PlanCollisionError as exc:
+        msg = (
+            f"cannot transition {plan_file_name} while sequence number {exc.sequence_number!r} collides "
+            f"in {repo_name} ({', '.join(p.slug for p in exc.colliding)}); renumber one of them first"
+        )
+        raise WorkflowError(msg) from exc
 
 
 def transition_plan(
@@ -37,7 +53,7 @@ def transition_plan(
     """
     repo_name = repo_override or plan.path.parts[0]
     repo_path = project_dir / repo_name
-    source = find_plan_file_in_repo(project_dir, repo_name, plan.path.name)
+    source = _locate_source(project_dir, repo_name, plan.path.name)
     if source is None:
         if not dry_run:
             msg = (

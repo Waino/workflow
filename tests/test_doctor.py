@@ -125,7 +125,7 @@ def test_check_worktree_stale_main_is_an_anomaly(tmp_path: Path) -> None:
 
     check = _check_worktree(RepoName.canon, canon, active_branches=set(), bare_path=bare)
 
-    assert "main is stale (differs from bare)" in check.anomalies
+    assert "main differs from bare (stale or unpushed)" in check.anomalies
 
 
 def test_check_worktree_rebase_pending_branch_is_a_note_not_an_anomaly(tmp_path: Path) -> None:

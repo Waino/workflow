@@ -91,6 +91,19 @@ def git_fetch(repo_path: Path, *, dry_run: bool = False) -> None:
     run_command(["git", "fetch", "origin"], cwd=repo_path, dry_run=dry_run)
 
 
+def git_push_branch(repo_path: Path, branch: str, *, force: bool = False, dry_run: bool = False) -> None:
+    """Push *branch* to ``origin`` by explicit refspec, optionally with ``--force-with-lease``.
+
+    ``-u`` keeps the upstream tracking that ``push.autoSetupRemote`` sets when pushing
+    without a refspec (prompt dispatch's ``git_pull`` skips repos with no upstream).
+    """
+    args = ["git", "push", "-u"]
+    if force:
+        args.append("--force-with-lease")
+    args += ["origin", branch]
+    run_command(args, cwd=repo_path, dry_run=dry_run)
+
+
 def git_status(repo_path: Path, *, dry_run: bool = False) -> None:
     """Print ``git status`` (short, with branch header) for *repo_path*."""
     run_command(["git", "status", "--short", "--branch"], cwd=repo_path, dry_run=dry_run)
@@ -386,6 +399,11 @@ def delete_merged_branch(
     known to be merged; a no-op, silently, if it was already cleaned up by a prior run
     (its absence from ``origin`` is itself the postcondition this function establishes).
     """
+    if dry_run:
+        # A dry run never landed the merge, so the merged-into-main probe below would
+        # always fail and warn about a branch that is fine.
+        console.print(f"[dim]would delete {branch} in reviewer, builder and on bare (once merged)[/dim]")
+        return
     if not git_ref_exists_remote(canon_repo, branch):
         return
     if not git_is_ancestor(canon_repo, f"origin/{branch}", "main"):
@@ -395,13 +413,13 @@ def delete_merged_branch(
         return
     for repo in (reviewer_repo, builder_repo):
         try:
-            refresh_main(repo, dry_run=dry_run)
+            refresh_main(repo)
             if git_branch_exists(repo, branch):
-                git_branch_delete(repo, branch, dry_run=dry_run)
+                git_branch_delete(repo, branch)
         except subprocess.CalledProcessError as exc:
             error_console.print(f"[yellow]\\[!] failed to delete {branch} in {repo}: {exc}[/yellow]")
     try:
-        git_delete_remote_branch(canon_repo, branch, dry_run=dry_run)
+        git_delete_remote_branch(canon_repo, branch)
     except subprocess.CalledProcessError as exc:
         error_console.print(f"[yellow]\\[!] failed to delete {branch} on bare: {exc}[/yellow]")
 
@@ -413,20 +431,50 @@ class TransferResult(enum.Enum):
     REBASED = "rebased"
 
 
-def branch_needs_rebase(source_repo: Path, branch: str) -> bool:
-    """Fetch *source_repo* and return whether *branch* is **not** based on ``origin/main``.
+def branch_needs_rebase(source_repo: Path, branch: str, *, fetch: bool = True) -> bool:
+    """Return whether *branch* is **not** based on ``origin/main``, fetching first by default.
 
     Used both by :func:`transfer_branch_to_main` itself and by each command's resume
     classification, so a `--dry-run` preview can announce the rebase before it happens
-    (see the module docstring's fetch-during-classification exception).
+    (see the module docstring's fetch-during-classification exception). Pass
+    ``fetch=False`` to reuse remote-tracking refs a caller just refreshed.
     """
-    git_fetch(source_repo)
+    if fetch:
+        git_fetch(source_repo)
     head = branch if git_branch_exists(source_repo, branch) else f"origin/{branch}"
     return not git_is_ancestor(source_repo, "origin/main", head)
 
 
+def remote_branch_has_unique_commits(repo_path: Path, branch: str) -> bool:
+    """Return whether ``origin/{branch}`` holds commits with no patch-equivalent on *branch*.
+
+    The precondition for force-pushing *branch*: when this is ``False``, everything the
+    remote branch holds also exists locally (identically, or as a rewritten commit with
+    the same patch id), so overwriting it loses nothing. ``git cherry`` marks such
+    commits ``+``. ``False`` when ``origin/{branch}`` is unknown (nothing to lose);
+    ``True`` when the query itself fails, so an unanswerable question never authorises a
+    force-push. Read-only guard query: always runs for real, even in dry-run.
+    """
+    if git_rev_parse(repo_path, f"refs/remotes/origin/{branch}") is None:
+        return False
+    result = subprocess.run(  # noqa: S603
+        ["git", "cherry", branch, f"origin/{branch}"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return True
+    return any(line.startswith("+") for line in result.stdout.decode().splitlines())
+
+
 def _merge_tree_conflict_paths(output: str) -> list[str]:
-    """Best-effort extraction of conflicting paths from ``git merge-tree --write-tree`` output.
+    """Best-effort extraction of some conflicting paths from ``git merge-tree --write-tree`` output.
+
+    Only the commit git stopped on is inspected, so a multi-commit branch can have further
+    conflicts beyond the reported ones. ``--write-tree`` needs git >= 2.38 and writes the
+    merged tree/blobs into the object store; on older git the output shape differs and the
+    path list simply comes out empty, degrading the message but nothing else.
 
     Ponytail: regex-matches the ``CONFLICT (...): ... in <path>`` lines `git merge-tree`
     prints for content/rename conflicts; upgrade path is a full parse of its machine-readable
@@ -465,6 +513,14 @@ def _rebase_onto_main(  # noqa: PLR0913
         if worktree.exists() and git_current_branch(worktree) == branch:
             msg = f"{branch} is checked out in {worktree}; check out a different branch there first."
             raise WorkflowError(msg)
+    # Checked before the rebase, while patch ids still match: afterwards every remote
+    # commit is a rewritten one, and a rebase that resolved anything is free to change
+    # patch ids, which would make this refuse a perfectly good rebase.
+    require(
+        not remote_branch_has_unique_commits(source_repo, branch),
+        f"origin/{branch} has commits that are not in {source_repo}'s {branch}; rebasing would "
+        f"force-push over them. Pull them into {branch} first.",
+    )
 
     if dry_run:
         console.print(f"[dim]would rebase {branch} onto origin/main in {source_repo}[/dim]")
@@ -499,12 +555,50 @@ def _rebase_onto_main(  # noqa: PLR0913
     if post_rebase_verify is not None:
         post_rebase_verify()
 
-    run_command(["git", "push", "--force-with-lease", "origin", branch], cwd=source_repo)
+    git_push_branch(source_repo, branch, force=True)
     git_fetch(canon_repo, dry_run=dry_run)
     git_pull(canon_repo, dry_run=dry_run)
     git_merge(canon_repo, f"origin/{branch}", dry_run=dry_run)
     git_push(canon_repo, dry_run=dry_run)
     return TransferResult.REBASED
+
+
+def _publish_source_branch(
+    source_repo: Path,
+    branch: str,
+    *,
+    force_push: bool,
+    post_rebase_verify: Callable[[], None] | None,
+    dry_run: bool,
+) -> None:
+    """Publish *branch* from *source_repo* on the fast-forward path of a transfer.
+
+    Nothing to publish when *branch* does not exist locally (canon merges
+    ``origin/{branch}``, which is then the only copy). A rejected push means the remote
+    still holds the pre-rebase commits of an earlier run whose force-push failed -- the
+    only non-fast-forward this path can legitimately see -- so it retries with
+    ``--force-with-lease``, but only when no remote commit would be lost, the operator
+    asked for it with ``--force-push``, and *post_rebase_verify* (which the interrupted
+    run never reached) passes.
+    """
+    if not git_branch_exists(source_repo, branch):
+        return
+    try:
+        git_push_branch(source_repo, branch, dry_run=dry_run)
+    except subprocess.CalledProcessError:
+        require(
+            not remote_branch_has_unique_commits(source_repo, branch),
+            f"pushing {branch} was rejected, and origin/{branch} has commits that are not in "
+            f"{source_repo}'s {branch}; force-pushing would lose them. Reconcile the branch by hand.",
+        )
+        require(
+            force_push,
+            f"pushing {branch} was rejected; origin/{branch} still holds the pre-rebase commits of an "
+            f"earlier run. Rerun with --force-push to replace them with the rebased branch.",
+        )
+        if post_rebase_verify is not None:
+            post_rebase_verify()
+        git_push_branch(source_repo, branch, force=True)
 
 
 def transfer_branch_to_main(  # noqa: PLR0913
@@ -513,6 +607,8 @@ def transfer_branch_to_main(  # noqa: PLR0913
     *,
     branch: str | None = None,
     allow_rebase: bool = False,
+    force_push: bool = False,
+    already_fetched: bool = False,
     other_worktrees: Sequence[Path] = (),
     post_rebase_verify: Callable[[], None] | None = None,
     dry_run: bool = False,
@@ -525,20 +621,27 @@ def transfer_branch_to_main(  # noqa: PLR0913
 
     Decides fast-forwardability in *source_repo* (via :func:`branch_needs_rebase`)
     before pushing anything, so the problem is discovered before any push rather than
-    when canon's merge fails. On the fast-forward path (today's behaviour): ``git push``
-    in *source_repo*, ``git pull``/``git merge --ff-only``/``git push`` in *canon_repo*.
+    when canon's merge fails. Pass *already_fetched* when the caller's resume
+    classification just fetched, to skip a second one. On the fast-forward path (today's
+    behaviour): ``git push`` in *source_repo*, ``git pull``/``git merge --ff-only``/``git
+    push`` in *canon_repo*. That push falls back to ``--force-with-lease`` -- gated on
+    *force_push* and on the remote holding no commits of its own -- for the one case that
+    needs it: an earlier run rebased locally but failed to publish (see
+    :func:`_publish_source_branch`).
 
     On the rebase path -- refused unless *allow_rebase* is ``True``, since a rebase must
     never be a surprise -- *source_repo* is rebased onto ``origin/main``, force-pushed
     with ``--force-with-lease``, then merged into *canon_repo* the same way. Guarded by:
     *source_repo*'s tree must be clean; *source_repo* must be checked out to *branch*;
-    *branch* must not be checked out in any of *other_worktrees*. Never mutates anything
-    in ``--dry-run``. On a rebase conflict, aborts the rebase (best effort) and raises
-    with the conflicting paths and the recovery (``workflow rebase <plan>``).
+    *branch* must not be checked out in any of *other_worktrees*; ``origin/{branch}`` must
+    hold no commits of its own. Never mutates anything in ``--dry-run``. On a rebase
+    conflict, aborts the rebase (best effort) and raises with the conflicting paths and
+    the recovery (``workflow rebase <plan>``).
 
     *post_rebase_verify*, when given, runs after a successful rebase and before
     anything is pushed or merged -- it should raise on failure to abort before publishing
-    a tree nobody has verified. Only invoked on the rebase path.
+    a tree nobody has verified. Invoked on the rebase path, and on the fast-forward
+    path's force-push fallback, which publishes an earlier run's unverified rebase.
 
     Every step is individually idempotent (a merge of an already-merged ref is a
     harmless no-op), so re-running the whole helper on a partially-completed prior
@@ -561,17 +664,14 @@ def transfer_branch_to_main(  # noqa: PLR0913
     )
     branch = branch or git_current_branch(source_repo)
 
-    if not branch_needs_rebase(source_repo, branch):
-        try:
-            git_push(source_repo, dry_run=dry_run)
-        except subprocess.CalledProcessError:
-            if dry_run:
-                raise
-            # A resumed run: the branch was already rebased locally in a prior attempt
-            # (whose force-push then failed) but never force-pushed, so a plain push is
-            # rejected as non-fast-forward. Safe to force here: branch_needs_rebase just
-            # confirmed origin/main is an ancestor of the local branch.
-            run_command(["git", "push", "--force-with-lease", "origin", branch], cwd=source_repo)
+    if not branch_needs_rebase(source_repo, branch, fetch=not already_fetched):
+        _publish_source_branch(
+            source_repo,
+            branch,
+            force_push=force_push,
+            post_rebase_verify=post_rebase_verify,
+            dry_run=dry_run,
+        )
         git_pull(canon_repo, dry_run=dry_run)
         # Merge via the remote-tracking ref so the branch need not exist locally.
         git_merge(canon_repo, f"origin/{branch}", dry_run=dry_run)

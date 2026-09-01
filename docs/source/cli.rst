@@ -60,9 +60,11 @@ Setup and session management
     for the builder shell) and print that repo's git status.
 
 ``doctor``
-    Report the health of every clone (branch, dirty state, remotes) and flag
-    plan-file anomalies (e.g. duplicate sequence numbers). Exits non-zero if any
-    problems are found.
+    Report the health of every clone (branch, dirty state, remotes, whether its
+    ``main`` matches the bare repo) and flag plan-file anomalies (e.g. duplicate
+    sequence numbers). Exits non-zero if any anomaly is found; the separate *notes*
+    column carries observations that are normal during parallel work (e.g. a branch
+    that still needs rebasing) and never affects the exit code.
 
 ``agents_md``
     Regenerate the auto-generated section of ``AGENTS.md`` (plan state machine and
@@ -91,20 +93,22 @@ operations (push/pull/merge) needed at each handoff.
 
 ``todo PLAN_PATH``
     Approve a ``planning`` plan for implementation: push from planner, pull to
-    canon, transition to ``todo``, merge to ``main``. ``--force`` skips a failing
-    validation (e.g. to accept edits outside the usual responsibility of the agent).
+    canon, transition to ``todo``, merge to ``main``. ``--force-validation`` skips a
+    failing validation (e.g. to accept edits outside the usual responsibility of the
+    agent); ``--force-push`` is explained under `Landing a branch on main`_.
 
 ``implement PLAN_PATH``
     Schedule a ``planning``/``todo`` plan for implementation: transition to
     ``implementing``, push, create a ``feat/{plan_name}`` branch in the builder's
     clone, and switch the tmux focus to the builder. ``--continue`` resumes after a
-    partially completed run.
+    partially completed run; ``--force-push`` is explained under
+    `Landing a branch on main`_.
 
 ``check PLAN_PATH``
     Hand a finished implementation off from builder to reviewer: rerun the
     pre-commit hook, validate, transition to ``checking``, push the branch, and
     fetch it into the reviewer's clone. ``--target-repo`` overrides which repo is
-    pushed (default ``builder``); ``--force`` skips a failing validation.
+    pushed (default ``builder``); ``--force-validation`` skips a failing validation.
 
 ``validate PLAN_PATH``
     Run the pre-merge verification checks (also run internally by ``todo``,
@@ -113,17 +117,45 @@ operations (push/pull/merge) needed at each handoff.
 
 ``accept PLAN_PATH``
     Accept a reviewed plan: push from reviewer, pull to canon, transition to
-    ``done``, merge to ``main``, push.
+    ``done``, merge to ``main``, push, then delete the merged ``feat/{plan_name}``
+    branch in the reviewer's and builder's clones and on the bare repo (all cleanup
+    failures are warnings — the accept itself has already landed).
+    ``--force-push`` is explained under `Landing a branch on main`_.
 
 ``reject PLAN_PATH``
-    Close out a plan without merging: transition to ``rejected``, merge to
-    ``main``, push. ``--target-repo`` selects which repo holds the plan being
-    rejected (default ``canon``).
+    Close out a plan without merging: transition to ``rejected`` and push that
+    transition. The plan's branch is deliberately *not* merged and *not* deleted;
+    the command prints a note naming the branch you may delete by hand.
+    ``--target-repo`` selects which repo holds the plan being rejected (default
+    ``canon``).
 
 ``canon_pre_commit``
     Run the pre-commit hook against the canon repo in a throwaway container.
     Useful for validating manual edits, when you want the test suite to
     run containerized and not on the host.
+
+.. _Landing a branch on main:
+
+Landing a branch on main
+-------------------------
+
+``todo``, ``implement`` and ``accept`` land a branch on ``main`` with a
+fast-forward merge. When ``main`` has moved on since the branch was cut — routine
+under parallel work — the branch is first rebased onto ``origin/main``, the
+pre-commit hook is re-run against the rebased tree, and the result is force-pushed
+with ``--force-with-lease``. The command says so loudly: a rebase rewrites history,
+which is your cue to check the outcome. A rebase is refused when the source clone is
+dirty, is not on the branch, has the branch checked out in another clone, or when the
+remote branch holds commits that exist nowhere locally.
+
+If the rebase hits conflicts, the command fails without touching ``main`` and names
+the conflicting paths; dispatch the ``rebase`` prompt to let the owning agent resolve
+them. If a run rebased successfully but died before publishing, the rerun needs
+``--force-push`` to replace the stale remote branch with the rebased one — the only
+case in the whole pipeline where anything is force-pushed on purpose.
+
+After every handoff each clone's ``main`` is brought up to date (and the handing-off
+agent's clone is parked on it), so the next branch is cut from a current ``main``.
 
 Prompt commands (agent dispatch)
 ----------------------------------
@@ -154,6 +186,11 @@ state. All accept ``--edit`` to review/modify the prompt before sending.
 ``fix [PLAN_PATH]``
     Ask the reviewer to fix the issues from the most recent review. The path may
     be omitted if the review is already in the agent's session history.
+
+``rebase [PLAN_PATH]``
+    Ask the agent owning the plan's branch (planner in ``planning``, reviewer in
+    ``checking``) to rebase that branch onto current ``origin/main`` and resolve the
+    conflicts the automatic rebase could not.
 
 ``full-review``
     Ask the reviewer to review the whole current state of the codebase.

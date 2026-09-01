@@ -125,6 +125,17 @@ def test_transition_plan_dry_run_guesses_source_when_not_yet_landed(
     assert new_plan.path == Path("canon/docs/plans/checking/005_foo.md")
 
 
+def test_transition_plan_reframes_an_unrelated_sequence_collision(tmp_path: Path) -> None:
+    """The lookup scans the whole repo, so a collision elsewhere must not report the wrong plan."""
+    _write_plan_file(tmp_path, "canon", PlanState.IMPLEMENTING)
+    _write_plan_file(tmp_path, "canon", PlanState.TODO, name="007_bar.md")
+    _write_plan_file(tmp_path, "canon", PlanState.PLANNING, name="007_baz.md")
+    plan = _plan(repo="canon", state_value=PlanState.IMPLEMENTING)
+
+    with pytest.raises(WorkflowError, match=r"cannot transition 005_foo\.md while sequence number '007' collides"):
+        state.transition_plan(plan, PlanState.CHECKING, tmp_path, repo_override="canon", dry_run=True)
+
+
 def test_transition_plan_raises_on_duplicate_source(tmp_path: Path) -> None:
     _write_plan_file(tmp_path, "canon", PlanState.IMPLEMENTING)
     _write_plan_file(tmp_path, "canon", PlanState.CHECKING)

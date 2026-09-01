@@ -349,3 +349,47 @@ docker script from plans 017/021.
   managed section was resynced against the golden fixture -- which incidentally also picked up two
   unrelated pre-existing entries (`architecture`, `mvp`) that had drifted out of sync with
   `docs/default_config.yaml` before this plan.
+
+## Post-review fixes (round 1)
+
+Applied after `docs/plans/reviews/pr/024_avoiding_failed_merges_b929f03.md`; decisions taken with
+the human operator in that review turn.
+
+- **Force-pushing is now an explicit, guarded, opt-in act.** The fast-forward path publishes the
+  source branch by explicit refspec (`git push -u origin <branch>`, so the failure and any retry
+  concern the same ref, and `push.autoSetupRemote`'s tracking is preserved), skipping the push
+  entirely when the branch does not exist locally. Its `--force-with-lease` fallback now requires
+  all three of: no commits on `origin/<branch>` without a patch-equivalent on the local branch
+  (`git cherry`, in `remote_branch_has_unique_commits` — a fetch makes the lease itself
+  meaningless, so the lease is not a safeguard here); the new `--force-push` flag; and a passing
+  `post_rebase_verify`, since the interrupted run that rebased never got to verify.
+- **Flag naming.** `--force` (skip failing validation) is renamed `--force-validation` on `todo`
+  and `check`, so that the three forcing flags stay distinguishable: `--force-validation` (bypass
+  validation), `--continue` (user vouches for a partial state), `--force-push` (rewrite a published
+  branch). The rebase path's own force-push stays automatic — it is already gated on the rebase
+  step's classification, and requiring a flag there would defeat the automatic rebase this plan
+  exists to add. It gained the same `remote_branch_has_unique_commits` guard, checked *before* the
+  rebase: afterwards every remote commit is a rewritten one, and a rebase that resolved anything is
+  free to change patch ids, which would make the check refuse a perfectly good rebase.
+- **Every clone's `main` is refreshed after every handoff** (`_sync_repos_best_effort`), not just
+  the two the handoff touched — otherwise `doctor`'s stale-main check reports anomalies at a
+  healthy rest state (a `todo` leaves builder and reviewer behind), and the untouched clones cut
+  their next branch from a stale `main`. Only the handing-off agent's clone is parked on `main`;
+  the others are refreshed via the refspec fetch, since they may be mid-work. Sync failures are
+  warnings, never errors: the handoff has already landed by then (same rationale as
+  `_rotate_best_effort`).
+- `doctor`'s stale-main message is now "main differs from bare (stale or unpushed)": the check is
+  symmetric, and an unpushed local commit is the other thing it can catch.
+- `transition_plan` translates a `PlanCollisionError` from its repo-wide scan into "cannot
+  transition X while sequence number N collides in <repo>", instead of reporting a collision
+  between two unrelated plans as though it were the transition's own problem.
+- The rebase step's classification no longer touches the source repo at all when the transfer will
+  not run (`implement` on a `todo` plan no longer requires a healthy planner clone), and the run
+  phase reuses the classification's fetch via `already_fetched=True`.
+- `delete_merged_branch` previews in `--dry-run` instead of probing a merge that a dry run never
+  performed and warning about a branch that is fine.
+- New tests: force-push refused without the flag / with remote-only commits / with a failing
+  verification; the rebase path refused with remote-only commits; `todo` and `implement` rebasing a
+  concurrently-cut sibling branch end to end (including that `post_rebase_verify` re-runs the hook
+  against *planner*); `transition_plan`'s reframed collision error; the no-origin `refresh_main`
+  warning.

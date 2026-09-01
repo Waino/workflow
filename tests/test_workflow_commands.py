@@ -20,6 +20,7 @@ from workflow.config import WORKFLOW_ROOT_MARKER
 from workflow.exceptions import WorkflowError
 from workflow.git_helpers import CommitResult
 from workflow.models import AuditLogEntry, Plan, PlanState
+from workflow.names import RepoName
 from workflow.plan_resolver import next_intent_number
 from workflow.validate import CheckResult
 
@@ -529,8 +530,8 @@ def test_push_pushes_resolved_repo_without_transition(tmp_path: Path, monkeypatc
 
     assert result.exit_code == 0
     assert [c.args[0] for c in fake_push.call_args_list] == [tmp_path / "canon"]
-    # intent-state push has pull_target=planner — assert pull_target was refreshed too
-    assert [c.args[0] for c in fake_refresh.call_args_list] == [tmp_path / "planner"]
+    # intent-state push has pull_target=planner, which triggers a whole-project main sync
+    assert {c.args[0] for c in fake_refresh.call_args_list} == {tmp_path / repo for repo in RepoName}
     assert "workflow ask 005_foo" in result.output
 
 
@@ -1005,6 +1006,9 @@ def test_implement_from_planning_branch_transfers_and_transitions(
     # git_helpers' module-level one.
     monkeypatch.setattr(wc, "branch_needs_rebase", lambda *_a, **_kw: False)
     monkeypatch.setattr(git_helpers, "branch_needs_rebase", lambda *_a, **_kw: False)
+    # The fast-forward path publishes the source branch by explicit refspec.
+    monkeypatch.setattr(git_helpers, "git_branch_exists", lambda *_a, **_kw: True)
+    monkeypatch.setattr(git_helpers, "git_push_branch", lambda *_a, **_kw: call_order.append("push"))
 
     def _commit_if_changed(*_a: object, **_kw: object) -> CommitResult:
         call_order.append("commit")
@@ -1027,14 +1031,14 @@ def test_implement_from_planning_branch_transfers_and_transitions(
     monkeypatch.setattr(wc, "git_fetch", MagicMock())
     monkeypatch.setattr(wc, "rotate_control_pane", MagicMock())
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
-    monkeypatch.setattr(wc, "park_on_main", lambda *_a, **_kw: call_order.append("park"))
-    monkeypatch.setattr(wc, "refresh_main", lambda *_a, **_kw: call_order.append("refresh"))
+    monkeypatch.setattr(wc, "park_on_main", lambda repo, **_kw: call_order.append(f"park {repo.name}"))
+    monkeypatch.setattr(wc, "refresh_main", lambda repo, **_kw: call_order.append(f"refresh {repo.name}"))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005"])
 
     assert result.exit_code == 0, result.output
     # push planner -> pull canon -> merge -> push canon -> commit (todo) -> commit (implementing)
-    # -> push canon -> park planner on main -> refresh builder's main -> fetch builder (untracked)
+    # -> push canon -> sync every repo's main (parking only planner) -> fetch builder (untracked)
     # -> checkout builder main -> pull builder -> checkout feat branch
     assert call_order == [
         "push",
@@ -1044,8 +1048,10 @@ def test_implement_from_planning_branch_transfers_and_transitions(
         "commit",
         "commit",
         "push",
-        "park",
-        "refresh",
+        "refresh canon",
+        "park planner",
+        "refresh builder",
+        "refresh reviewer",
         "checkout",
         "pull",
         "checkout",
@@ -1095,8 +1101,8 @@ def test_todo_resolver_error_exits_nonzero(tmp_path: Path, monkeypatch: pytest.M
     fake_commit.assert_not_called()
 
 
-def test_push_with_pull_target_pulls_after_push(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Push from canon with pull_target=planner runs git_push then refresh_main(planner)."""
+def test_push_with_pull_target_syncs_after_push(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Push from canon with pull_target=planner runs git_push, then refreshes every repo's main."""
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "canon", "intent", "005_foo.md")
     monkeypatch.chdir(tmp_path)
@@ -1109,7 +1115,7 @@ def test_push_with_pull_target_pulls_after_push(tmp_path: Path, monkeypatch: pyt
 
     assert result.exit_code == 0
     assert fake_push.call_args_list[0].args[0] == tmp_path / "canon"
-    assert fake_refresh.call_args_list[0].args[0] == tmp_path / "planner"
+    assert {c.args[0] for c in fake_refresh.call_args_list} == {tmp_path / repo for repo in RepoName}
 
 
 def test_push_main_branch_guard_non_canon_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

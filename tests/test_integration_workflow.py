@@ -17,6 +17,7 @@ from workflow.audit import read_audit_log
 from workflow.cli import main
 from workflow.config import WORKFLOW_ROOT_MARKER
 from workflow.git_helpers import CommitResult
+from workflow.names import RepoName
 from workflow.validate import CheckResult, _check_agents_md
 
 # ---------------------------------------------------------------------------
@@ -645,9 +646,97 @@ def test_accept_dry_run_previews_rebase_without_mutating(tmp_path: Path, monkeyp
 
     assert result.exit_code == 0, result.output
     assert "rebase reviewer branch onto main" in result.output
+    # The cleanup preview must not warn about the branch not being merged: nothing merged it.
+    assert "not (yet) known to be merged" not in result.output
+    assert "would delete feat/005_foo" in result.output
     assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "reviewer").stdout == reviewer_head_before
     assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout == canon_head_before
     assert _git(["rev-parse", "refs/heads/main"], cwd=tmp_path / "bare").stdout == bare_main_before
+
+
+def _init_with_two_sibling_plan_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """init, two planner branches cut from the same base, first one landed. Returns the hook mock.
+
+    The concurrently-cut sibling case (as ``subdivide``/``mvp`` produce): landing
+    ``plan/005_foo`` advances canon's ``main`` past ``plan/006_bar``'s base, so the second
+    handoff genuinely cannot fast-forward and must rebase. Planner is left on
+    ``plan/006_bar``, ready for the handoff under test.
+    """
+    _init_canon_repo(tmp_path)
+    config_path = _make_integration_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    passing = [CheckResult(check_name="ok", status="pass", message="ok")]
+    monkeypatch.setattr(wc, "run_validate", MagicMock(return_value=passing))
+    monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
+    monkeypatch.setattr(wc.time, "sleep", MagicMock())
+    hook = MagicMock()
+    monkeypatch.setattr(wc, "_run_pre_commit_hook", hook)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+    assert result.exit_code == 0, result.output
+
+    planner = tmp_path / "planner"
+    _git(["config", "user.email", "test@example.com"], cwd=planner)
+    _git(["config", "user.name", "Test"], cwd=planner)
+    for plan_name in ("005_foo", "006_bar"):
+        _git(["checkout", "main"], cwd=planner)
+        _git(["checkout", "-b", f"plan/{plan_name}"], cwd=planner)
+        _make_plan(planner, "planning", f"{plan_name}.md")
+        _git(["add", "."], cwd=planner)
+        _git(["commit", "-m", f"add planning plan {plan_name}"], cwd=planner)
+
+    _git(["checkout", "plan/005_foo"], cwd=planner)
+    result = CliRunner().invoke(main, ["--config", str(config_path), "todo", "005_foo"])
+    assert result.exit_code == 0, result.output
+    _git(["checkout", "plan/006_bar"], cwd=planner)
+    hook.reset_mock()
+    return hook
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_todo_rebases_sibling_branch_cut_from_the_same_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`todo` on a concurrently-cut sibling branch rebases it, verifying the rebase in planner."""
+    hook = _init_with_two_sibling_plan_branches(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.yaml"
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "todo", "006_bar"])
+
+    assert result.exit_code == 0, result.output
+    assert "rebased" in result.output.lower()
+    canon = tmp_path / "canon"
+    assert (canon / "docs" / "plans" / "todo" / "006_bar.md").exists()
+    # The commit already on main (the first sibling's own handoff) survived the rebase.
+    assert (canon / "docs" / "plans" / "todo" / "005_foo.md").exists()
+    assert (
+        _git(["rev-parse", "refs/heads/main"], cwd=tmp_path / "bare").stdout
+        == _git(
+            ["rev-parse", "HEAD"],
+            cwd=canon,
+        ).stdout
+    )
+    # post_rebase_verify re-ran the pre-commit hook, against planner (the rebased repo).
+    assert [call.args[1] for call in hook.call_args_list] == [RepoName.planner]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_implement_rebases_sibling_branch_cut_from_the_same_base(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`implement` straight from planning rebases the same way, and still creates the feat branch."""
+    hook = _init_with_two_sibling_plan_branches(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.yaml"
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "006_bar"])
+
+    assert result.exit_code == 0, result.output
+    assert "rebased" in result.output.lower()
+    canon = tmp_path / "canon"
+    assert (canon / "docs" / "plans" / "implementing" / "006_bar.md").exists()
+    assert (canon / "docs" / "plans" / "todo" / "005_foo.md").exists()
+    assert _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path / "builder").stdout.strip() == b"feat/006_bar"
+    assert [call.args[1] for call in hook.call_args_list] == [RepoName.planner]
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
@@ -794,7 +883,7 @@ def _make_plan(repo_path: Path, state: str, filename: str) -> None:
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-def test_todo_fails_when_second_branch_cut_after_first_todo(
+def test_todo_succeeds_when_second_branch_cut_after_first_todo(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

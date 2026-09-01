@@ -98,7 +98,7 @@ def _check_staleness(check: RepoCheck, repo_path: Path, bare_path: Path, active_
     bare_main = git_rev_parse(bare_path, "refs/heads/main")
     repo_main = git_rev_parse(repo_path, "refs/heads/main")
     if bare_main is not None and repo_main is not None and bare_main != repo_main:
-        check.anomalies.append("main is stale (differs from bare)")
+        check.anomalies.append("main differs from bare (stale or unpushed)")
 
     branch_on_bare = check.branch in active_branches and git_branch_exists(bare_path, check.branch)
     if branch_on_bare and not git_is_ancestor(bare_path, "refs/heads/main", f"refs/heads/{check.branch}"):

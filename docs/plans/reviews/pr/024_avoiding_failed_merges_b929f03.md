@@ -194,3 +194,11 @@ a preview. Skip the warning (or the whole call) when `dry_run` is set.
   the plan demanded.
 - `_classify_accept_steps` correctly stops trusting a dangling `origin/<branch>` ancestry check once
   the branch has been cleaned up — an easy bug to miss when adding branch deletion.
+
+## Fixes applied
+
+All findings above were addressed except F8 (a `--dry-run` preview aborting with "has uncommitted
+changes" was accepted as-is) and low 5/6/7/10/11 (deliberately left). The decisions taken while
+fixing — the `--force-validation`/`--force-push` flag split, the patch-equivalence gate on every
+force-push, and syncing all four clones' `main` after every handoff — are recorded in
+`docs/plans/checking/024_avoiding_failed_merges.md` under "Post-review fixes (round 1)".
