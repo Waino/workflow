@@ -32,7 +32,7 @@ from workflow.exceptions import (
     PlanNotFoundError,
     WorkflowError,
 )
-from workflow.git_helpers import git_commit_hash, git_current_branch, git_pull
+from workflow.git_helpers import git_commit_hash, git_current_branch, git_pull, refresh_main
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import RepoName, command_cli_name
 from workflow.plan_resolver import resolve_plan
@@ -268,8 +268,11 @@ def _dispatch_prompt(
 
     try:
         git_pull(config.project_dir / repo_name, dry_run=dry_run, skip_if_no_upstream=True)
+        # An agent asked to rebase (the 'rebase' prompt) needs a current origin/main;
+        # the plain pull above only advances the checked-out branch.
+        refresh_main(config.project_dir / repo_name, dry_run=dry_run)
     except subprocess.CalledProcessError as exc:
-        error_console.print(f"[red]git pull failed in {config.project_dir / repo_name}: {exc}[/red]")
+        error_console.print(f"[red]git sync failed in {config.project_dir / repo_name}: {exc}[/red]")
         return 1
 
     if edit_mode:

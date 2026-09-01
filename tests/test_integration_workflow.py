@@ -627,18 +627,20 @@ def _make_plan(repo_path: Path, state: str, filename: str) -> None:
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-def test_todo_fails_when_second_branch_cut_from_stale_main(
+def test_todo_fails_when_second_branch_cut_after_first_todo(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Phase 0 reproduction (plan 024): two sibling plan branches, `todo`'d in turn.
+    """Phase 0 reproduction (plan 024): a second plan branch, cut only after the first `todo`.
 
-    `subdivide`/`mvp` cut multiple `plan/*` branches from the same base commit in
-    planner. `todo`-ing the first is fine; `todo`-ing the second fails its `--ff-only`
-    merge in canon, because canon's `main` has since advanced past the second branch's
-    base by way of the first plan's "Transition ... to todo" commit -- and that commit
-    never made it back into planner's local `main` (issue 1's ordering hazard).
-    This is a regression test; it must keep passing once Phase 2 lands the fix.
+    `todo 005_foo` succeeds, but (pre-fix) leaves planner's local `main` one commit behind
+    bare's -- missing its own "Transition 005_foo to todo" commit, because `transfer_branch_
+    to_main`'s pull of planner's `main` runs *before* that commit is pushed. Cutting
+    `plan/006_bar` from that stale `main` and running `todo 006_bar` then fails its
+    `--ff-only` merge in canon, because canon's `main` has since advanced past `006_bar`'s
+    base. This is the ordering hazard fixed by Phase 2's `park_on_main` (issue 1); it does
+    *not* require Phase 3's rebase fallback, unlike a `plan/*` pair cut concurrently from the
+    same base (which genuinely diverges and needs a rebase regardless of parking).
     """
     _init_canon_repo(tmp_path)
     config_path = _make_integration_config(tmp_path)
@@ -655,35 +657,26 @@ def test_todo_fails_when_second_branch_cut_from_stale_main(
     _git(["config", "user.email", "test@example.com"], cwd=planner)
     _git(["config", "user.name", "Test"], cwd=planner)
 
-    # Both branches are cut from the same (not-yet-advanced) main, as `subdivide` would.
+    _git(["checkout", "-b", "plan/005_foo"], cwd=planner)
+    _make_plan(planner, "planning", "005_foo.md")
+    _git(["add", "."], cwd=planner)
+    _git(["commit", "-m", "add planning plan 005"], cwd=planner)
+
+    # `todo` 005 while planner is on plan/005_foo: succeeds.
+    result = CliRunner().invoke(main, ["--config", str(config_path), "todo", "005_foo"])
+    assert result.exit_code == 0, result.output
+
+    # Cut the second branch only now, from whatever planner's local main ended up at.
+    assert _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=planner).stdout.strip() == b"main"
     _git(["checkout", "-b", "plan/006_bar"], cwd=planner)
     _make_plan(planner, "planning", "006_bar.md")
     _git(["add", "."], cwd=planner)
     _git(["commit", "-m", "add planning plan 006"], cwd=planner)
 
-    _git(["checkout", "main"], cwd=planner)
-    _git(["checkout", "-b", "plan/005_foo"], cwd=planner)
-    (planner / "docs" / "plans" / "planning").mkdir(parents=True, exist_ok=True)
-    (planner / "docs" / "plans" / "planning" / "005_foo.md").write_text(
-        "# 005: Foo\n\n## Goal\nDo stuff.\n",
-        encoding="utf-8",
-    )
-    _git(["add", "."], cwd=planner)
-    _git(["commit", "-m", "add planning plan 005"], cwd=planner)
-
-    # `todo` 005 while planner is on plan/005_foo: succeeds, but leaves planner's local
-    # main one commit behind bare's (missing the "Transition 005_foo to todo" commit).
-    result = CliRunner().invoke(main, ["--config", str(config_path), "todo", "005_foo"])
-    assert result.exit_code == 0, result.output
-
-    # Switch to the sibling branch, cut before 005's transition landed, and try to land it.
-    _git(["checkout", "plan/006_bar"], cwd=planner)
     result = CliRunner().invoke(main, ["--config", str(config_path), "todo", "006_bar"])
 
-    assert result.exit_code == 1, result.output
-    assert "'git', 'merge', '--ff-only'" in result.output
-    # canon must not have been left on a half-merged branch.
-    assert _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path / "canon").stdout.strip() == b"main"
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "canon" / "docs" / "plans" / "todo" / "006_bar.md").exists()
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")

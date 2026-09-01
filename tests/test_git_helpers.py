@@ -12,11 +12,14 @@ from workflow.exceptions import WorkflowError
 from workflow.git_helpers import (
     CommitResult,
     git_commit_if_changed,
+    git_current_branch,
     git_index_lock_present,
     git_is_ancestor,
     git_is_valid_repo,
     git_ref_exists_remote,
     git_remote_url,
+    park_on_main,
+    refresh_main,
 )
 
 _GIT = shutil.which("git") or "git"
@@ -63,7 +66,6 @@ def test_transfer_branch_to_main_runs_steps_in_order(monkeypatch: pytest.MonkeyP
         # origin/ prefix because the branch is only a remote tracking ref in target repo
         ("merge", canon_repo, "origin/feat/005_plan_state_and_git", True),
         ("push", canon_repo, True),
-        ("pull", source_repo, True),
     ]
 
 
@@ -72,36 +74,6 @@ def test_transfer_branch_to_main_rejects_canon_not_on_main(monkeypatch: pytest.M
 
     with pytest.raises(WorkflowError, match="won't clobber a feature branch"):
         git_helpers.transfer_branch_to_main(tmp_path / "builder", tmp_path / "canon")
-
-
-def test_transfer_branch_to_main_idempotent_rerun_when_source_already_on_main(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """A resumed transfer where source_repo already advanced to 'main' must not crash or checkout."""
-    source_repo = tmp_path / "builder"
-    canon_repo = tmp_path / "canon"
-    calls: list[tuple[object, ...]] = []
-
-    monkeypatch.setattr(git_helpers, "git_current_branch", lambda _repo: "main")
-    monkeypatch.setattr(git_helpers, "git_push", lambda repo, *, dry_run=False: calls.append(("push", repo, dry_run)))
-    monkeypatch.setattr(git_helpers, "git_pull", lambda repo, *, dry_run=False: calls.append(("pull", repo, dry_run)))
-    monkeypatch.setattr(
-        git_helpers,
-        "git_merge",
-        lambda repo, branch, *, dry_run=False: calls.append(("merge", repo, branch, dry_run)),
-    )
-    monkeypatch.setattr(git_helpers, "git_checkout", MagicMock(side_effect=AssertionError("must not checkout")))
-
-    git_helpers.transfer_branch_to_main(source_repo, canon_repo, dry_run=True)
-
-    assert calls == [
-        ("push", source_repo, True),
-        ("pull", canon_repo, True),
-        ("merge", canon_repo, "origin/main", True),
-        ("push", canon_repo, True),
-        ("pull", source_repo, True),
-    ]
 
 
 def test_transfer_branch_to_main_branch_override_takes_precedence(
@@ -290,3 +262,94 @@ def test_git_index_lock_present_true_for_bare(tmp_path: Path) -> None:
     _git(["clone", "--bare", str(source), str(bare)], cwd=tmp_path)
     (bare / "index.lock").touch()
     assert git_index_lock_present(bare) is True
+
+
+# ---------------------------------------------------------------------------
+# refresh_main / park_on_main
+# ---------------------------------------------------------------------------
+
+
+def _make_bare_and_clone(tmp_path: Path) -> tuple[Path, Path]:
+    """Return (bare, clone): a bare repo seeded from a throwaway source, and a real clone of it."""
+    source = _init_repo(tmp_path / "source")
+    bare = tmp_path / "bare"
+    _git(["clone", "--bare", str(source), str(bare)], cwd=tmp_path)
+    clone = tmp_path / "clone"
+    _git(["clone", str(bare), str(clone)], cwd=tmp_path)
+    return bare, clone
+
+
+def _advance_bare_main(bare: Path, tmp_path: Path) -> str:
+    """Push a new commit to bare's main from a second, throwaway clone. Returns the new SHA."""
+    pusher = tmp_path / "pusher"
+    _git(["clone", str(bare), str(pusher)], cwd=tmp_path)
+    (pusher / "more.txt").write_text("more\n", encoding="utf-8")
+    _git(["add", "."], cwd=pusher)
+    _git(["commit", "-m", "advance main"], cwd=pusher)
+    _git(["push"], cwd=pusher)
+    return _git(["rev-parse", "HEAD"], cwd=pusher).stdout.decode().strip()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_refresh_main_pulls_when_on_main(tmp_path: Path) -> None:
+    bare, clone = _make_bare_and_clone(tmp_path)
+    new_sha = _advance_bare_main(bare, tmp_path)
+
+    refresh_main(clone)
+
+    assert _git(["rev-parse", "HEAD"], cwd=clone).stdout.decode().strip() == new_sha
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_refresh_main_fetches_without_touching_tree_when_not_on_main(tmp_path: Path) -> None:
+    bare, clone = _make_bare_and_clone(tmp_path)
+    _git(["checkout", "-b", "feat/x"], cwd=clone)
+    new_sha = _advance_bare_main(bare, tmp_path)
+
+    refresh_main(clone)
+
+    assert git_current_branch(clone) == "feat/x"
+    assert _git(["rev-parse", "refs/heads/main"], cwd=clone).stdout.decode().strip() == new_sha
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_refresh_main_opportunistically_updates_origin_main_tracking_ref(tmp_path: Path) -> None:
+    """The rebase path (git_helpers's fetch during resume classification) relies on this."""
+    bare, clone = _make_bare_and_clone(tmp_path)
+    _git(["checkout", "-b", "feat/x"], cwd=clone)
+    new_sha = _advance_bare_main(bare, tmp_path)
+
+    refresh_main(clone)
+
+    assert _git(["rev-parse", "refs/remotes/origin/main"], cwd=clone).stdout.decode().strip() == new_sha
+
+
+def test_refresh_main_warns_and_returns_when_no_origin_remote(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    refresh_main(repo)  # must not raise
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_park_on_main_checks_out_and_refreshes_when_clean(tmp_path: Path) -> None:
+    bare, clone = _make_bare_and_clone(tmp_path)
+    _git(["checkout", "-b", "feat/x"], cwd=clone)
+    new_sha = _advance_bare_main(bare, tmp_path)
+
+    park_on_main(clone)
+
+    assert git_current_branch(clone) == "main"
+    assert _git(["rev-parse", "HEAD"], cwd=clone).stdout.decode().strip() == new_sha
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_park_on_main_falls_back_to_refresh_when_dirty(tmp_path: Path) -> None:
+    bare, clone = _make_bare_and_clone(tmp_path)
+    _git(["checkout", "-b", "feat/x"], cwd=clone)
+    (clone / "wip.txt").write_text("wip\n", encoding="utf-8")
+    new_sha = _advance_bare_main(bare, tmp_path)
+
+    park_on_main(clone)
+
+    # Left on the dirty feature branch, but 'main' was still refreshed via fetch.
+    assert git_current_branch(clone) == "feat/x"
+    assert _git(["rev-parse", "refs/heads/main"], cwd=clone).stdout.decode().strip() == new_sha

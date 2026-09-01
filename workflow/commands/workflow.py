@@ -41,6 +41,8 @@ from workflow.git_helpers import (
     git_remote_url,
     git_status,
     git_status_porcelain,
+    park_on_main,
+    refresh_main,
     transfer_branch_to_main,
 )
 from workflow.models import AuditLogEntry, Plan, PlanState
@@ -647,6 +649,7 @@ def todo(ctx: click.Context, plan_path: str, *, force: bool) -> None:
             dry_run=dry_run,
         )
         git_push(canon_repo, dry_run=dry_run)
+        park_on_main(planner_repo, dry_run=dry_run)
         _write_script_audit_log(config, "todo", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.PLANNING, "todo", new_plan.name)
     except (
@@ -769,7 +772,8 @@ def _run_implement_steps(  # noqa: PLR0913
     dry_run: bool,
 ) -> Plan:
     """Run the (already-classified) implement steps, gated on resume.should_run."""
-    if resume.should_run(_STEP_IMPLEMENT_TRANSFER):
+    transfer_ran = resume.should_run(_STEP_IMPLEMENT_TRANSFER)
+    if transfer_ran:
         planner_repo = project_dir / RepoName.planner
         canon_repo = project_dir / RepoName.canon
         transfer_branch_to_main(planner_repo, canon_repo, dry_run=dry_run)
@@ -782,6 +786,11 @@ def _run_implement_steps(  # noqa: PLR0913
 
     canon_repo = project_dir / RepoName.canon
     git_push(canon_repo, dry_run=dry_run)
+    if transfer_ran:
+        park_on_main(project_dir / RepoName.planner, dry_run=dry_run)
+    # Builder keeps its new feat/* branch (created below), so it is refreshed rather than
+    # parked -- park_on_main would check it back out onto 'main'.
+    refresh_main(project_dir / RepoName.builder, dry_run=dry_run)
     # Leave an existing feature branch (and any work in progress on it) untouched: the branch
     # creation is coupled to this same gate, not classified/gated separately (see above).
     if resume.should_run(_STEP_IMPLEMENT_FETCH_BUILDER):
@@ -1072,7 +1081,10 @@ def push(ctx: click.Context, plan_path: str) -> None:
             and script_cmd.pull_target is not None
             and script_cmd.pull_target != repo
         ):
-            git_pull(project_dir / script_cmd.pull_target, dry_run=dry_run)
+            # refresh_main, not a plain pull: pull_target is typically on a feature branch
+            # (e.g. planner mid-plan), where a plain 'git pull' would try to pull that
+            # branch rather than advancing 'main'.
+            refresh_main(project_dir / script_cmd.pull_target, dry_run=dry_run)
         _write_script_audit_log(config, "push", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, plan.state, "push", plan.name)
     except (
@@ -1143,11 +1155,8 @@ def accept(ctx: click.Context, plan_path: str) -> None:
         _classify_accept_steps(resume, plan, project_dir, branch)
         resume.render()
 
-        # transfer_branch_to_main also checks reviewer out to 'main' and pulls it, making
-        # it ready for the next task (reordered ahead of the done-transition vs. before;
-        # adds one harmless extra canon push -- both inconsequential). Gated on should_run:
-        # unlike a fresh run, a resume where this already landed must not re-push reviewer's
-        # (by-then-stale) main over the done-transition commit already pushed to bare.
+        # Gated on should_run: unlike a fresh run, a resume where this already landed must
+        # not re-transfer a branch already merged into main.
         if resume.should_run(_STEP_ACCEPT_TRANSFER):
             transfer_branch_to_main(reviewer_repo, canon_repo, branch=branch, dry_run=dry_run)
         # Value-returning transition: always call (idempotent) so new_plan reflects the
@@ -1160,6 +1169,9 @@ def accept(ctx: click.Context, plan_path: str) -> None:
             dry_run=dry_run,
         )
         git_push(canon_repo, dry_run=dry_run)
+        # Parks reviewer on 'main' (fixing issue 1's ordering hazard) only after the
+        # done-transition commit has itself reached bare.
+        park_on_main(reviewer_repo, dry_run=dry_run)
         _write_script_audit_log(config, "accept", dry_run=dry_run, input_plan=plan.name)
         _print_command_reminder(config, PlanState.CHECKING, "accept", new_plan.name)
     except (
@@ -1173,6 +1185,16 @@ def accept(ctx: click.Context, plan_path: str) -> None:
         ctx.exit(1)
         return
     ctx.exit(0)
+
+
+# The agent repo and branch-name prefix for a rejected plan's branch, if any -- states with
+# no open branch (intent/todo/done/rejected) map to nothing, so 'reject' refreshes canon only
+# and prints no unmerged-branch note.
+_BRANCH_OWNER_FOR_STATE: dict[PlanState, tuple[RepoName, str]] = {
+    PlanState.PLANNING: (RepoName.planner, "plan"),
+    PlanState.IMPLEMENTING: (RepoName.builder, "feat"),
+    PlanState.CHECKING: (RepoName.reviewer, "feat"),
+}
 
 
 @register_script("reject")
@@ -1213,10 +1235,16 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
             dry_run=dry_run,
         )
         git_push(project_dir / target_repo, dry_run=dry_run)
+        # Refresh (never park -- the agent may still be mid-work) the repo owning the
+        # now-abandoned branch, so its 'main'/'origin/main' reflect this rejection.
+        branch_owner = _BRANCH_OWNER_FOR_STATE.get(plan.state)
+        if branch_owner is not None:
+            owner_repo, branch_prefix = branch_owner
+            refresh_main(project_dir / owner_repo, dry_run=dry_run)
+            console.print(
+                f"[yellow]Note:[/yellow] {branch_prefix}/{plan.name} is left unmerged and can be deleted manually.",
+            )
         _write_script_audit_log(config, "reject", dry_run=dry_run, input_plan=plan.name)
-        console.print(
-            f"[yellow]Note:[/yellow] feat/{plan.name} is left unmerged and can be deleted manually.",
-        )
     except (
         subprocess.CalledProcessError,
         PlanNotFoundError,

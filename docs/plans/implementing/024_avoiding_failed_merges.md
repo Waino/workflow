@@ -304,13 +304,24 @@ docker script from plans 017/021.
 
 ## Deviations
 
-- **Phase 0 reproduction confirmed the diagnosis**, via the "two `todo`s on separate planner
-  branches" candidate, not the literal sequence in the Goal text (a plain `todo` A → `push` a new
-  intent → `todo` B does *not* fail: `push`'s `pull_target: planner` happens to refresh planner's
-  `main` past the missing commit before the second branch is even cut). The failing sequence:
-  `subdivide`/`mvp` cuts `plan/005_foo` and `plan/006_bar` from the same base commit in planner;
-  `todo 005_foo` succeeds but leaves planner's local `main` one commit behind bare's (missing its own
-  "Transition 005_foo to todo" commit, per the ordering hazard); `todo 006_bar` then fails
-  `git merge --ff-only -- origin/plan/006_bar` in canon, because canon's `main` has since advanced
-  past `006_bar`'s base. Regression test:
-  `test_todo_fails_when_second_branch_cut_from_stale_main` in `tests/test_integration_workflow.py`.
+- **Phase 0 reproduction confirmed the diagnosis**, not the literal sequence in the Goal text (a
+  plain `todo` A → `push` a new intent → `todo` B does *not* fail: `push`'s `pull_target: planner`
+  happens to refresh planner's `main` past the missing commit before the second branch is even
+  cut). The failing sequence: `todo 005_foo` succeeds but leaves planner's local `main` one commit
+  behind bare's (missing its own "Transition 005_foo to todo" commit, per the ordering hazard);
+  cutting `plan/006_bar` from that stale `main` and running `todo 006_bar` then fails `git merge
+  --ff-only -- origin/plan/006_bar` in canon, because canon's `main` has since advanced past
+  `006_bar`'s base. Regression test: `test_todo_fails_when_second_branch_cut_after_first_todo` in
+  `tests/test_integration_workflow.py`.
+  - An earlier version of this test cut *both* sibling branches from the same base commit before
+    either `todo` ran (as `subdivide`/`mvp` would), mirroring the plan's "two `todo`s on separate
+    planner branches" candidate. That scenario is a genuine divergence (the second branch's base
+    predates canon's advanced `main` through no ordering fault -- the branches were simply cut
+    concurrently), so it requires Phase 3's rebase fallback and is *not* fixed by Phase 2's
+    `park_on_main` alone. It was replaced with the sequential-cut version above so the Phase 2
+    regression test isolates issue 1 from issue 2's rebase fallback; the concurrent-branches case is
+    covered by Phase 3's real-git integration tests instead.
+- **Phase 2 call sites**: `todo` and `accept` call `park_on_main`/`refresh_main` unconditionally
+  after their final canon push (both are idempotent no-ops on a resume where nothing changed); only
+  `implement`'s `park_on_main(planner_repo)` is gated on whether the transfer actually ran, since
+  without a transfer there is no planner branch involved at all.

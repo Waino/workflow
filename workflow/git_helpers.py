@@ -293,6 +293,44 @@ def git_diff_branch(repo_path: Path, *extra_args: str) -> str:
     return result.stdout.decode()
 
 
+def refresh_main(repo_path: Path, *, dry_run: bool = False) -> None:
+    """Bring *repo_path*'s local ``main`` (and ``origin/main``) up to date, without touching HEAD.
+
+    If ``main`` is checked out, runs ``git pull --ff-only`` (the only case that touches the
+    working tree, and only by fast-forwarding it). Otherwise runs ``git fetch origin
+    main:main``, which updates ``refs/heads/main`` via the explicit refspec without touching
+    HEAD or the working tree -- and, as a side effect of the fetch, opportunistically updates
+    ``refs/remotes/origin/main`` too (the rebase path in :func:`transfer_branch_to_main`
+    relies on that).
+
+    No-ops with a warning if *repo_path* has no ``origin`` remote configured (some test
+    fixtures construct bare-bones repos without one).
+    """
+    if git_remote_url(repo_path, "origin") is None:
+        error_console.print(f"[yellow]\\[!] {repo_path} has no 'origin' remote; skipping refresh_main.[/yellow]")
+        return
+    if git_current_branch(repo_path) == "main":
+        run_command(["git", "pull", "--ff-only"], cwd=repo_path, dry_run=dry_run)
+    else:
+        run_command(["git", "fetch", "origin", "main:main"], cwd=repo_path, dry_run=dry_run)
+
+
+def park_on_main(repo_path: Path, *, dry_run: bool = False) -> None:
+    """Check out ``main`` (if not already there) and refresh it via :func:`refresh_main`.
+
+    Never fails on a dirty tree: the caller has already completed a successful handoff by the
+    time this runs, so a cosmetic parking failure must not fail the command. On a dirty tree,
+    warns and falls back to :func:`refresh_main` alone (leaving the working tree as-is).
+    """
+    if git_status_porcelain(repo_path):
+        error_console.print(f"[yellow]\\[!] {repo_path} has uncommitted changes; not parking on main.[/yellow]")
+        refresh_main(repo_path, dry_run=dry_run)
+        return
+    if git_current_branch(repo_path) != "main":
+        git_checkout(repo_path, "main", dry_run=dry_run)
+    refresh_main(repo_path, dry_run=dry_run)
+
+
 def transfer_branch_to_main(
     source_repo: Path,
     canon_repo: Path,
@@ -307,11 +345,15 @@ def transfer_branch_to_main(
     checked out to); otherwise reads *source_repo*'s current branch.
 
     Every step is individually idempotent (a merge of an already-merged ref is a
-    harmless no-op, checkout/pull no-op when already on ``main``), so re-running the
-    whole helper on a partially-completed prior transfer is safe -- including when
-    *source_repo* is already on ``main`` (a mid-transfer resume), which reduces to a
-    harmless main-into-main merge. Callers that want to skip the transfer altogether
-    on resume should not call this at all (see each command's classify step).
+    harmless no-op), so re-running the whole helper on a partially-completed prior
+    transfer is safe. Callers that want to skip the transfer altogether on resume
+    should not call this at all (see each command's classify step).
+
+    Does *not* park *source_repo* back on ``main`` -- callers do that afterwards via
+    :func:`park_on_main`, and only after their own transition commit has also reached
+    *canon_repo* and been pushed (see the module docstring's ordering note in each
+    caller); parking here, before that push, is exactly the staleness bug this
+    function's callers exist to avoid.
 
     Raises :class:`~workflow.exceptions.WorkflowError` if *canon_repo* is not on
     ``'main'`` (it always should be at rest; this guards against clobbering a feature
@@ -322,8 +364,6 @@ def transfer_branch_to_main(
     2. ``git pull`` in *canon_repo*
     3. ``git merge <branch>`` in *canon_repo*
     4. ``git push origin`` in *canon_repo*
-    5. ``git checkout main`` in *source_repo* (skipped if already on ``main``)
-    6. ``git pull`` in *source_repo*
     """
     require(
         git_current_branch(canon_repo) == "main",
@@ -336,6 +376,3 @@ def transfer_branch_to_main(
     # Merge via the remote-tracking ref so the branch need not exist locally.
     git_merge(canon_repo, merge_ref, dry_run=dry_run)
     git_push(canon_repo, dry_run=dry_run)
-    if git_current_branch(source_repo) != "main":
-        git_checkout(source_repo, "main", create=False, dry_run=dry_run)
-    git_pull(source_repo, dry_run=dry_run)

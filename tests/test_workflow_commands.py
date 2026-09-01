@@ -354,6 +354,7 @@ def test_todo_transitions_and_prints_implement_reminder(tmp_path: Path, monkeypa
     monkeypatch.setattr(wc, "git_push", fake_push)
     monkeypatch.setattr(wc, "git_index_lock_present", MagicMock(return_value=False))
     monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="main"))
+    monkeypatch.setattr(wc, "park_on_main", MagicMock())
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "todo", "005"])
 
@@ -372,6 +373,8 @@ def _stub_implement_builder_setup(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wc, "git_fetch", MagicMock())
     monkeypatch.setattr(wc, "git_checkout", MagicMock())
     monkeypatch.setattr(wc, "git_pull", MagicMock())
+    monkeypatch.setattr(wc, "park_on_main", MagicMock())
+    monkeypatch.setattr(wc, "refresh_main", MagicMock())
     monkeypatch.setattr(wc, "rotate_control_pane", MagicMock())
 
 
@@ -517,16 +520,16 @@ def test_push_pushes_resolved_repo_without_transition(tmp_path: Path, monkeypatc
     _make_plan(tmp_path, "canon", "intent", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     fake_push = MagicMock()
-    fake_pull = MagicMock()
+    fake_refresh = MagicMock()
     monkeypatch.setattr(wc, "git_push", fake_push)
-    monkeypatch.setattr(wc, "git_pull", fake_pull)
+    monkeypatch.setattr(wc, "refresh_main", fake_refresh)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "push", "005"])
 
     assert result.exit_code == 0
     assert [c.args[0] for c in fake_push.call_args_list] == [tmp_path / "canon"]
-    # intent-state push has pull_target=planner — assert pull_target was also called
-    assert [c.args[0] for c in fake_pull.call_args_list] == [tmp_path / "planner"]
+    # intent-state push has pull_target=planner — assert pull_target was refreshed too
+    assert [c.args[0] for c in fake_refresh.call_args_list] == [tmp_path / "planner"]
     assert "workflow ask 005_foo" in result.output
 
 
@@ -558,6 +561,8 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(wc, "transfer_branch_to_main", fake_transfer)
     monkeypatch.setattr(wc, "git_commit_if_changed", fake_commit)
     monkeypatch.setattr(wc, "git_checkout", fake_commit)
+    monkeypatch.setattr(wc, "park_on_main", fake_pull)
+    monkeypatch.setattr(wc, "refresh_main", fake_pull)
 
     accept_result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005"])
     reject_result = CliRunner().invoke(
@@ -1012,23 +1017,25 @@ def test_implement_from_planning_branch_transfers_and_transitions(
     monkeypatch.setattr(wc, "git_fetch", MagicMock())
     monkeypatch.setattr(wc, "rotate_control_pane", MagicMock())
     monkeypatch.setattr(wc.time, "sleep", MagicMock())
+    monkeypatch.setattr(wc, "park_on_main", lambda *_a, **_kw: call_order.append("park"))
+    monkeypatch.setattr(wc, "refresh_main", lambda *_a, **_kw: call_order.append("refresh"))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005"])
 
     assert result.exit_code == 0, result.output
-    # push planner -> pull canon -> merge -> push canon -> checkout planner main -> pull planner
-    # -> commit (todo) -> commit (implementing) -> push canon -> checkout builder main -> pull builder
-    # -> checkout feat branch
+    # push planner -> pull canon -> merge -> push canon -> commit (todo) -> commit (implementing)
+    # -> push canon -> park planner on main -> refresh builder's main -> fetch builder (untracked)
+    # -> checkout builder main -> pull builder -> checkout feat branch
     assert call_order == [
         "push",
         "pull",
         "merge",
         "push",
-        "checkout",
-        "pull",
         "commit",
         "commit",
         "push",
+        "park",
+        "refresh",
         "checkout",
         "pull",
         "checkout",
@@ -1079,20 +1086,20 @@ def test_todo_resolver_error_exits_nonzero(tmp_path: Path, monkeypatch: pytest.M
 
 
 def test_push_with_pull_target_pulls_after_push(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Push from canon with pull_target=planner runs git_push then git_pull(planner)."""
+    """Push from canon with pull_target=planner runs git_push then refresh_main(planner)."""
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "canon", "intent", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     fake_push = MagicMock()
-    fake_pull = MagicMock()
+    fake_refresh = MagicMock()
     monkeypatch.setattr(wc, "git_push", fake_push)
-    monkeypatch.setattr(wc, "git_pull", fake_pull)
+    monkeypatch.setattr(wc, "refresh_main", fake_refresh)
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "push", "005"])
 
     assert result.exit_code == 0
     assert fake_push.call_args_list[0].args[0] == tmp_path / "canon"
-    assert fake_pull.call_args_list[0].args[0] == tmp_path / "planner"
+    assert fake_refresh.call_args_list[0].args[0] == tmp_path / "planner"
 
 
 def test_push_main_branch_guard_non_canon_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
