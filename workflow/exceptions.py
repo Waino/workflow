@@ -43,4 +43,4 @@ class PlanCollisionError(Exception):
         """Store the colliding sequence number and the tickets that share it."""
         self.sequence_number = sequence_number
         self.colliding = colliding
-        super().__init__(f"Sequence number collision on {sequence_number!r}: {[p.slug for p in colliding]}")
+        super().__init__(f"Sequence number collision on {sequence_number!r}: {[p.path for p in colliding]}")

@@ -21,7 +21,7 @@ def _locate_source(project_dir: Path, repo_name: str, plan_file_name: str) -> Pa
     except PlanCollisionError as exc:
         msg = (
             f"cannot transition {plan_file_name} while sequence number {exc.sequence_number!r} collides "
-            f"in {repo_name} ({', '.join(p.slug for p in exc.colliding)}); renumber one of them first"
+            f"in {repo_name} ({', '.join(str(p.path) for p in exc.colliding)}); renumber one of them first"
         )
         raise WorkflowError(msg) from exc
 

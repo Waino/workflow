@@ -141,5 +141,5 @@ def test_transition_plan_raises_on_duplicate_source(tmp_path: Path) -> None:
     _write_plan_file(tmp_path, "canon", PlanState.CHECKING)
     plan = _plan(repo="canon", state_value=PlanState.CHECKING)
 
-    with pytest.raises(WorkflowError, match="multiple state dirs"):
+    with pytest.raises(WorkflowError, match=r"cannot transition 005_foo\.md while sequence number '005' collides"):
         state.transition_plan(plan, PlanState.DONE, tmp_path, repo_override="canon", dry_run=True)

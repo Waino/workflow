@@ -265,12 +265,18 @@ class TestFindPlanFileInRepo:
     def test_duplicated_raises(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "005_foo.md")
         _make_plan(tmp_path, "canon", PlanState.CHECKING, "005_foo.md")
-        with pytest.raises(WorkflowError, match="multiple state dirs"):
+        with pytest.raises(PlanCollisionError):
             find_plan_file_in_repo(tmp_path, "canon", "005_foo.md")
 
     def test_excludes_reviews(self, tmp_path: Path) -> None:
         _make_review(tmp_path, "canon", ReviewSubState.PR, "005_foo_0e6baa9.md")
         assert find_plan_file_in_repo(tmp_path, "canon", "005_foo_0e6baa9.md") is None
+
+    def test_excludes_intents(self, tmp_path: Path) -> None:
+        _make_plan(tmp_path, "canon", PlanState.INTENT, "005_foo.md")
+        _make_plan(tmp_path, "canon", PlanState.CHECKING, "005_foo.md")
+        result = find_plan_file_in_repo(tmp_path, "canon", "005_foo.md")
+        assert result == tmp_path / "canon" / "docs" / "plans" / "checking" / "005_foo.md"
 
 
 # ---------------------------------------------------------------------------
