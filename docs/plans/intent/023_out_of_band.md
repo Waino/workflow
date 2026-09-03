@@ -8,6 +8,17 @@ To support contributions to arbitrary projects,
 we need a usage mode where plans are kept out-of-band, i.e. in a separate repository from the source code.
 
 The mode should be selected during `workflow init` (flag `--oob`) and remembered for all subsequent commands.
+There is another upcoming feature that requires persistent project-level metadata,
+so the method for storing it should not be limited to a single value.
+
+
+## Multiple code repos
+
+For some projects, it is necessary to
+- perform changes in lockstep, adding functionality or fixing bugs in a dependency in order to enable a change,
+- or at least check details of and test against a feature branch of a dependency.
+The current monorepo assumption doesn't fit this kind of work.
+
 
 ## Example
 
@@ -92,13 +103,17 @@ Note the following differences:
     - `bare` and each agent has a copy of all repos.
 
 
-## Branch model
+## Git branch model
 
 The `workflow` tool only manages the branch lifecycle of `docs`.
-The agents manage the git state of the code repos without script automation.
+The agents manage most of the git state of the code repos without script automation.
 Plans must include a section detailing which branch of each code repo should be worked on,
 and on which commit they should be based.
 
+Pushing is still prohibited for the agents.
+Planner should not add commits to the code repos.
+The `reject` transition only affects plans: the code is intentionally left unmerged.
+Thus the only transitions that push multiple repos are `check` and `accept`.
 
 ## Agent interaction
 
@@ -107,16 +122,23 @@ Typically planner will check out branches in the code repos, but will not modify
 Planner writes and commits the plan document in the `docs` repo, which is pushed by `workflow`.
 
 When builder receives the plan, it will check out (possibly creating) the branch(es) in the code repo(s).
-It will then make changes in one or more of the repos, commit, and push to `bare`.
-(We might like a script helper to push all repos, if leaving it to the agent works poorly.)
+It will then make changes in one or more of the repos, and commit each.
+`check` pushes all repos to `bare`.
 
 Reviewer receives the plan, pulls the changes, and writes its review in `docs`.
-The review either gets handed to builder, or then the reviewer directly makes code changes, commits, and pushes.
+The review either gets handed to builder, or then the reviewer directly makes code changes, and commits.
+`accept` pushes all repos to `bare`.
 
 
-## Multiple code repos
+## run_agent_in_docker.sh
 
-For some projects, it is necessary to
-- perform changes in lockstep, adding functionality or fixing bugs in a dependency in order to enable a change,
-- or at least check details of and test against a feature branch of a dependency.
-The current monorepo assumption doesn't fit this kind of work.
+The `run_agent_in_docker.sh` script will probably not need any major changes.
+It already mounts the agent's subdirectory (called `repo`, but in oob mode a parent directory containing the repos),
+and the entire `bare`.
+
+
+## Risks
+
+This is a major change, and a change of direction from the original intent, which was to keep plans as documentation in-repo.
+As the change affects the expected shape of the project directories, and the number of involved repos,
+it requires a thorough and comprehensive analysis during planning.
