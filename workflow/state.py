@@ -10,7 +10,7 @@ from workflow.models import Plan, PlanState
 from workflow.plan_resolver import find_plan_file_in_repo
 
 
-def _locate_source(project_dir: Path, repo_name: str, plan_file_name: str) -> Path | None:
+def locate_plan_file(project_dir: Path, repo_name: str, plan_file_name: str) -> Path | None:
     """Locate *plan_file_name* in *repo_name*, translating a repo-wide collision into advice.
 
     The lookup scans the whole repo, so an unrelated sequence-number collision elsewhere in
@@ -53,7 +53,7 @@ def transition_plan(
     """
     repo_name = repo_override or plan.path.parts[0]
     repo_path = project_dir / repo_name
-    source = _locate_source(project_dir, repo_name, plan.path.name)
+    source = locate_plan_file(project_dir, repo_name, plan.path.name)
     if source is None:
         if not dry_run:
             msg = (

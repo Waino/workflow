@@ -221,9 +221,49 @@ def git_is_valid_repo(repo_path: Path, *, bare: bool = False) -> bool:
     return (result.stdout.decode().strip() == "true") == bare
 
 
-def git_merge(repo_path: Path, branch: str, *, dry_run: bool = False) -> None:
-    """Merge *branch* into the current branch in *repo_path*."""
-    run_command(["git", "merge", "--ff-only", "--", branch], cwd=repo_path, dry_run=dry_run)
+def git_merge(repo_path: Path, branch: str, *, ff_only: bool = True, dry_run: bool = False) -> None:
+    """Merge *branch* into the current branch in *repo_path*.
+
+    ``ff_only=False`` allows a real merge commit -- needed when the current branch has
+    its own commits *branch* doesn't (e.g. bringing `origin/main` into a stacked plan's
+    already-diverged feature branch), where a fast-forward is structurally impossible.
+    """
+    args = ["git", "merge", *(["--ff-only"] if ff_only else ["--no-edit"]), "--", branch]
+    run_command(args, cwd=repo_path, dry_run=dry_run)
+
+
+def git_commits_ahead_of_remote(repo_path: Path, branch: str) -> int:
+    """Return how many commits *branch* is ahead of ``origin/<branch>`` in *repo_path*.
+
+    Assumes the caller has already fetched. Read-only guard query: always runs for
+    real, even in dry-run.
+    """
+    result = subprocess.run(  # noqa: S603
+        ["git", "rev-list", "--count", f"origin/{branch}..{branch}"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return 0
+    return int(result.stdout.decode().strip())
+
+
+def git_list_branches(repo_path: Path, *, prefix: str = "") -> list[str]:
+    """Return local branch names in *repo_path*, optionally filtered by *prefix*.
+
+    Read-only guard query: always runs for real, even in dry-run.
+    """
+    pattern = f"refs/heads/{prefix}*" if prefix else "refs/heads/*"
+    result = subprocess.run(  # noqa: S603
+        ["git", "for-each-ref", "--format=%(refname:short)", pattern],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.decode().splitlines() if line]
 
 
 def git_branch_delete(repo_path: Path, branch: str, *, dry_run: bool = False) -> None:
