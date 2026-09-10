@@ -177,7 +177,17 @@ states:
         prompt: |
           Read the plan at {{ plan.path }}.
           Work on the feature branch {{ branch }}.
+          {%- if stack %}
+          The branch already carries finished work for:
+          {% for e in stack -%}
+          {%- if not loop.last %}- {{ e.name }} ({{ e.path }}, commit range {{ e.commit_range }})
+          {% endif -%}
+          {%- endfor %}
+          Read those plans for context only; do not re-implement or modify them.
+          Implement only {{ plan.path }}.
+          {%- else %}
           Implement the plan.
+          {%- endif %}
           Commit your changes, making sure to run the pre-commit hook.
         reminder: check
       - command_type: script
@@ -203,6 +213,12 @@ states:
           {%- if plan.sequence_number|length > 1 %}
           The plan is a result of subdivision:
           also read the parent plan to ensure that changes align with the big picture.{%- endif %}
+          {%- if stack %}
+          The branch carries the whole stack:
+          {% for e in stack %}- {{ e.name }} ({{ e.path }}, commit range {{ e.commit_range }})
+          {% endfor -%}
+          The review covers the whole branch, but organise it per plan.
+          {%- endif %}
           Write a report into docs/plans/reviews/pr/{{ plan.name }}_{{ commit }}.md.
           Commit your changes. Do not modify the code.
         reminder: fix
