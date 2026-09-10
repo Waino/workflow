@@ -62,9 +62,11 @@ Setup and session management
 ``doctor``
     Report the health of every clone (branch, dirty state, remotes, whether its
     ``main`` matches the bare repo) and flag plan-file anomalies (e.g. duplicate
-    sequence numbers). Exits non-zero if any anomaly is found; the separate *notes*
-    column carries observations that are normal during parallel work (e.g. a branch
-    that still needs rebasing) and never affects the exit code.
+    sequence numbers) and stack anomalies (a broken ``onto``, a stack branch whose
+    plans are all ``done``/``rejected``, or a recorded branch that exists nowhere).
+    Exits non-zero if any anomaly is found; the separate *notes* column carries
+    observations that are normal during parallel work (e.g. a branch that still
+    needs rebasing) and never affects the exit code.
 
 ``agents_md``
     Regenerate the auto-generated section of ``AGENTS.md`` (plan state machine and
@@ -102,13 +104,17 @@ operations (push/pull/merge) needed at each handoff.
     ``implementing``, push, create a ``feat/{plan_name}`` branch in the builder's
     clone, and switch the tmux focus to the builder. ``--continue`` resumes after a
     partially completed run; ``--force-push`` is explained under
-    `Landing a branch on main`_.
+    `Landing a branch on main`_. ``--onto`` builds a stack instead of a fresh branch —
+    see `Stacked plans`_.
 
 ``check PLAN_PATH``
     Hand a finished implementation off from builder to reviewer: rerun the
     pre-commit hook, validate, transition to ``checking``, push the branch, and
     fetch it into the reviewer's clone. ``--target-repo`` overrides which repo is
     pushed (default ``builder``); ``--force-validation`` skips a failing validation.
+    On a stacked plan this cascades: every stack member not already ``checking`` is
+    transitioned in the same commit (see `Stacked plans`_); *PLAN_PATH* must be the
+    tip of its stack.
 
 ``validate PLAN_PATH``
     Run the pre-merge verification checks (also run internally by ``todo``,
@@ -120,14 +126,19 @@ operations (push/pull/merge) needed at each handoff.
     ``done``, merge to ``main``, push, then delete the merged ``feat/{plan_name}``
     branch in the reviewer's and builder's clones and on the bare repo (all cleanup
     failures are warnings — the accept itself has already landed).
-    ``--force-push`` is explained under `Landing a branch on main`_.
+    ``--force-push`` is explained under `Landing a branch on main`_. On a stacked
+    plan this cascades every member to ``done`` in one commit and deletes the one
+    shared branch; *PLAN_PATH* must be the tip of its stack.
 
 ``reject PLAN_PATH``
     Close out a plan without merging: transition to ``rejected`` and push that
     transition. The plan's branch is deliberately *not* merged and *not* deleted;
     the command prints a note naming the branch you may delete by hand.
     ``--target-repo`` selects which repo holds the plan being rejected (default
-    ``canon``).
+    ``canon``). On a stacked plan, the note instead gives the concrete
+    ``git reset --hard`` to drop this plan's commits from the shared branch (see
+    `Stacked plans`_); rejecting a plan that itself has a child stacked on it prints
+    an additional warning that the child's commits stay on the branch regardless.
 
 ``canon_pre_commit``
     Run the pre-commit hook against the canon repo in a throwaway container.
@@ -207,9 +218,11 @@ Information
 ------------
 
 ``status``
-    Show every plan's current state and its likely next step(s). Omits ``done`` and
-    ``rejected`` plans unless ``--all`` is given.
+    Show every plan's current state and its likely next step(s), plus a ``stack``
+    column naming the plan it is stacked onto (blank when unstacked). Omits ``done``
+    and ``rejected`` plans unless ``--all`` is given.
 
 ``log``
     Pretty-print the JSONL audit log. Filterable by ``--agent``, ``--plan``,
-    ``--command``, ``--since``, and ``--until``.
+    ``--command``, ``--since``, and ``--until``. A stacked ``implement`` entry's
+    command cell reads ``implement (onto {base_plan})``.

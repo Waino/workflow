@@ -101,6 +101,37 @@ Reviews (under ``docs/plans/reviews/``) are a special case: they are never moved
 between states. Instead, a review's findings are addressed by writing one or more
 new plans.
 
+.. _Stacked plans:
+
+Stacked plans
+-------------
+
+Fine-grained plans (e.g. ``subdivide`` output, or a small follow-up fix) often build
+directly on one another. Building them one at a time is right, but reviewing and
+merging each one separately is wasteful. ``implement PLAN --onto BASE`` lets several
+plans share one feature branch, so the whole stack is reviewed and merged once:
+
+* ``implement B --onto A`` requires ``A`` to be ``implementing`` (or ``checking``
+  with nothing unpushed from the reviewer), and to not already have another plan
+  stacked on it. It records ``B``'s ``onto`` and the branch/anchor commit in ``B``'s
+  plan file frontmatter, then merges current ``main`` into the shared branch.
+  ``--onto`` with no value infers the base from the branch builder is already on.
+* ``check TIP`` and ``accept TIP`` must be run on the stack's tip (the plan nothing
+  else is stacked on); both cascade the transition to every member of the stack in
+  one commit. ``accept`` still deletes only the one shared branch.
+* ``reject`` never cascades — it only closes out the named plan. Rejecting a
+  stacked plan prints the concrete ``git reset --hard <anchor>`` to drop its commits
+  from the shared branch by hand; this is safest done before the next ``check``
+  cascades the plan onto the branch for good.
+* ``workflow status``, ``workflow log``, and ``workflow doctor`` all surface stack
+  membership: ``status`` shows the base a plan is stacked onto, ``log`` annotates a
+  stacked ``implement`` entry, and ``doctor`` flags a broken ``onto``, an orphaned
+  stack branch, or a recorded branch that no longer exists anywhere.
+
+A project's customized ``config.yaml`` does not automatically pick up stack-aware
+prompt wording added to the default ``build``/``pr`` templates — copy the relevant
+``{% if stack %}`` blocks over by hand if you want agents to see stack context.
+
 Configurable vs. requiring code changes
 ----------------------------------------
 
