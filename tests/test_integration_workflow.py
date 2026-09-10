@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -25,6 +26,20 @@ from workflow.validate import CheckResult, _check_agents_md
 # ---------------------------------------------------------------------------
 
 _GIT = shutil.which("git") or "git"
+
+_REAL_SLEEP = time.sleep
+"""Captured before tests monkeypatch `wc.time.sleep` -- which *is* the stdlib `time` module."""
+
+
+def _settle() -> None:
+    """Sleep past the current git-timestamp second.
+
+    The multi-source plan resolver breaks same-second ties within a single repo's own
+    history by git log traversal order, not recency; stacked-plan tests perform several
+    commits per second, so real time must advance between them for resolution to stay
+    deterministic.
+    """
+    _REAL_SLEEP(1.1)
 
 
 def _git(
@@ -969,3 +984,271 @@ def test_implement_needs_continue_for_leftover_branch(tmp_path: Path, monkeypatc
     result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005_foo", "--continue"])
     assert result.exit_code == 0, result.output
     assert (tmp_path / "canon" / "docs" / "plans" / "implementing" / "005_foo.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# Stacked plans (`implement --onto`)
+# ---------------------------------------------------------------------------
+
+
+def _setup_stacked_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Init a project and set git identity in every agent clone; return the config path."""
+    _init_canon_repo(tmp_path)
+    config_path = _make_integration_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    passing = [CheckResult(check_name="ok", status="pass", message="ok")]
+    monkeypatch.setattr(wc, "run_validate", MagicMock(return_value=passing))
+    monkeypatch.setattr(wc, "_run_pre_commit_hook", MagicMock())
+    monkeypatch.setattr(wc.time, "sleep", MagicMock())
+    monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
+    assert result.exit_code == 0, result.output
+    for repo_name in ("planner", "builder", "reviewer"):
+        repo = tmp_path / repo_name
+        _git(["config", "user.email", "test@example.com"], cwd=repo)
+        _git(["config", "user.name", "Test"], cwd=repo)
+    return config_path
+
+
+def _create_and_todo_plan(config_path: Path, tmp_path: Path, plan_name: str) -> None:
+    """Planner-create a plan on its own `plan/*` branch, cut from current main, and `todo` it."""
+    planner = tmp_path / "planner"
+    _git(["checkout", "main"], cwd=planner)
+    _git(["pull"], cwd=planner, check=False)
+    _git(["checkout", "-b", f"plan/{plan_name}"], cwd=planner)
+    _make_plan(planner, "planning", f"{plan_name}.md")
+    _git(["add", "."], cwd=planner)
+    _git(["commit", "-m", f"add planning plan {plan_name}"], cwd=planner)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "todo", plan_name])
+    assert result.exit_code == 0, result.output
+    _settle()
+
+
+def _builder_commit(tmp_path: Path, filename: str, message: str) -> None:
+    builder = tmp_path / "builder"
+    (builder / filename).write_text(f"{message}\n", encoding="utf-8")
+    _git(["add", "."], cwd=builder)
+    _git(["commit", "-m", message], cwd=builder)
+    _settle()
+
+
+def _run(config_path: Path, *args: str) -> Any:
+    """Invoke a workflow subcommand and settle past its git-timestamp second."""
+    result = CliRunner().invoke(main, ["--config", str(config_path), *args])
+    _settle()
+    return result
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_stacked_plans_full_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Implement A -> commit -> implement B --onto A -> commit -> check B -> accept B."""
+    config_path = _setup_stacked_project(tmp_path, monkeypatch)
+    canon = tmp_path / "canon"
+    builder = tmp_path / "builder"
+
+    _create_and_todo_plan(config_path, tmp_path, "005_foo")
+    result = _run(config_path, "implement", "005_foo")
+    assert result.exit_code == 0, result.output
+    _builder_commit(tmp_path, "foo.txt", "builder work on foo")
+
+    _create_and_todo_plan(config_path, tmp_path, "006_bar")
+    result = _run(config_path, "implement", "006_bar", "--onto", "005_foo")
+    assert result.exit_code == 0, result.output
+
+    # No feat/006_bar branch was ever created; B lives on A's branch.
+    assert _git(["branch", "--list", "feat/006_bar"], cwd=builder).stdout.strip() == b""
+    assert _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=builder).stdout.strip() == b"feat/005_foo"
+    assert (canon / "docs" / "plans" / "implementing" / "006_bar.md").exists()
+    assert "onto: 005_foo" in (canon / "docs" / "plans" / "implementing" / "006_bar.md").read_text(encoding="utf-8")
+
+    _builder_commit(tmp_path, "bar.txt", "builder work on bar")
+
+    result = _run(config_path, "check", "006_bar")
+    assert result.exit_code == 0, result.output
+    reviewer = tmp_path / "reviewer"
+    assert (reviewer / "docs" / "plans" / "checking" / "005_foo.md").exists()
+    assert (reviewer / "docs" / "plans" / "checking" / "006_bar.md").exists()
+
+    result = _run(config_path, "accept", "006_bar")
+    assert result.exit_code == 0, result.output
+
+    assert (canon / "docs" / "plans" / "done" / "005_foo.md").exists()
+    assert (canon / "docs" / "plans" / "done" / "006_bar.md").exists()
+
+    # The shared branch is gone everywhere.
+    for repo in (canon, builder, reviewer, tmp_path / "bare"):
+        assert _git(["branch", "--list", "feat/005_foo"], cwd=repo).stdout.strip() == b""
+
+    # main carries both builder commits.
+    assert (canon / "foo.txt").exists()
+    assert (canon / "bar.txt").exists()
+
+    entries = read_audit_log(tmp_path)
+    check_entry = next(e for e in entries if e.command == "check" and e.input_plan == "006_bar")
+    assert check_entry.output_plans == ["005_foo"]
+    accept_entry = next(e for e in entries if e.command == "accept" and e.input_plan == "006_bar")
+    assert accept_entry.output_plans == ["005_foo"]
+    implement_entry = next(e for e in entries if e.command == "implement" and e.input_plan == "006_bar")
+    assert implement_entry.stacked_on == ["005_foo"]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_check_and_accept_require_stack_tip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`check`/`accept` on a mid-stack plan refuse, naming the tip to use instead."""
+    config_path = _setup_stacked_project(tmp_path, monkeypatch)
+
+    _create_and_todo_plan(config_path, tmp_path, "005_foo")
+    result = _run(config_path, "implement", "005_foo")
+    assert result.exit_code == 0, result.output
+    _builder_commit(tmp_path, "foo.txt", "builder work on foo")
+
+    _create_and_todo_plan(config_path, tmp_path, "006_bar")
+    result = _run(config_path, "implement", "006_bar", "--onto", "005_foo")
+    assert result.exit_code == 0, result.output
+    _builder_commit(tmp_path, "bar.txt", "builder work on bar")
+
+    # check on the base (not the tip) refuses.
+    result = _run(config_path, "check", "005_foo")
+    assert result.exit_code == 1
+    assert "006_bar" in result.output
+
+    # Cascade both to checking via the tip.
+    result = _run(config_path, "check", "006_bar")
+    assert result.exit_code == 0, result.output
+
+    # accept on the base (not the tip) refuses while the child is still checking.
+    result = _run(config_path, "accept", "005_foo")
+    assert result.exit_code == 1
+    assert "006_bar" in result.output
+
+    # Closing out through the tip succeeds.
+    result = _run(config_path, "accept", "006_bar")
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_reject_tip_before_check_then_accept_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rejecting a stacked tip while it is still `implementing` unblocks the base for `check`/`accept`.
+
+    Rejecting after `check` has already cascaded the tip onto the shared branch is not
+    exercised here: the branch would still carry the tip's (unrejected) commits, which is
+    exactly what reject's rollback hint's manual `git reset --hard` is for.
+    """
+    config_path = _setup_stacked_project(tmp_path, monkeypatch)
+    canon = tmp_path / "canon"
+
+    _create_and_todo_plan(config_path, tmp_path, "005_foo")
+    result = _run(config_path, "implement", "005_foo")
+    assert result.exit_code == 0, result.output
+    _builder_commit(tmp_path, "foo.txt", "builder work on foo")
+
+    _create_and_todo_plan(config_path, tmp_path, "006_bar")
+    result = _run(config_path, "implement", "006_bar", "--onto", "005_foo")
+    assert result.exit_code == 0, result.output
+
+    # Reject the tip before check ever cascades it onto the branch.
+    result = _run(config_path, "reject", "006_bar")
+    assert result.exit_code == 0, result.output
+    assert (canon / "docs" / "plans" / "rejected" / "006_bar.md").exists()
+
+    # The base is actionable again: check/accept see a stack of one.
+    result = _run(config_path, "check", "005_foo")
+    assert result.exit_code == 0, result.output
+
+    result = _run(config_path, "accept", "005_foo")
+    assert result.exit_code == 0, result.output
+    assert (canon / "docs" / "plans" / "done" / "005_foo.md").exists()
+    assert (canon / "docs" / "plans" / "done" / "005_foo.md").exists()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_implement_onto_refused_when_base_already_has_a_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second `--onto` against the same base must be refused; use the tip instead."""
+    config_path = _setup_stacked_project(tmp_path, monkeypatch)
+
+    _create_and_todo_plan(config_path, tmp_path, "005_foo")
+    result = _run(config_path, "implement", "005_foo")
+    assert result.exit_code == 0, result.output
+    _builder_commit(tmp_path, "foo.txt", "builder work on foo")
+
+    _create_and_todo_plan(config_path, tmp_path, "006_bar")
+    result = _run(config_path, "implement", "006_bar", "--onto", "005_foo")
+    assert result.exit_code == 0, result.output
+    _builder_commit(tmp_path, "bar.txt", "builder work on bar")
+
+    _create_and_todo_plan(config_path, tmp_path, "007_baz")
+    result = _run(config_path, "implement", "007_baz", "--onto", "005_foo")
+
+    assert result.exit_code == 1
+    assert "006_bar" in result.output
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_unstacked_implement_refused_while_builder_busy_on_stack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plain `implement` refuses to run while builder sits on another plan's unfinished branch."""
+    config_path = _setup_stacked_project(tmp_path, monkeypatch)
+
+    _create_and_todo_plan(config_path, tmp_path, "005_foo")
+    result = _run(config_path, "implement", "005_foo")
+    assert result.exit_code == 0, result.output
+    _builder_commit(tmp_path, "foo.txt", "builder work on foo")
+
+    _create_and_todo_plan(config_path, tmp_path, "006_bar")
+    result = _run(config_path, "implement", "006_bar")
+
+    assert result.exit_code == 1
+    assert "005_foo" in result.output
+    assert "--onto" in result.output
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_implement_onto_infers_base_from_builder_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--onto` with no value infers the base from the branch builder is already on."""
+    config_path = _setup_stacked_project(tmp_path, monkeypatch)
+    canon = tmp_path / "canon"
+
+    _create_and_todo_plan(config_path, tmp_path, "005_foo")
+    result = _run(config_path, "implement", "005_foo")
+    assert result.exit_code == 0, result.output
+    _builder_commit(tmp_path, "foo.txt", "builder work on foo")
+
+    _create_and_todo_plan(config_path, tmp_path, "006_bar")
+    result = _run(config_path, "implement", "006_bar", "--onto")
+
+    assert result.exit_code == 0, result.output
+    assert (canon / "docs" / "plans" / "implementing" / "006_bar.md").exists()
+    assert "onto: 005_foo" in (canon / "docs" / "plans" / "implementing" / "006_bar.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_implement_onto_dry_run_mutates_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _setup_stacked_project(tmp_path, monkeypatch)
+    builder = tmp_path / "builder"
+
+    _create_and_todo_plan(config_path, tmp_path, "005_foo")
+    result = _run(config_path, "implement", "005_foo")
+    assert result.exit_code == 0, result.output
+    _builder_commit(tmp_path, "foo.txt", "builder work on foo")
+
+    _create_and_todo_plan(config_path, tmp_path, "006_bar")
+    builder_head_before = _git(["rev-parse", "HEAD"], cwd=builder).stdout
+    canon_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout
+
+    result = CliRunner().invoke(
+        main,
+        ["--dry-run", "--config", str(config_path), "implement", "006_bar", "--onto", "005_foo"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _git(["rev-parse", "HEAD"], cwd=builder).stdout == builder_head_before
+    assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout == canon_head_before
+    assert (tmp_path / "canon" / "docs" / "plans" / "todo" / "006_bar.md").exists()
