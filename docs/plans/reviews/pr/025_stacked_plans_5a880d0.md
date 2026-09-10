@@ -132,3 +132,43 @@ Findings 1, 3 and 4 were reproduced against real git repos (throwaway scratch te
 - `check`/`accept` cascade the same `stack` list through classification and execution (Risk 2),
   and the audit log records `output_plans`/`stacked_on` as designed.
 - The 023.2 / 023.6 plan amendments required by §Dependencies are present on main.
+
+## Resolution
+
+All findings addressed on `feat/025_stacked_plans` after the review.
+
+- **1** `_check_onto_preconditions` refuses `plan.name == base_plan.name`.
+- **2** the same function now *returns* the base's resolved stack, so a cycle or unresolvable
+  `onto` fails before the frontmatter write; the caller no longer re-resolves afterwards.
+- **3** the "recorded branch exists nowhere" check applies only to `implementing`/`checking` plans.
+- **4** the reject hint prints `git checkout main` + `git branch -f <branch> <anchor>` (a `branch -f`
+  alone fails while the branch is checked out, and never discards a working tree).
+- **5** `git_commits_ahead_of_remote` raises `WorkflowError` instead of reporting 0 when the
+  comparison cannot be made.
+- **6** the frontmatter write uses `model_copy`, preserving unknown keys.
+- **7** the shared-branch note is gated on `fm.onto is not None`.
+- **8** `git_list_branches` deleted.
+- **9** added: stacked `accept` with `main` advanced (rebase path), `--onto` refused on unpushed
+  reviewer commits (and allowed once pushed), self-stack refusal, the reject hint's wording,
+  `doctor` clean after an accepted stack, and five `_stack_anomalies` unit tests.
+- **10** `_settle()`'s real sleeps replaced by `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` stamping;
+  full suite 98s -> 49s.
+- **11** the mid-stack guard moved inside the `try` (WorkflowError rendering) and exempts `ask`
+  via `_STACK_TIP_EXEMPT_COMMANDS`.
+- **13** plan §4 now records the `repo_override=target_repo` change.
+- **14** one `assert config.project_dir is not None`, hoisted.
+- **15** `tip_plan_for_branch` raises on a candidate set with no tip.
+- **16** one `_children_by_onto` scan replaces the per-candidate `stack_child` calls, and
+  frontmatter parses are cached on (path, mtime, size); `_branch_exists_anywhere` carries a
+  `ponytail:` note for its process-per-plan cost.
+- **17** `WorkflowConfig` moved under `TYPE_CHECKING` in `stack.py`.
+- Also: `implement --onto` passes `repo_override=RepoName.canon` to its transition (finding 12's
+  latent staged-but-uncommitted-in-canon hazard), and the `reject` wording in `cli.rst` /
+  `workflow.rst` follows the new command.
+
+Not changed: `check` still does not require the target repo's current branch to equal the
+recorded one (finding 12's second half) — out of scope for a fix pass, since the existing
+`feat/` prefix check predates this plan.
+
+Gates after the fixes: `pytest` 466 passed (49s), `mypy --strict` clean, `ruff` clean, `black`
+clean.

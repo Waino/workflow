@@ -171,7 +171,11 @@ def _duplicate_plan_anomalies(project_dir: Path) -> list[str]:
 
 
 def _branch_exists_anywhere(project_dir: Path, branch: str) -> bool:
-    """Return whether *branch* exists in bare or in any repo worktree."""
+    """Return whether *branch* exists in bare or in any repo worktree.
+
+    ponytail: one git process per repo per queried branch; fine for a handful of
+    in-flight plans, would want a single `for-each-ref` per repo if that grows.
+    """
     bare_path = project_dir / "bare"
     if bare_path.is_dir() and git_branch_exists(bare_path, branch):
         return True
@@ -202,7 +206,13 @@ def _stack_anomalies(project_dir: Path, config: WorkflowConfig) -> list[str]:
             except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError, WorkflowError):
                 anomalies.append(f"{plan.name}: onto={fm.onto!r} does not resolve to a plan")
         repo_branch = fm.branches.get(DOCS_REPO)
-        if repo_branch is not None and not _branch_exists_anywhere(project_dir, repo_branch.branch):
+        # Only while the plan is in flight: `accept` deletes the shared branch but leaves
+        # the frontmatter naming it, which is a record, not an anomaly.
+        if (
+            repo_branch is not None
+            and plan.state in _ACTIVE_FEATURE_BRANCH_STATES
+            and not _branch_exists_anywhere(project_dir, repo_branch.branch)
+        ):
             anomalies.append(f"{plan.name}: recorded branch {repo_branch.branch!r} exists nowhere")
 
     for branch, members in branch_members.items():

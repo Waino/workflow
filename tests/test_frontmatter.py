@@ -105,3 +105,19 @@ def test_write_frontmatter_replaces_existing_block_byte_identical_body(tmp_path:
     parsed, body = strip_frontmatter(text)
     assert parsed == new_fm
     assert body == _BODY
+
+
+def test_write_frontmatter_preserves_unknown_keys_when_rewritten(tmp_path: Path) -> None:
+    """`extra='allow'` is pointless if a rewrite drops the extras, so a rewrite must carry them."""
+    path = tmp_path / "002_foo.md"
+    parsed = parse_frontmatter("---\nonto: 001_base\nfuture_key: some_value\n---\n" + _BODY)
+    assert parsed is not None
+    path.write_text(render_frontmatter(parsed) + _BODY, encoding="utf-8")
+
+    updated = parsed.model_copy(update={"branches": {"docs": RepoBranch(branch="feat/001_base", base="abc1234")}})
+    write_frontmatter(path, updated)
+
+    reparsed = parse_frontmatter(path.read_text(encoding="utf-8"))
+    assert reparsed is not None
+    assert reparsed.model_extra == {"future_key": "some_value"}
+    assert reparsed.branches["docs"].base == "abc1234"

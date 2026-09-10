@@ -39,6 +39,9 @@ from workflow.plan_resolver import resolve_plan
 from workflow.shell import console, error_console, print_workflow_error
 from workflow.stack import stack_child, stack_entries
 
+_STACK_TIP_EXEMPT_COMMANDS = frozenset({"ask"})
+"""Prompts that stay available on a mid-stack plan: they answer questions, they do not act on the branch."""
+
 CONTROL_PANE_OPTION = "@workflow_control_pane"
 """Session user option holding the stable pane id of the docked control pane."""
 
@@ -192,19 +195,15 @@ def _setup_has_plan(
         error_console.print(f"Plan resolved to: {plan.path}")
         error_console.print(f"[red]No agent configured for state '{plan.state.value}'.[/red]")
         return None
-    if target.state == PlanState.CHECKING:
-        assert config.project_dir is not None
-        child = stack_child(config.project_dir, plan)
-        if child is not None:
-            error_console.print(f"Plan resolved to: {plan.path}")
-            error_console.print(
-                f"[red]{plan.name} has {child.name} stacked on it; run this command on {child.name} instead.[/red]",
-            )
-            return None
+    assert config.project_dir is not None
     try:
+        if target.state == PlanState.CHECKING and cmd_name not in _STACK_TIP_EXEMPT_COMMANDS:
+            child = stack_child(config.project_dir, plan)
+            if child is not None:
+                msg = f"{plan.name} has {child.name} stacked on it; run this command on {child.name} instead."
+                raise WorkflowError(msg)
         branch, commit = _git_metadata(target, config, dry_run=dry_run)
         today = datetime.now(tz=UTC).date().isoformat()
-        assert config.project_dir is not None
         stack = stack_entries(config.project_dir, plan, config)
         rendered = _render_prompt(
             target.command.prompt,

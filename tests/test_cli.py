@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 import workflow.commands.workflow as workflow_commands
@@ -427,3 +428,90 @@ def test_assert_in_workflow_session_requires_tmux(tmp_path: Path, monkeypatch: p
     monkeypatch.delenv("TMUX", raising=False)
     with pytest.raises(WorkflowError, match="inside the workflow tmux session"):
         tmux_dispatch.assert_in_workflow_session(config)
+
+
+_STACK_FRONTMATTER = (
+    "---\nonto: 004_cli_framework\nbranches:\n  docs:\n    branch: feat/004_cli_framework\n    base: abc1234\n---\n"
+)
+
+
+def _make_stacked_checking_pair(tmp_path: Path) -> None:
+    """Base 004 with 005 stacked on it, both under review in reviewer.
+
+    Only the child is also placed in canon: these clones are not git repos, so the
+    resolver has nothing but the filesystem to go on and a second copy of the base
+    would read as ambiguous.
+    """
+    _make_plan(tmp_path, "reviewer", "checking", "004_cli_framework.md")
+    for repo, state in (("canon", "implementing"), ("reviewer", "checking")):
+        plan_dir = tmp_path / repo / "docs" / "plans" / state
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        (plan_dir / "005_stacked.md").write_text(_STACK_FRONTMATTER + "# 005_stacked.md\n", encoding="utf-8")
+
+
+def _patch_dispatch_git(monkeypatch: pytest.MonkeyPatch, prompts: list[str]) -> None:
+    def fake_send(_agent_name: str, prompt: str, _config: object, *, dry_run: bool = False) -> None:
+        del dry_run
+        prompts.append(prompt)
+
+    monkeypatch.setattr(tmux_dispatch, "git_pull", MagicMock())
+    monkeypatch.setattr(tmux_dispatch, "git_current_branch", MagicMock(return_value="feat/004_cli_framework"))
+    monkeypatch.setattr(tmux_dispatch, "git_commit_hash", MagicMock(return_value="1e84d3a"))
+    monkeypatch.setattr(tmux_dispatch, "write_audit_log", MagicMock())
+    monkeypatch.setattr(tmux_dispatch, "send_prompt_to_agent", fake_send)
+
+
+def test_pr_on_a_mid_stack_plan_is_refused_naming_the_tip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _make_stacked_checking_pair(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    prompts: list[str] = []
+    _patch_dispatch_git(monkeypatch, prompts)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "pr", "004"])
+
+    assert result.exit_code == 1
+    assert "005_stacked" in result.output
+    assert prompts == []
+
+
+def _add_ask_to_checking(config_path: Path) -> None:
+    """The default config offers no `ask` in `checking`; the exemption is about the command, not the state."""
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    ask = next(cmd for cmd in data["states"]["intent"]["commands"] if cmd.get("name") == "ask")
+    data["states"]["checking"]["commands"].append(dict(ask))
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+def test_ask_stays_available_on_a_mid_stack_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`ask` only answers questions; it must not be blocked by the stack-tip rule."""
+    config_path = _make_project(tmp_path)
+    _add_ask_to_checking(config_path)
+    _make_stacked_checking_pair(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    prompts: list[str] = []
+    _patch_dispatch_git(monkeypatch, prompts)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "ask", "004"])
+
+    if result.exit_code != 0:
+        print(result.stderr, file=sys.stderr)
+    assert result.exit_code == 0
+    assert len(prompts) == 1
+
+
+def test_pr_on_the_stack_tip_lists_every_member(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _make_stacked_checking_pair(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    prompts: list[str] = []
+    _patch_dispatch_git(monkeypatch, prompts)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "pr", "005"])
+
+    if result.exit_code != 0:
+        print(result.stderr, file=sys.stderr)
+    assert result.exit_code == 0
+    assert "004_cli_framework (reviewer/docs/plans/checking/004_cli_framework.md" in prompts[0]
+    assert "origin/main..abc1234" in prompts[0]
+    assert "abc1234..HEAD" in prompts[0]

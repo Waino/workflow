@@ -236,7 +236,9 @@ def git_commits_ahead_of_remote(repo_path: Path, branch: str) -> int:
     """Return how many commits *branch* is ahead of ``origin/<branch>`` in *repo_path*.
 
     Assumes the caller has already fetched. Read-only guard query: always runs for
-    real, even in dry-run.
+    real, even in dry-run. Fails loudly rather than reporting 0 when the comparison
+    cannot be made (e.g. no ``origin/<branch>``) -- callers use this to decide whether
+    someone else's commits would be silently dropped.
     """
     result = subprocess.run(  # noqa: S603
         ["git", "rev-list", "--count", f"origin/{branch}..{branch}"],  # noqa: S607
@@ -244,26 +246,12 @@ def git_commits_ahead_of_remote(repo_path: Path, branch: str) -> int:
         capture_output=True,
         check=False,
     )
-    if result.returncode != 0:
-        return 0
-    return int(result.stdout.decode().strip())
-
-
-def git_list_branches(repo_path: Path, *, prefix: str = "") -> list[str]:
-    """Return local branch names in *repo_path*, optionally filtered by *prefix*.
-
-    Read-only guard query: always runs for real, even in dry-run.
-    """
-    pattern = f"refs/heads/{prefix}*" if prefix else "refs/heads/*"
-    result = subprocess.run(  # noqa: S603
-        ["git", "for-each-ref", "--format=%(refname:short)", pattern],  # noqa: S607
-        cwd=repo_path,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return []
-    return [line for line in result.stdout.decode().splitlines() if line]
+    stdout = result.stdout.decode().strip()
+    if result.returncode != 0 or not stdout.isdigit():
+        detail = result.stderr.decode().strip() or stdout or f"exit {result.returncode}"
+        msg = f"cannot compare {branch!r} with origin/{branch} in {repo_path}: {detail}"
+        raise WorkflowError(msg)
+    return int(stdout)
 
 
 def git_branch_delete(repo_path: Path, branch: str, *, dry_run: bool = False) -> None:

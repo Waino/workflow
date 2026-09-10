@@ -15,8 +15,10 @@ from workflow.commands.doctor import (
     _check_bare,
     _check_worktree,
     _duplicate_plan_anomalies,
+    _stack_anomalies,
 )
-from workflow.config import WORKFLOW_ROOT_MARKER
+from workflow.config import WORKFLOW_ROOT_MARKER, WorkflowConfig, load_config
+from workflow.frontmatter import PlanFrontmatter, RepoBranch, render_frontmatter
 from workflow.names import RepoName
 
 _GIT = shutil.which("git") or "git"
@@ -37,10 +39,26 @@ def _init_repo(path: Path, *, branch: str = "main") -> Path:
     return path
 
 
-def _make_plan(repo_path: Path, state: str, filename: str = "005_foo.md") -> None:
+def _make_plan(
+    repo_path: Path,
+    state: str,
+    filename: str = "005_foo.md",
+    *,
+    onto: str | None = None,
+    branch: str | None = None,
+) -> None:
     plan_dir = repo_path / "docs" / "plans" / state
     plan_dir.mkdir(parents=True, exist_ok=True)
-    (plan_dir / filename).write_text("# 005: Foo\n\n## Goal\nDo stuff.\n", encoding="utf-8")
+    body = "# 005: Foo\n\n## Goal\nDo stuff.\n"
+    if onto is not None or branch is not None:
+        branches = {"docs": RepoBranch(branch=branch, base="abc1234")} if branch is not None else {}
+        body = render_frontmatter(PlanFrontmatter(onto=onto, branches=branches)) + body
+    (plan_dir / filename).write_text(body, encoding="utf-8")
+
+
+def _config_for(tmp_path: Path) -> WorkflowConfig:
+    shutil.copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
+    return load_config(tmp_path / "config.yaml", project_dir=tmp_path)
 
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
@@ -238,3 +256,56 @@ def test_doctor_cli_exits_nonzero_and_reports_anomaly(tmp_path: Path, monkeypatc
 
     assert result.exit_code == 1
     assert "stray branch" in result.output
+
+
+def test_stack_anomalies_clean_for_a_live_stack(tmp_path: Path) -> None:
+    canon = _init_repo(tmp_path / "canon")
+    builder = _init_repo(tmp_path / "builder")
+    _make_plan(canon, "implementing", "005_foo.md")
+    _make_plan(canon, "implementing", "006_bar.md", onto="005_foo", branch="feat/005_foo")
+    _git(["checkout", "-b", "feat/005_foo"], cwd=builder)
+
+    assert _stack_anomalies(tmp_path, _config_for(tmp_path)) == []
+
+
+def test_stack_anomalies_flags_unresolvable_onto(tmp_path: Path) -> None:
+    canon = _init_repo(tmp_path / "canon")
+    builder = _init_repo(tmp_path / "builder")
+    _make_plan(canon, "implementing", "006_bar.md", onto="999_missing", branch="feat/005_foo")
+    _git(["checkout", "-b", "feat/005_foo"], cwd=builder)
+
+    anomalies = _stack_anomalies(tmp_path, _config_for(tmp_path))
+
+    assert anomalies == ["006_bar: onto='999_missing' does not resolve to a plan"]
+
+
+def test_stack_anomalies_flags_missing_branch_for_an_in_flight_plan(tmp_path: Path) -> None:
+    canon = _init_repo(tmp_path / "canon")
+    _init_repo(tmp_path / "builder")
+    _make_plan(canon, "implementing", "005_foo.md")
+    _make_plan(canon, "checking", "006_bar.md", onto="005_foo", branch="feat/005_foo")
+
+    anomalies = _stack_anomalies(tmp_path, _config_for(tmp_path))
+
+    assert anomalies == ["006_bar: recorded branch 'feat/005_foo' exists nowhere"]
+
+
+def test_stack_anomalies_ignores_a_deleted_branch_recorded_by_a_done_plan(tmp_path: Path) -> None:
+    """`accept` deletes the shared branch; the done plan's frontmatter still names it."""
+    canon = _init_repo(tmp_path / "canon")
+    _init_repo(tmp_path / "builder")
+    _make_plan(canon, "done", "005_foo.md")
+    _make_plan(canon, "done", "006_bar.md", onto="005_foo", branch="feat/005_foo")
+
+    assert _stack_anomalies(tmp_path, _config_for(tmp_path)) == []
+
+
+def test_stack_anomalies_flags_a_branch_whose_plans_are_all_finished(tmp_path: Path) -> None:
+    canon = _init_repo(tmp_path / "canon")
+    builder = _init_repo(tmp_path / "builder")
+    _make_plan(canon, "done", "005_foo.md")
+    _git(["checkout", "-b", "feat/005_foo"], cwd=builder)
+
+    anomalies = _stack_anomalies(tmp_path, _config_for(tmp_path))
+
+    assert anomalies == ["feat/005_foo: exists but every plan on it is done/rejected"]

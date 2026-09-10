@@ -16,6 +16,7 @@ from workflow.git_helpers import (
     git_branch_delete,
     git_branch_exists,
     git_commit_if_changed,
+    git_commits_ahead_of_remote,
     git_current_branch,
     git_index_lock_present,
     git_is_ancestor,
@@ -670,3 +671,31 @@ def test_delete_merged_branch_is_a_noop_when_already_deleted(tmp_path: Path) -> 
     del bare
 
     delete_merged_branch(canon, source, other, "feat/x")  # must not raise
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_commits_ahead_of_remote_counts_unpushed_commits(tmp_path: Path) -> None:
+    source = _init_repo(tmp_path / "source")
+    bare = tmp_path / "bare"
+    _git(["clone", "--bare", str(source), str(bare)], cwd=tmp_path)
+    clone = tmp_path / "clone"
+    _git(["clone", str(bare), str(clone)], cwd=tmp_path)
+    _git(["config", "user.email", "test@example.com"], cwd=clone)
+    _git(["config", "user.name", "Test"], cwd=clone)
+
+    assert git_commits_ahead_of_remote(clone, "main") == 0
+
+    (clone / "local.txt").write_text("local\n", encoding="utf-8")
+    _git(["add", "."], cwd=clone)
+    _git(["commit", "-m", "local commit"], cwd=clone)
+
+    assert git_commits_ahead_of_remote(clone, "main") == 1
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_commits_ahead_of_remote_raises_when_remote_branch_is_missing(tmp_path: Path) -> None:
+    """Fail loudly: a silent 0 would tell the caller nothing would be lost."""
+    repo = _init_repo(tmp_path / "repo")
+
+    with pytest.raises(WorkflowError, match="cannot compare"):
+        git_commits_ahead_of_remote(repo, "main")

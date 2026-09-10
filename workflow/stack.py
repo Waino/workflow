@@ -10,16 +10,19 @@ discover a stack's other members. Imports :mod:`workflow.frontmatter` and
 from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003 - used at runtime by Pydantic
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
-from workflow.config import WorkflowConfig
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.frontmatter import PlanFrontmatter, parse_frontmatter
 from workflow.models import Plan, PlanState, Review
 from workflow.names import DOCS_REPO, RepoName
 from workflow.plan_resolver import find_all_plans_in_repo, resolve_plan
 from workflow.state import locate_plan_file
+
+if TYPE_CHECKING:
+    from workflow.config import WorkflowConfig
 
 BRANCH_PREFIX = "feat/"
 
@@ -40,6 +43,26 @@ class StackEntry(BaseModel):
     """E.g. 'origin/main..7f3a91c' for the root, '7f3a91c..HEAD' for the tip."""
 
 
+_FRONTMATTER_CACHE: dict[Path, tuple[int, int, PlanFrontmatter | None]] = {}
+"""path -> (mtime_ns, size, parsed): keyed on file identity, so a rewrite invalidates itself."""
+
+
+def _read_frontmatter_cached(path: Path) -> PlanFrontmatter | None:
+    """Parse *path*'s frontmatter, reusing the last parse while the file is unchanged.
+
+    Stack resolution re-reads the same handful of plan files many times per command
+    (one `branch_for_plan` plus one `onto` lookup per plan, per scan).
+    """
+    # ponytail: unbounded dict, bounded in practice by the plan count of one CLI process.
+    stat = path.stat()
+    cached = _FRONTMATTER_CACHE.get(path)
+    if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+        return cached[2]
+    parsed = parse_frontmatter(path.read_text(encoding="utf-8"), path=path)
+    _FRONTMATTER_CACHE[path] = (stat.st_mtime_ns, stat.st_size, parsed)
+    return parsed
+
+
 def read_plan_frontmatter(project_dir: Path, plan: Plan) -> PlanFrontmatter | None:
     """Return *plan*'s parsed frontmatter, or ``None`` if it has none.
 
@@ -52,8 +75,7 @@ def read_plan_frontmatter(project_dir: Path, plan: Plan) -> PlanFrontmatter | No
         if located is None:
             return None
         path = located
-    text = path.read_text(encoding="utf-8")
-    return parse_frontmatter(text, path=path)
+    return _read_frontmatter_cached(path)
 
 
 def branch_for_plan(project_dir: Path, plan: Plan) -> str:
@@ -102,34 +124,52 @@ def resolve_stack(project_dir: Path, plan: Plan, config: WorkflowConfig) -> list
     return chain
 
 
-def stack_child(project_dir: Path, plan: Plan) -> Plan | None:
-    """Return the non-rejected plan whose ``onto`` is *plan*, or ``None``.
+def _stackable_plans(project_dir: Path) -> list[Plan]:
+    """Canon's plans that can take part in a stack: no reviews, no rejected plans.
 
     Rejected plans are ignored, which is what makes "reject the tip, then accept the
     base" work: once the child is rejected, the base becomes actionable again.
     """
-    for candidate in find_all_plans_in_repo(project_dir, RepoName.canon):
-        if isinstance(candidate, Review) or candidate.state == PlanState.REJECTED or candidate.name == plan.name:
-            continue
+    return [
+        candidate
+        for candidate in find_all_plans_in_repo(project_dir, RepoName.canon)
+        if not isinstance(candidate, Review) and candidate.state != PlanState.REJECTED
+    ]
+
+
+def _children_by_onto(project_dir: Path) -> dict[str, Plan]:
+    """Map each stacked-onto plan name to the plan stacked on it -- one scan for all lookups."""
+    children: dict[str, Plan] = {}
+    for candidate in _stackable_plans(project_dir):
         fm = read_plan_frontmatter(project_dir, candidate)
-        if fm is not None and fm.onto == plan.name:
-            return candidate
-    return None
+        if fm is not None and fm.onto is not None and fm.onto != candidate.name:
+            children[fm.onto] = candidate
+    return children
+
+
+def stack_child(project_dir: Path, plan: Plan) -> Plan | None:
+    """Return the non-rejected plan whose ``onto`` is *plan*, or ``None``."""
+    return _children_by_onto(project_dir).get(plan.name)
 
 
 def tip_plan_for_branch(project_dir: Path, branch: str) -> Plan | None:
-    """Return the tip plan (the stack member with no child) resolving to *branch*, or ``None``."""
+    """Return the tip plan (the stack member with no child) resolving to *branch*, or ``None``.
+
+    Raises :class:`WorkflowError` when plans claim *branch* but none of them is a tip,
+    which means their ``onto`` chain is cyclic.
+    """
+    children = _children_by_onto(project_dir)
     candidates = [
-        candidate
-        for candidate in find_all_plans_in_repo(project_dir, RepoName.canon)
-        if not isinstance(candidate, Review)
-        and candidate.state != PlanState.REJECTED
-        and branch_for_plan(project_dir, candidate) == branch
+        candidate for candidate in _stackable_plans(project_dir) if branch_for_plan(project_dir, candidate) == branch
     ]
-    for candidate in candidates:
-        if stack_child(project_dir, candidate) is None:
-            return candidate
-    return candidates[0] if candidates else None
+    if not candidates:
+        return None
+    tips = [candidate for candidate in candidates if candidate.name not in children]
+    if not tips:
+        names = ", ".join(candidate.name for candidate in candidates)
+        msg = f"every plan on branch {branch!r} has a child stacked on it ({names}); the onto chain is cyclic"
+        raise WorkflowError(msg)
+    return tips[0]
 
 
 def stack_entries(project_dir: Path, plan: Plan, config: WorkflowConfig) -> list[StackEntry]:

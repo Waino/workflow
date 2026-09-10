@@ -16,6 +16,7 @@ from workflow.models import Plan, PlanState
 from workflow.stack import (
     _MAX_STACK_DEPTH,
     branch_for_plan,
+    read_plan_frontmatter,
     resolve_stack,
     stack_child,
     stack_entries,
@@ -349,3 +350,41 @@ def test_no_feat_branch_literal_outside_stack_module() -> None:
             offending.append(str(path.relative_to(package_root)))
 
     assert offending == []
+
+
+def test_tip_plan_for_branch_raises_when_every_candidate_has_a_child(tmp_path: Path) -> None:
+    """Two plans pointing `onto` each other leave no tip; that is a hand-edited cycle, not a tip choice."""
+    _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_a.md", onto="002_b", branch="feat/001_a", base="x")
+    _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "002_b.md", onto="001_a", branch="feat/001_a", base="y")
+
+    with pytest.raises(WorkflowError, match="cyclic"):
+        tip_plan_for_branch(tmp_path, "feat/001_a")
+
+
+def test_stack_child_ignores_a_plan_pointing_at_itself(tmp_path: Path) -> None:
+    """A self-referential `onto` must not make a plan its own child."""
+    plan = _make_plan(
+        tmp_path,
+        "canon",
+        PlanState.IMPLEMENTING,
+        "001_base.md",
+        onto="001_base",
+        branch="feat/001_base",
+        base="abc",
+    )
+
+    assert stack_child(tmp_path, plan) is None
+
+
+def test_read_plan_frontmatter_sees_a_rewrite(tmp_path: Path) -> None:
+    """The parse cache is keyed on file identity, so a rewritten plan file is re-read."""
+    plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "002_stacked.md")
+    assert read_plan_frontmatter(tmp_path, plan) is None
+
+    path = tmp_path / plan.path
+    fm = PlanFrontmatter(onto="001_base", branches={"docs": RepoBranch(branch="feat/001_base", base="abc1234")})
+    path.write_text(render_frontmatter(fm) + path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    reread = read_plan_frontmatter(tmp_path, plan)
+    assert reread is not None
+    assert reread.onto == "001_base"

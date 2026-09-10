@@ -165,6 +165,10 @@ Cascading here rather than at `accept` is what keeps every transition a declared
 machine (`implementing -> checking`, `checking -> done`) and keeps `status` honest: no plan sits in
 `implementing` while its branch is under review.
 
+The cascade also passes `repo_override=target_repo` (previously the `git mv` repo came from the
+resolved `plan.path`, while the commit already went to `target_repo` — the two could disagree when
+the plan resolved from canon).
+
 Classification lists one `transition to checking` line per member. Audit: `input_plan=TIP`,
 `output_plans=[other members]` — the resolver's audit constraint (`plan_resolver` §`_Constraint`)
 then knows the cascaded plans are in `checking` too, which is exactly right.

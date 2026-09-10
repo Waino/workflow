@@ -1047,9 +1047,23 @@ def _resolve_onto_base_plan(project_dir: Path, config: WorkflowConfig, builder_r
     return base_plan
 
 
-def _check_onto_preconditions(project_dir: Path, plan: Plan, base_plan: Plan, builder_repo: Path) -> None:
-    """Validate every ``implement --onto`` precondition before any mutation runs."""
+def _check_onto_preconditions(
+    project_dir: Path,
+    plan: Plan,
+    base_plan: Plan,
+    builder_repo: Path,
+    config: WorkflowConfig,
+) -> list[Plan]:
+    """Validate every ``implement --onto`` precondition; return the base's resolved stack.
+
+    Runs before any mutation, so the caller must not resolve the stack again afterwards:
+    a cycle or an unresolvable ``onto`` has to fail while the plan file is still untouched.
+    """
     reviewer_repo = project_dir / RepoName.reviewer
+    require(
+        plan.name != base_plan.name,
+        f"{plan.name} cannot be stacked onto itself; pass --onto <other plan> or drop --onto.",
+    )
     base_branch = branch_for_plan(project_dir, base_plan)
     if base_plan.state == PlanState.CHECKING:
         git_fetch(reviewer_repo)
@@ -1076,6 +1090,7 @@ def _check_onto_preconditions(project_dir: Path, plan: Plan, base_plan: Plan, bu
     if fm is not None and fm.onto not in (None, base_plan.name):
         msg = f"{plan.name} is already stacked onto {fm.onto!r}; cannot restack onto {base_plan.name!r}."
         raise WorkflowError(msg)
+    return resolve_stack(project_dir, base_plan, config)
 
 
 def _classify_implement_onto_steps(
@@ -1149,7 +1164,12 @@ def _run_implement_onto_steps(  # noqa: PLR0913
         existing = read_plan_frontmatter(project_dir, plan)
         branches = dict(existing.branches) if existing is not None else {}
         branches[DOCS_REPO] = RepoBranch(branch=feature_branch, base=base_commit)
-        fm = PlanFrontmatter(onto=base_plan.name, branches=branches)
+        # model_copy, not a fresh model: keeps any extra keys a later plan format added.
+        fm = (
+            existing.model_copy(update={"onto": base_plan.name, "branches": branches})
+            if existing is not None
+            else PlanFrontmatter(onto=base_plan.name, branches=branches)
+        )
         target_path = locate_plan_file(project_dir, RepoName.canon, plan.path.name) or (project_dir / plan.path)
         if dry_run:
             console.print(f"[dim]would write frontmatter (onto={base_plan.name}) to {target_path}[/dim]")
@@ -1157,7 +1177,13 @@ def _run_implement_onto_steps(  # noqa: PLR0913
             write_frontmatter(target_path, fm)
             git_add(canon_repo, target_path, dry_run=False)
 
-    new_plan = _transition_if_needed(plan, PlanState.IMPLEMENTING, project_dir, dry_run=dry_run)
+    new_plan = _transition_if_needed(
+        plan,
+        PlanState.IMPLEMENTING,
+        project_dir,
+        repo_override=RepoName.canon,
+        dry_run=dry_run,
+    )
     git_push(canon_repo, dry_run=dry_run)
     _sync_repos_best_effort(project_dir, park=RepoName.planner if transfer_ran else None, dry_run=dry_run)
 
@@ -1210,7 +1236,7 @@ def implement(ctx: click.Context, plan_path: str, *, cont: bool, force_push: boo
 
         if onto is not None:
             base_plan = _resolve_onto_base_plan(project_dir, config, builder_repo, onto)
-            _check_onto_preconditions(project_dir, plan, base_plan, builder_repo)
+            prior_stack = _check_onto_preconditions(project_dir, plan, base_plan, builder_repo, config)
             feature_branch = branch_for_plan(project_dir, base_plan)
             _require_builder_not_on_unfinished_stack(project_dir, config, builder_repo, feature_branch)
 
@@ -1232,7 +1258,6 @@ def implement(ctx: click.Context, plan_path: str, *, cont: bool, force_push: boo
                 force_push=force_push,
                 dry_run=dry_run,
             )
-            prior_stack = resolve_stack(project_dir, base_plan, config)
             _write_script_audit_log(
                 config,
                 "implement",
@@ -1732,11 +1757,15 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
         # Refresh only -- never park: the agent owning the abandoned branch may still be
         # mid-work on it.
         _sync_repos_best_effort(project_dir, dry_run=dry_run)
-        repo_branch = fm.branches.get(DOCS_REPO) if fm is not None else None
+        repo_branch = fm.branches.get(DOCS_REPO) if fm is not None and fm.onto is not None else None
         if fm is not None and repo_branch is not None:
             console.print(f"[yellow]Note:[/yellow] {fm.onto} and this plan share the branch {repo_branch.branch}.")
             console.print("To drop this plan's commits from the branch:")
-            console.print(f"    git -C {project_dir / RepoName.builder} reset --hard {repo_branch.base}")
+            # `branch -f` rather than `reset --hard`: it cannot discard a working tree.
+            # The checkout first because git refuses to force a branch that is checked out.
+            builder_repo = project_dir / RepoName.builder
+            console.print(f"    git -C {builder_repo} checkout main")
+            console.print(f"    git -C {builder_repo} branch -f {repo_branch.branch} {repo_branch.base}")
         else:
             branch_prefix = _BRANCH_PREFIX_FOR_STATE.get(plan.state)
             if branch_prefix == "feat":
