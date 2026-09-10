@@ -25,6 +25,7 @@ from workflow.exceptions import (
     PlanNotFoundError,
     WorkflowError,
 )
+from workflow.frontmatter import PlanFrontmatter, RepoBranch, write_frontmatter
 from workflow.git_helpers import (
     TransferResult,
     branch_needs_rebase,
@@ -32,13 +33,16 @@ from workflow.git_helpers import (
     git_add,
     git_branch_exists,
     git_checkout,
+    git_commit_hash,
     git_commit_if_changed,
+    git_commits_ahead_of_remote,
     git_config_get,
     git_current_branch,
     git_fetch,
     git_index_lock_present,
     git_is_ancestor,
     git_is_valid_repo,
+    git_merge,
     git_pull,
     git_push,
     git_ref_exists_remote,
@@ -50,12 +54,20 @@ from workflow.git_helpers import (
     transfer_branch_to_main,
 )
 from workflow.models import AuditLogEntry, Plan, PlanState
-from workflow.names import AgentName, RepoName
+from workflow.names import DOCS_REPO, AgentName, RepoName
 from workflow.next_step import find_command, find_next_step, find_reminder_name, format_next_step_invocation
 from workflow.plan_resolver import next_intent_number, resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console, error_console, print_workflow_error, run_command
-from workflow.state import transition_plan
+from workflow.stack import (
+    BRANCH_PREFIX,
+    branch_for_plan,
+    read_plan_frontmatter,
+    resolve_stack,
+    stack_child,
+    tip_plan_for_branch,
+)
+from workflow.state import locate_plan_file, transition_plan
 from workflow.steps import ResumePlan, require
 from workflow.tmux_dispatch import (
     assert_in_workflow_session,
@@ -97,13 +109,14 @@ def _require_project_dir(config: WorkflowConfig) -> Path:
     return config.project_dir
 
 
-def _write_script_audit_log(
+def _write_script_audit_log(  # noqa: PLR0913
     config: WorkflowConfig,
     command: str,
     *,
     dry_run: bool,
     input_plan: str | None = None,
     output_plans: list[str] | None = None,
+    stacked_on: list[str] | None = None,
 ) -> None:
     if dry_run:
         return
@@ -116,9 +129,66 @@ def _write_script_audit_log(
             command=command,
             input_plan=input_plan,
             output_plans=output_plans or [],
+            stacked_on=stacked_on or [],
         ),
         dry_run=dry_run,
     )
+
+
+def _require_is_stack_tip(project_dir: Path, plan: Plan) -> None:
+    """Refuse to operate on a mid-stack plan; name the tip to use instead."""
+    child = stack_child(project_dir, plan)
+    if child is not None:
+        msg = f"{plan.name} has {child.name} stacked on it; run this command on {child.name} instead."
+        raise WorkflowError(msg)
+
+
+def _stack_transition_commit_message(stack: list[Plan], target_state: PlanState) -> str:
+    if len(stack) == 1:
+        return _transition_commit_message(stack[0], target_state)
+    names = ", ".join(member.name for member in stack)
+    return f"Transition {names} to {target_state.value}"
+
+
+def _transition_stack_members(  # noqa: PLR0913
+    stack: list[Plan],
+    target_state: PlanState,
+    project_dir: Path,
+    *,
+    repo_override: str,
+    commit_repo: str,
+    dry_run: bool,
+) -> list[Plan]:
+    """Transition every stack member not already in *target_state*; one commit for all.
+
+    Mirrors :func:`_transition_if_needed`'s per-plan idempotent skip, but batches the
+    commit across the whole stack so a cascade is one commit, one push (Risk 2: the
+    same *stack* list drives both classification and execution).
+    """
+    new_members: list[Plan] = []
+    for member in stack:
+        target_rel = Path(repo_override) / "docs" / "plans" / target_state.value / member.path.name
+        if (project_dir / target_rel).exists():
+            new_members.append(member.model_copy(update={"state": target_state, "path": target_rel}))
+        else:
+            new_members.append(
+                transition_plan(member, target_state, project_dir, repo_override=repo_override, dry_run=dry_run),
+            )
+    git_commit_if_changed(
+        project_dir / commit_repo,
+        _stack_transition_commit_message(stack, target_state),
+        dry_run=dry_run,
+        no_verify=True,
+    )
+    return new_members
+
+
+def _print_stack_note(branch: str, stack: list[Plan]) -> None:
+    """Print the branch and the stack members touched, when *stack* has more than one member."""
+    if len(stack) <= 1:
+        return
+    names = ", ".join(member.name for member in stack)
+    console.print(f"[bold]Stack on {branch}:[/bold] {names}")
 
 
 def _print_command_reminder(config: WorkflowConfig, state: PlanState, command_name: str, plan_name: str) -> None:
@@ -795,15 +865,13 @@ _STEP_IMPLEMENT_TRANSITION_TODO = "transition to todo"
 _STEP_IMPLEMENT_TRANSITION_IMPLEMENTING = "transition to implementing"
 _STEP_IMPLEMENT_FETCH_BUILDER = "fetch builder"
 _STEP_IMPLEMENT_CHECKOUT_MAIN_BUILDER = "checkout main in builder"
+_STEP_IMPLEMENT_ONTO_CHECKOUT = "checkout stack branch in builder"
+_STEP_IMPLEMENT_ONTO_FRONTMATTER = "write onto frontmatter"
+_STEP_IMPLEMENT_ONTO_MERGE_MAIN = "merge origin/main into stack branch"
 
 
-def _classify_implement_steps(
-    resume: ResumePlan,
-    plan: Plan,
-    project_dir: Path,
-    builder_repo: Path,
-    feature_branch: str,
-) -> None:
+def _classify_transfer_and_todo_steps(resume: ResumePlan, plan: Plan, project_dir: Path) -> None:
+    """Classify the planning->todo transfer steps shared by both implement paths."""
     transfer_will_run = plan.state == PlanState.PLANNING
     if transfer_will_run:
         resume.will_run(_STEP_IMPLEMENT_TRANSFER)
@@ -818,12 +886,55 @@ def _classify_implement_steps(
         transfer_will_run=transfer_will_run,
     )
 
+
+def _classify_transition_implementing_step(resume: ResumePlan, plan: Plan, project_dir: Path) -> None:
     implementing_path = project_dir / RepoName.canon / "docs" / "plans" / "implementing" / plan.path.name
     if implementing_path.exists():
         resume.satisfied(_STEP_IMPLEMENT_TRANSITION_IMPLEMENTING, "plan file already in implementing/")
     else:
         resume.will_run(_STEP_IMPLEMENT_TRANSITION_IMPLEMENTING)
 
+
+def _run_transfer_and_todo_steps(  # noqa: PLR0913
+    resume: ResumePlan,
+    plan: Plan,
+    project_dir: Path,
+    config: WorkflowConfig,
+    *,
+    force_push: bool,
+    dry_run: bool,
+) -> tuple[Plan, bool]:
+    """Run the shared planning->todo transfer steps; returns (possibly-updated plan, transfer_ran)."""
+    transfer_ran = resume.should_run(_STEP_IMPLEMENT_TRANSFER)
+    if transfer_ran:
+        planner_repo = project_dir / RepoName.planner
+        canon_repo = project_dir / RepoName.canon
+        planner_branch = git_current_branch(planner_repo)
+        result = transfer_branch_to_main(
+            planner_repo,
+            canon_repo,
+            branch=planner_branch,
+            allow_rebase=resume.should_run(_STEP_IMPLEMENT_REBASE),
+            force_push=force_push,
+            already_fetched=True,  # the rebase classification step just fetched
+            other_worktrees=_other_worktrees(project_dir, RepoName.planner),
+            post_rebase_verify=lambda: _run_pre_commit_hook(config, RepoName.planner, dry_run=dry_run),
+            dry_run=dry_run,
+        )
+        _warn_if_rebased(result, planner_branch)
+        plan = _transition_if_needed(plan, PlanState.TODO, project_dir, repo_override=RepoName.canon, dry_run=dry_run)
+    return plan, transfer_ran
+
+
+def _classify_implement_steps(
+    resume: ResumePlan,
+    plan: Plan,
+    project_dir: Path,
+    builder_repo: Path,
+    feature_branch: str,
+) -> None:
+    _classify_transfer_and_todo_steps(resume, plan, project_dir)
+    _classify_transition_implementing_step(resume, plan, project_dir)
     resume.will_run("push canon")
 
     # If the feature branch already exists, builder is presumably already checked out to
@@ -865,24 +976,14 @@ def _run_implement_steps(  # noqa: PLR0913
     dry_run: bool,
 ) -> Plan:
     """Run the (already-classified) implement steps, gated on resume.should_run."""
-    transfer_ran = resume.should_run(_STEP_IMPLEMENT_TRANSFER)
-    if transfer_ran:
-        planner_repo = project_dir / RepoName.planner
-        canon_repo = project_dir / RepoName.canon
-        planner_branch = git_current_branch(planner_repo)
-        result = transfer_branch_to_main(
-            planner_repo,
-            canon_repo,
-            branch=planner_branch,
-            allow_rebase=resume.should_run(_STEP_IMPLEMENT_REBASE),
-            force_push=force_push,
-            already_fetched=True,  # the rebase classification step just fetched
-            other_worktrees=_other_worktrees(project_dir, RepoName.planner),
-            post_rebase_verify=lambda: _run_pre_commit_hook(config, RepoName.planner, dry_run=dry_run),
-            dry_run=dry_run,
-        )
-        _warn_if_rebased(result, planner_branch)
-        plan = _transition_if_needed(plan, PlanState.TODO, project_dir, repo_override=RepoName.canon, dry_run=dry_run)
+    plan, transfer_ran = _run_transfer_and_todo_steps(
+        resume,
+        plan,
+        project_dir,
+        config,
+        force_push=force_push,
+        dry_run=dry_run,
+    )
 
     # Value-returning transition: always call (idempotent), regardless of should_run, so
     # new_plan reflects the target dir even when the git mv itself is a no-op (see Fix 2
@@ -906,6 +1007,167 @@ def _run_implement_steps(  # noqa: PLR0913
     return new_plan
 
 
+def _require_builder_not_on_unfinished_stack(
+    project_dir: Path,
+    config: WorkflowConfig,
+    builder_repo: Path,
+    target_branch: str,
+) -> None:
+    """Refuse when builder sits on a different feat/* branch with an unfinished stack.
+
+    Applies to plain ``implement`` (*target_branch* is the brand-new branch about to be
+    created, so this fires for any other feat/* branch builder happens to be on) and to
+    ``implement --onto`` (*target_branch* is the base's own branch, so builder already
+    being there is fine).
+    """
+    current = git_current_branch(builder_repo)
+    if current in ("main", target_branch) or not current.startswith(BRANCH_PREFIX):
+        return
+    tip = tip_plan_for_branch(project_dir, current)
+    if tip is None:
+        return
+    stack = resolve_stack(project_dir, tip, config)
+    if any(member.state in (PlanState.IMPLEMENTING, PlanState.CHECKING) for member in stack):
+        msg = (
+            f"builder is on {current!r}, which still has unfinished work in progress "
+            f"(pass --onto {tip.name} to continue there, or check/accept/reject it first)."
+        )
+        raise WorkflowError(msg)
+
+
+def _resolve_onto_base_plan(project_dir: Path, config: WorkflowConfig, builder_repo: Path, onto: str) -> Plan:
+    """Resolve the ``--onto`` base plan: explicit name, or inferred from builder's current branch."""
+    if onto != "":
+        return resolve_plan(onto, project_dir, config=config)
+    current = git_current_branch(builder_repo)
+    require(current.startswith(BRANCH_PREFIX), f"builder is on {current!r}, not a feat/* branch; pass --onto <plan>.")
+    base_plan = tip_plan_for_branch(project_dir, current)
+    require(base_plan is not None, f"no plan resolves to branch {current!r} in builder.")
+    assert base_plan is not None  # narrows for mypy; require() above already guaranteed it
+    return base_plan
+
+
+def _check_onto_preconditions(project_dir: Path, plan: Plan, base_plan: Plan, builder_repo: Path) -> None:
+    """Validate every ``implement --onto`` precondition before any mutation runs."""
+    reviewer_repo = project_dir / RepoName.reviewer
+    base_branch = branch_for_plan(project_dir, base_plan)
+    if base_plan.state == PlanState.CHECKING:
+        git_fetch(reviewer_repo)
+        ahead = git_commits_ahead_of_remote(reviewer_repo, base_branch)
+        require(
+            ahead == 0,
+            f"{base_plan.name} is in checking with {ahead} commit(s) in reviewer not yet pushed "
+            f"(the pr document / fix commits would be silently excluded); push or land them first.",
+        )
+    else:
+        require(
+            base_plan.state == PlanState.IMPLEMENTING,
+            f"--onto base {base_plan.name} must be in 'implementing' or 'checking', got {base_plan.state.value!r}.",
+        )
+    child = stack_child(project_dir, base_plan)
+    if child is not None:
+        msg = f"{base_plan.name} already has {child.name} stacked on it; use --onto {child.name} instead."
+        raise WorkflowError(msg)
+    require(
+        git_branch_exists(builder_repo, base_branch),
+        f"branch {base_branch!r} (for {base_plan.name}) does not exist in builder.",
+    )
+    fm = read_plan_frontmatter(project_dir, plan)
+    if fm is not None and fm.onto not in (None, base_plan.name):
+        msg = f"{plan.name} is already stacked onto {fm.onto!r}; cannot restack onto {base_plan.name!r}."
+        raise WorkflowError(msg)
+
+
+def _classify_implement_onto_steps(
+    resume: ResumePlan,
+    plan: Plan,
+    project_dir: Path,
+    builder_repo: Path,
+    feature_branch: str,
+) -> None:
+    _classify_transfer_and_todo_steps(resume, plan, project_dir)
+
+    git_fetch(builder_repo)
+    on_branch = git_current_branch(builder_repo) == feature_branch
+    # A base still in 'implementing' may never have been pushed (only `check` publishes
+    # a branch); with no upstream there is nothing to be behind on.
+    has_upstream = git_ref_exists_remote(builder_repo, feature_branch)
+    up_to_date = not has_upstream or git_is_ancestor(builder_repo, f"origin/{feature_branch}", feature_branch)
+    if on_branch and up_to_date:
+        resume.satisfied(_STEP_IMPLEMENT_ONTO_CHECKOUT, "builder already on the branch and up to date")
+    else:
+        resume.will_run(_STEP_IMPLEMENT_ONTO_CHECKOUT)
+
+    fm = read_plan_frontmatter(project_dir, plan)
+    if fm is not None and fm.onto is not None:
+        resume.satisfied(_STEP_IMPLEMENT_ONTO_FRONTMATTER, "frontmatter already recorded")
+    else:
+        resume.will_run(_STEP_IMPLEMENT_ONTO_FRONTMATTER)
+
+    _classify_transition_implementing_step(resume, plan, project_dir)
+    resume.will_run("push canon")
+
+    if git_is_ancestor(builder_repo, "origin/main", feature_branch):
+        resume.satisfied(_STEP_IMPLEMENT_ONTO_MERGE_MAIN, "origin/main already merged")
+    else:
+        resume.will_run(_STEP_IMPLEMENT_ONTO_MERGE_MAIN)
+
+
+def _run_implement_onto_steps(  # noqa: PLR0913
+    resume: ResumePlan,
+    plan: Plan,
+    project_dir: Path,
+    builder_repo: Path,
+    feature_branch: str,
+    base_plan: Plan,
+    config: WorkflowConfig,
+    *,
+    force_push: bool,
+    dry_run: bool,
+) -> Plan:
+    """Run the (already-classified) ``implement --onto`` steps, gated on resume.should_run."""
+    plan, transfer_ran = _run_transfer_and_todo_steps(
+        resume,
+        plan,
+        project_dir,
+        config,
+        force_push=force_push,
+        dry_run=dry_run,
+    )
+
+    if resume.should_run(_STEP_IMPLEMENT_ONTO_CHECKOUT):
+        git_fetch(builder_repo, dry_run=dry_run)
+        _ensure_branch_checked_out(builder_repo, feature_branch, dry_run=dry_run)
+        git_pull(builder_repo, dry_run=dry_run, skip_if_no_upstream=True)
+
+    canon_repo = project_dir / RepoName.canon
+    if resume.should_run(_STEP_IMPLEMENT_ONTO_FRONTMATTER):
+        # Read after the checkout (and its pull) but before the merge below: the anchor is
+        # the branch tip as base_plan's own work left it, and must not include the merge
+        # commit that is about to carry this very frontmatter write (see plan 025 §3).
+        base_commit = git_commit_hash(builder_repo)
+        existing = read_plan_frontmatter(project_dir, plan)
+        branches = dict(existing.branches) if existing is not None else {}
+        branches[DOCS_REPO] = RepoBranch(branch=feature_branch, base=base_commit)
+        fm = PlanFrontmatter(onto=base_plan.name, branches=branches)
+        target_path = locate_plan_file(project_dir, RepoName.canon, plan.path.name) or (project_dir / plan.path)
+        if dry_run:
+            console.print(f"[dim]would write frontmatter (onto={base_plan.name}) to {target_path}[/dim]")
+        else:
+            write_frontmatter(target_path, fm)
+            git_add(canon_repo, target_path, dry_run=False)
+
+    new_plan = _transition_if_needed(plan, PlanState.IMPLEMENTING, project_dir, dry_run=dry_run)
+    git_push(canon_repo, dry_run=dry_run)
+    _sync_repos_best_effort(project_dir, park=RepoName.planner if transfer_ran else None, dry_run=dry_run)
+
+    if resume.should_run(_STEP_IMPLEMENT_ONTO_MERGE_MAIN):
+        git_fetch(builder_repo, dry_run=dry_run)
+        git_merge(builder_repo, "origin/main", ff_only=False, dry_run=dry_run)
+
+    return new_plan
+
+
 @register_script("implement")
 @click.option("--continue", "cont", is_flag=True, help="Proceed past rough (unverifiable) partial state.")
 @click.option(
@@ -913,9 +1175,19 @@ def _run_implement_steps(  # noqa: PLR0913
     is_flag=True,
     help="Allow force-pushing a branch an earlier run rebased but failed to publish",
 )
+@click.option(
+    "--onto",
+    "onto",
+    is_flag=False,
+    flag_value="",
+    # No explicit default=: click only treats a bare `--onto` (no value) as flag_value
+    # when its own default is still its UNSET sentinel; passing default=None here would
+    # disable that (see click.Option.__init__'s _flag_needs_value derivation).
+    help="Continue on the feature branch of PLAN (default: the branch builder is on).",
+)
 @click.argument("plan_path")
 @click.pass_context
-def implement(ctx: click.Context, plan_path: str, *, cont: bool, force_push: bool) -> None:
+def implement(ctx: click.Context, plan_path: str, *, cont: bool, force_push: bool, onto: str | None) -> None:
     """Schedule a ticket for implementation: transition to implementing and push."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
@@ -926,7 +1198,6 @@ def implement(ctx: click.Context, plan_path: str, *, cont: bool, force_push: boo
         _enforce_expected_state(plan, "implement")
         builder_repo = project_dir / RepoName.builder
         canon_repo = project_dir / RepoName.canon
-        feature_branch = f"feat/{plan.name}"
         require(not git_index_lock_present(builder_repo), f"leftover git lock in {builder_repo}; remove it first.")
         require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
         if plan.state == PlanState.PLANNING:
@@ -937,24 +1208,62 @@ def implement(ctx: click.Context, plan_path: str, *, cont: bool, force_push: boo
             "builder working tree is dirty; commit or discard changes before implement",
         )
 
-        resume = ResumePlan(title="implement")
-        _classify_implement_steps(resume, plan, project_dir, builder_repo, feature_branch)
-        resume.render()
-        if resume.abort_unless_continue(cont=cont):
-            ctx.exit(1)
-            return
+        if onto is not None:
+            base_plan = _resolve_onto_base_plan(project_dir, config, builder_repo, onto)
+            _check_onto_preconditions(project_dir, plan, base_plan, builder_repo)
+            feature_branch = branch_for_plan(project_dir, base_plan)
+            _require_builder_not_on_unfinished_stack(project_dir, config, builder_repo, feature_branch)
 
-        new_plan = _run_implement_steps(
-            resume,
-            plan,
-            project_dir,
-            builder_repo,
-            feature_branch,
-            config,
-            force_push=force_push,
-            dry_run=dry_run,
-        )
-        _write_script_audit_log(config, "implement", dry_run=dry_run, input_plan=plan.name)
+            resume = ResumePlan(title="implement --onto")
+            _classify_implement_onto_steps(resume, plan, project_dir, builder_repo, feature_branch)
+            resume.render()
+            if resume.abort_unless_continue(cont=cont):
+                ctx.exit(1)
+                return
+
+            new_plan = _run_implement_onto_steps(
+                resume,
+                plan,
+                project_dir,
+                builder_repo,
+                feature_branch,
+                base_plan,
+                config,
+                force_push=force_push,
+                dry_run=dry_run,
+            )
+            prior_stack = resolve_stack(project_dir, base_plan, config)
+            _write_script_audit_log(
+                config,
+                "implement",
+                dry_run=dry_run,
+                input_plan=new_plan.name,
+                stacked_on=[member.name for member in prior_stack],
+            )
+            _print_stack_note(feature_branch, [*prior_stack, new_plan])
+        else:
+            feature_branch = branch_for_plan(project_dir, plan)
+            _require_builder_not_on_unfinished_stack(project_dir, config, builder_repo, feature_branch)
+
+            resume = ResumePlan(title="implement")
+            _classify_implement_steps(resume, plan, project_dir, builder_repo, feature_branch)
+            resume.render()
+            if resume.abort_unless_continue(cont=cont):
+                ctx.exit(1)
+                return
+
+            new_plan = _run_implement_steps(
+                resume,
+                plan,
+                project_dir,
+                builder_repo,
+                feature_branch,
+                config,
+                force_push=force_push,
+                dry_run=dry_run,
+            )
+            _write_script_audit_log(config, "implement", dry_run=dry_run, input_plan=new_plan.name)
+
         _print_command_reminder(config, PlanState.TODO, "implement", new_plan.name)
         if not dry_run:
             time.sleep(config.tmux.prompt_send_delay)
@@ -1052,22 +1361,28 @@ def _print_validate_next_step(plan: object) -> None:
 
 
 # Step-name constants: the join key between _classify_check_steps and check()'s run phase.
-_STEP_CHECK_TRANSITION = "transition to checking"
 _STEP_CHECK_CHECKOUT_REVIEWER = "checkout branch in reviewer"
 _STEP_CHECK_CHECKOUT_MAIN_BUILDER = "checkout main in builder"
 
 
-def _classify_check_steps(resume: ResumePlan, plan: Plan, project_dir: Path, target_repo: AgentName) -> None:
-    target_path = project_dir / target_repo / "docs" / "plans" / "checking" / plan.path.name
-    if target_path.exists():
-        resume.satisfied(_STEP_CHECK_TRANSITION, "plan file already in checking/")
-    else:
-        resume.will_run(_STEP_CHECK_TRANSITION)
+def _classify_check_steps(
+    resume: ResumePlan,
+    stack: list[Plan],
+    project_dir: Path,
+    target_repo: AgentName,
+    branch: str,
+) -> None:
+    for member in stack:
+        step = f"transition {member.name} to checking"
+        target_path = project_dir / target_repo / "docs" / "plans" / "checking" / member.path.name
+        if target_path.exists():
+            resume.satisfied(step, "plan file already in checking/")
+        else:
+            resume.will_run(step)
 
     resume.will_run(f"push {target_repo} branch")
     resume.will_run("fetch reviewer")
 
-    branch = f"feat/{plan.name}"
     reviewer_repo = project_dir / RepoName.reviewer
     if git_current_branch(reviewer_repo) == branch:
         resume.satisfied(_STEP_CHECK_CHECKOUT_REVIEWER, "reviewer already on branch")
@@ -1101,6 +1416,7 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_v
         project_dir = _require_project_dir(config)
         plan = resolve_plan(plan_path, project_dir, config=config, command_name="check")
         _enforce_expected_state(plan, "check")
+        _require_is_stack_tip(project_dir, plan)
         target_repo_path = project_dir / target_repo
         reviewer_repo = project_dir / RepoName.reviewer
         builder_repo = project_dir / RepoName.builder
@@ -1110,8 +1426,11 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_v
         )
         require(not git_index_lock_present(reviewer_repo), f"leftover git lock in {reviewer_repo}; remove it first.")
         if plan.state == PlanState.IMPLEMENTING:
-            branch = git_current_branch(target_repo_path)
-            require(branch.startswith("feat/"), f"{target_repo} must be on a feat/* branch, currently on {branch!r}.")
+            current_branch = git_current_branch(target_repo_path)
+            require(
+                current_branch.startswith(BRANCH_PREFIX),
+                f"{target_repo} must be on a feat/* branch, currently on {current_branch!r}.",
+            )
 
         # On a resume where a prior run already transitioned the plan to checking, these
         # checks either already passed or are moot (builder may already be on main); skip
@@ -1126,21 +1445,23 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_v
                     ctx.exit(1)
                     return
 
+        stack = resolve_stack(project_dir, plan, config)
+        branch = branch_for_plan(project_dir, plan)
+
         resume = ResumePlan(title="check")
-        _classify_check_steps(resume, plan, project_dir, target_repo)
+        _classify_check_steps(resume, stack, project_dir, target_repo, branch)
         resume.render()
 
-        # Value-returning transition: always call (idempotent) so new_plan reflects the
-        # target dir even when the git mv itself is a no-op (Fix 2 "value-returning steps").
-        new_plan = _transition_if_needed(
-            plan,
+        new_stack = _transition_stack_members(
+            stack,
             PlanState.CHECKING,
             project_dir,
+            repo_override=target_repo,
             commit_repo=target_repo,
             dry_run=dry_run,
         )
+        new_plan = new_stack[-1]
         git_push(target_repo_path, dry_run=dry_run)
-        branch = f"feat/{new_plan.name}"
         git_fetch(reviewer_repo, dry_run=dry_run)
         if resume.should_run(_STEP_CHECK_CHECKOUT_REVIEWER):
             _ensure_branch_checked_out(reviewer_repo, branch, dry_run=dry_run)
@@ -1149,7 +1470,14 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_v
         if resume.should_run(_STEP_CHECK_CHECKOUT_MAIN_BUILDER):
             _ensure_branch_checked_out(builder_repo, "main", dry_run=dry_run)
         git_pull(builder_repo, dry_run=dry_run)
-        _write_script_audit_log(config, "check", dry_run=dry_run, input_plan=new_plan.name)
+        _write_script_audit_log(
+            config,
+            "check",
+            dry_run=dry_run,
+            input_plan=new_plan.name,
+            output_plans=[member.name for member in new_stack[:-1]],
+        )
+        _print_stack_note(branch, new_stack)
         _print_command_reminder(config, PlanState.IMPLEMENTING, "check", new_plan.name)
         if not dry_run:
             time.sleep(config.tmux.prompt_send_delay)
@@ -1223,7 +1551,7 @@ _STEP_ACCEPT_TRANSFER = "transfer reviewer branch to main"
 _STEP_ACCEPT_REBASE = "rebase reviewer branch onto main"
 
 
-def _classify_accept_steps(resume: ResumePlan, plan: Plan, project_dir: Path, branch: str) -> None:
+def _classify_accept_steps(resume: ResumePlan, stack: list[Plan], project_dir: Path, branch: str) -> None:
     canon_repo = project_dir / RepoName.canon
 
     # transfer_branch_to_main is one guarded+idempotent unit (Fix 3); classify it as a
@@ -1248,11 +1576,13 @@ def _classify_accept_steps(resume: ResumePlan, plan: Plan, project_dir: Path, br
         transfer_will_run=transfer_will_run,
     )
 
-    target_path = project_dir / RepoName.canon / "docs" / "plans" / "done" / plan.path.name
-    if target_path.exists():
-        resume.satisfied("transition to done", "plan file already in done/")
-    else:
-        resume.will_run("transition to done")
+    for member in stack:
+        step = f"transition {member.name} to done"
+        target_path = project_dir / RepoName.canon / "docs" / "plans" / "done" / member.path.name
+        if target_path.exists():
+            resume.satisfied(step, "plan file already in done/")
+        else:
+            resume.will_run(step)
 
     resume.will_run("push canon")
 
@@ -1274,23 +1604,26 @@ def accept(ctx: click.Context, plan_path: str, *, force_push: bool) -> None:
         project_dir = _require_project_dir(config)
         plan = resolve_plan(plan_path, project_dir, config=config, command_name="accept")
         _enforce_expected_state(plan, "accept")
+        _require_is_stack_tip(project_dir, plan)
         reviewer_repo = project_dir / RepoName.reviewer
         canon_repo = project_dir / RepoName.canon
         require(not git_index_lock_present(reviewer_repo), f"leftover git lock in {reviewer_repo}; remove it first.")
         require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
         require(git_current_branch(canon_repo) == "main", "accept: canon must be on 'main'.")
-        # The feature branch follows the fixed 'feat/{plan.name}' convention (set by
-        # `implement`), not whatever reviewer happens to be checked out to right now --
-        # a prior run may have already advanced reviewer to 'main' (decision 2).
-        branch = f"feat/{plan.name}"
+        # The feature branch follows *plan*'s resolved branch (set by `implement`), not
+        # whatever reviewer happens to be checked out to right now -- a prior run may have
+        # already advanced reviewer to 'main' (decision 2).
+        branch = branch_for_plan(project_dir, plan)
         if plan.state == PlanState.CHECKING:
             current_branch = git_current_branch(reviewer_repo)
             if current_branch == "main":
                 msg = "accept: reviewer is on 'main'; expected a feature branch"
                 raise WorkflowError(msg)
 
+        stack = resolve_stack(project_dir, plan, config)
+
         resume = ResumePlan(title="accept")
-        _classify_accept_steps(resume, plan, project_dir, branch)
+        _classify_accept_steps(resume, stack, project_dir, branch)
         resume.render()
 
         # Gated on should_run: unlike a fresh run, a resume where this already landed must
@@ -1308,22 +1641,29 @@ def accept(ctx: click.Context, plan_path: str, *, force_push: bool) -> None:
                 dry_run=dry_run,
             )
             _warn_if_rebased(result, branch)
-        # Value-returning transition: always call (idempotent) so new_plan reflects the
-        # target dir even when the git mv itself is a no-op (Fix 2 "value-returning steps").
-        new_plan = _transition_if_needed(
-            plan,
+        new_stack = _transition_stack_members(
+            stack,
             PlanState.DONE,
             project_dir,
             repo_override=RepoName.canon,
+            commit_repo=RepoName.canon,
             dry_run=dry_run,
         )
+        new_plan = new_stack[-1]
         git_push(canon_repo, dry_run=dry_run)
         # Parks reviewer on 'main' (fixing issue 1's ordering hazard) only after the
         # done-transition commit has itself reached bare.
         _sync_repos_best_effort(project_dir, park=RepoName.reviewer, dry_run=dry_run)
         builder_repo = project_dir / RepoName.builder
         delete_merged_branch(canon_repo, reviewer_repo, builder_repo, branch, dry_run=dry_run)
-        _write_script_audit_log(config, "accept", dry_run=dry_run, input_plan=plan.name)
+        _write_script_audit_log(
+            config,
+            "accept",
+            dry_run=dry_run,
+            input_plan=new_plan.name,
+            output_plans=[member.name for member in new_stack[:-1]],
+        )
+        _print_stack_note(branch, new_stack)
         _print_command_reminder(config, PlanState.CHECKING, "accept", new_plan.name)
     except (
         subprocess.CalledProcessError,
@@ -1372,6 +1712,9 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
             not git_index_lock_present(target_repo_path),
             f"leftover git lock in {target_repo_path}; remove it first.",
         )
+        # Read the rollback context before the transition (no-cascade: only this plan moves).
+        fm = read_plan_frontmatter(project_dir, plan)
+        child = stack_child(project_dir, plan)
         # _transition_if_needed (idempotent) rather than a raw transition_plan + git_commit,
         # and no early-exit shortcut on plan.state == REJECTED: a fully-qualified path can
         # resolve to REJECTED purely from the file's current directory even when the git mv
@@ -1389,10 +1732,24 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
         # Refresh only -- never park: the agent owning the abandoned branch may still be
         # mid-work on it.
         _sync_repos_best_effort(project_dir, dry_run=dry_run)
-        branch_prefix = _BRANCH_PREFIX_FOR_STATE.get(plan.state)
-        if branch_prefix is not None:
+        repo_branch = fm.branches.get(DOCS_REPO) if fm is not None else None
+        if fm is not None and repo_branch is not None:
+            console.print(f"[yellow]Note:[/yellow] {fm.onto} and this plan share the branch {repo_branch.branch}.")
+            console.print("To drop this plan's commits from the branch:")
+            console.print(f"    git -C {project_dir / RepoName.builder} reset --hard {repo_branch.base}")
+        else:
+            branch_prefix = _BRANCH_PREFIX_FOR_STATE.get(plan.state)
+            if branch_prefix == "feat":
+                branch = branch_for_plan(project_dir, plan)
+                console.print(f"[yellow]Note:[/yellow] {branch} is left unmerged and can be deleted manually.")
+            elif branch_prefix is not None:
+                console.print(
+                    f"[yellow]Note:[/yellow] {branch_prefix}/{plan.name} is left unmerged and can be deleted manually.",
+                )
+        if child is not None:
             console.print(
-                f"[yellow]Note:[/yellow] {branch_prefix}/{plan.name} is left unmerged and can be deleted manually.",
+                f"[yellow]Warning:[/yellow] {child.name} is stacked on this plan; its commits stay under "
+                f"{child.name}'s work.",
             )
         _write_script_audit_log(config, "reject", dry_run=dry_run, input_plan=plan.name)
     except (
