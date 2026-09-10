@@ -18,6 +18,7 @@ from workflow.next_step import find_next_step, find_source_state_for_command
 from workflow.plan_resolver import find_all_plans, next_intent_number, resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console, error_console
+from workflow.stack import read_plan_frontmatter
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -140,6 +141,7 @@ def status(ctx: click.Context, show_all: bool) -> None:  # noqa: FBT001
     table.add_column("#", style="bold", no_wrap=True)
     table.add_column("name")
     table.add_column("state")
+    table.add_column("stack")
     table.add_column("last action")
     table.add_column("next step")
 
@@ -153,7 +155,16 @@ def status(ctx: click.Context, show_all: bool) -> None:  # noqa: FBT001
                 next_step = find_next_step(config, source_state, last_entry.command)
                 if next_step is not None:
                     next_step_renderable = next_step.render()
-        table.add_row(plan.sequence_number_str, plan.slug, plan.state.value, last_action, next_step_renderable)
+        fm = read_plan_frontmatter(project_dir, plan)
+        stack_cell = fm.onto if fm is not None and fm.onto is not None else ""
+        table.add_row(
+            plan.sequence_number_str,
+            plan.slug,
+            plan.state.value,
+            stack_cell,
+            last_action,
+            next_step_renderable,
+        )
 
     console.print(table)
     next_number = next_intent_number(project_dir)
@@ -237,10 +248,13 @@ def log(  # noqa: PLR0913
     table.add_column("output plans")
 
     for entry in filtered:
+        command_cell = entry.command
+        if entry.stacked_on:
+            command_cell = f"{entry.command} (onto {entry.stacked_on[-1]})"
         table.add_row(
             entry.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
             entry.actor,
-            entry.command,
+            command_cell,
             entry.input_plan or "",
             ", ".join(entry.output_plans),
         )

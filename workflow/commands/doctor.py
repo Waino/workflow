@@ -8,13 +8,14 @@ anything; exits non-zero when any anomaly is found.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import click
 from rich.table import Table
 
-from workflow.exceptions import PlanCollisionError
+from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.git_helpers import (
     git_branch_exists,
     git_current_branch,
@@ -25,15 +26,17 @@ from workflow.git_helpers import (
     git_status_porcelain,
 )
 from workflow.models import PlanState
-from workflow.names import RepoName
-from workflow.plan_resolver import find_all_plans_in_repo
+from workflow.names import DOCS_REPO, RepoName
+from workflow.plan_resolver import find_all_plans_in_repo, resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console, error_console
+from workflow.stack import BRANCH_PREFIX, branch_for_plan, read_plan_frontmatter
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from workflow.config import WorkflowConfig
+    from workflow.models import Plan
 
 _ACTIVE_FEATURE_BRANCH_STATES = (PlanState.IMPLEMENTING, PlanState.CHECKING)
 
@@ -60,7 +63,7 @@ class RepoCheck:
 
 
 def _active_branches(project_dir: Path) -> set[str]:
-    """Return `plan/<name>`/`feat/<name>` branches expected for plans currently in flight."""
+    """Return `plan/<name>`/stack branches expected for plans currently in flight."""
     branches: set[str] = set()
     for repo in RepoName:
         if not (project_dir / repo).is_dir():
@@ -73,7 +76,7 @@ def _active_branches(project_dir: Path) -> set[str]:
             if plan.state == PlanState.PLANNING:
                 branches.add(f"plan/{plan.name}")
             elif plan.state in _ACTIVE_FEATURE_BRANCH_STATES:
-                branches.add(f"feat/{plan.name}")
+                branches.add(branch_for_plan(project_dir, plan))
     return branches
 
 
@@ -167,6 +170,49 @@ def _duplicate_plan_anomalies(project_dir: Path) -> list[str]:
     return anomalies
 
 
+def _branch_exists_anywhere(project_dir: Path, branch: str) -> bool:
+    """Return whether *branch* exists in bare or in any repo worktree."""
+    bare_path = project_dir / "bare"
+    if bare_path.is_dir() and git_branch_exists(bare_path, branch):
+        return True
+    return any(git_branch_exists(project_dir / repo, branch) for repo in RepoName if (project_dir / repo).is_dir())
+
+
+def _stack_anomalies(project_dir: Path, config: WorkflowConfig) -> list[str]:
+    """Return one message per stack-related anomaly.
+
+    Covers a broken `onto`, an orphaned stack branch, or a `branches` entry pointing at a
+    branch that exists nowhere.
+    """
+    try:
+        plans = [p for p in find_all_plans_in_repo(project_dir, RepoName.canon) if p.state in _PIPELINE_STATES]
+    except PlanCollisionError:
+        return []  # already reported by _duplicate_plan_anomalies
+
+    anomalies: list[str] = []
+    branch_members: dict[str, list[Plan]] = defaultdict(list)
+    for plan in plans:
+        fm = read_plan_frontmatter(project_dir, plan)
+        branch_members[branch_for_plan(project_dir, plan)].append(plan)
+        if fm is None:
+            continue
+        if fm.onto is not None:
+            try:
+                resolve_plan(fm.onto, project_dir, config=config)
+            except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError, WorkflowError):
+                anomalies.append(f"{plan.name}: onto={fm.onto!r} does not resolve to a plan")
+        repo_branch = fm.branches.get(DOCS_REPO)
+        if repo_branch is not None and not _branch_exists_anywhere(project_dir, repo_branch.branch):
+            anomalies.append(f"{plan.name}: recorded branch {repo_branch.branch!r} exists nowhere")
+
+    for branch, members in branch_members.items():
+        if not branch.startswith(BRANCH_PREFIX) or not _branch_exists_anywhere(project_dir, branch):
+            continue
+        if all(member.state in (PlanState.DONE, PlanState.REJECTED) for member in members):
+            anomalies.append(f"{branch}: exists but every plan on it is done/rejected")
+    return anomalies
+
+
 def _render_table(checks: list[RepoCheck]) -> Table:
     table = Table(title="Workflow Doctor")
     table.add_column("repo")
@@ -218,5 +264,11 @@ def doctor(ctx: click.Context) -> None:
         for msg in duplicate_anomalies:
             console.print(f"  - {msg}")
 
-    any_anomaly = any(c.anomalies for c in checks) or bool(duplicate_anomalies)
+    stack_anomalies = _stack_anomalies(project_dir, config)
+    if stack_anomalies:
+        console.print("[bold]Stack anomalies:[/bold]")
+        for msg in stack_anomalies:
+            console.print(f"  - {msg}")
+
+    any_anomaly = any(c.anomalies for c in checks) or bool(duplicate_anomalies) or bool(stack_anomalies)
     ctx.exit(1 if any_anomaly else 0)
