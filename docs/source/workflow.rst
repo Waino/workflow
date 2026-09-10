@@ -120,9 +120,9 @@ plans share one feature branch, so the whole stack is reviewed and merged once:
   else is stacked on); both cascade the transition to every member of the stack in
   one commit. ``accept`` still deletes only the one shared branch.
 * ``reject`` never cascades — it only closes out the named plan. Rejecting a
-  stacked plan prints the concrete ``git branch -f <branch> <anchor>`` that rewinds
-  the shared branch past its commits (no working tree is ever discarded); this is
-  safest done before the next ``check`` cascades the plan onto the branch for good.
+  stacked plan prints the concrete ``git checkout <branch>`` and
+  ``git reset --hard <anchor>`` that rewind the shared branch past its commits; this
+  is safest done before the next ``check`` cascades the plan onto the branch for good.
 * ``workflow status``, ``workflow log``, and ``workflow doctor`` all surface stack
   membership: ``status`` shows the base a plan is stacked onto, ``log`` annotates a
   stacked ``implement`` entry, and ``doctor`` flags a broken ``onto``, an orphaned

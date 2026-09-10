@@ -1371,8 +1371,8 @@ def test_reject_stacked_plan_prints_branch_reset_that_spares_main(
 
     assert result.exit_code == 0, result.output
     printed = " ".join(result.output.split())
-    assert "branch -f feat/005_foo" in printed
-    assert "reset --hard" not in printed
+    assert "checkout feat/005_foo" in printed
+    assert printed.index("checkout feat/005_foo") < printed.index("reset --hard")
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
@@ -1395,3 +1395,25 @@ def test_doctor_is_clean_after_an_accepted_stack(tmp_path: Path, monkeypatch: py
     # pre-commit hook, which doctor rightly reports as a dirty worktree.
     assert "Stack anomalies" not in result.output, result.output
     assert "exists nowhere" not in result.output, result.output
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_check_refuses_when_builder_is_on_another_feature_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`check` pushes builder's current branch, so it must be the branch recorded for the plan."""
+    config_path = _setup_stacked_project(tmp_path, monkeypatch)
+    builder = tmp_path / "builder"
+
+    _create_and_todo_plan(config_path, tmp_path, "005_foo")
+    assert _run(config_path, "implement", "005_foo").exit_code == 0
+    _builder_commit(tmp_path, "foo.txt", "builder work on foo")
+    _git(["checkout", "-b", "feat/999_elsewhere"], cwd=builder)
+
+    result = _run(config_path, "check", "005_foo")
+
+    assert result.exit_code == 1
+    assert "feat/005_foo" in result.output
+    assert "feat/999_elsewhere" in result.output
+    assert not (tmp_path / "reviewer" / "docs" / "plans" / "checking" / "005_foo.md").exists()

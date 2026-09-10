@@ -141,8 +141,8 @@ All findings addressed on `feat/025_stacked_plans` after the review.
 - **2** the same function now *returns* the base's resolved stack, so a cycle or unresolvable
   `onto` fails before the frontmatter write; the caller no longer re-resolves afterwards.
 - **3** the "recorded branch exists nowhere" check applies only to `implementing`/`checking` plans.
-- **4** the reject hint prints `git checkout main` + `git branch -f <branch> <anchor>` (a `branch -f`
-  alone fails while the branch is checked out, and never discards a working tree).
+- **4** the reject hint prints `git checkout <branch>` + `git reset --hard <anchor>`, so the reset
+  can no longer land on whatever builder happened to be checked out (`main`, after `check`).
 - **5** `git_commits_ahead_of_remote` raises `WorkflowError` instead of reporting 0 when the
   comparison cannot be made.
 - **6** the frontmatter write uses `model_copy`, preserving unknown keys.
@@ -155,6 +155,10 @@ All findings addressed on `feat/025_stacked_plans` after the review.
   full suite 98s -> 49s.
 - **11** the mid-stack guard moved inside the `try` (WorkflowError rendering) and exempts `ask`
   via `_STACK_TIP_EXEMPT_COMMANDS`.
+- **12** both halves: `implement --onto` transitions with `repo_override=RepoName.canon` (the
+  frontmatter write and the commit can no longer land in different repos), and `check` now requires
+  the target repo's current branch to *equal* the plan's recorded branch rather than merely start
+  with `feat/`.
 - **13** plan §4 now records the `repo_override=target_repo` change.
 - **14** one `assert config.project_dir is not None`, hoisted.
 - **15** `tip_plan_for_branch` raises on a candidate set with no tip.
@@ -162,13 +166,7 @@ All findings addressed on `feat/025_stacked_plans` after the review.
   frontmatter parses are cached on (path, mtime, size); `_branch_exists_anywhere` carries a
   `ponytail:` note for its process-per-plan cost.
 - **17** `WorkflowConfig` moved under `TYPE_CHECKING` in `stack.py`.
-- Also: `implement --onto` passes `repo_override=RepoName.canon` to its transition (finding 12's
-  latent staged-but-uncommitted-in-canon hazard), and the `reject` wording in `cli.rst` /
-  `workflow.rst` follows the new command.
+- Also: the `reject` wording in `cli.rst` / `workflow.rst` follows the new command.
 
-Not changed: `check` still does not require the target repo's current branch to equal the
-recorded one (finding 12's second half) — out of scope for a fix pass, since the existing
-`feat/` prefix check predates this plan.
-
-Gates after the fixes: `pytest` 466 passed (49s), `mypy --strict` clean, `ruff` clean, `black`
+Gates after the fixes: `pytest` 467 passed, `mypy --strict` clean, `ruff` clean, `black`
 clean.

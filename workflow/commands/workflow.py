@@ -1450,11 +1450,16 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_v
             f"leftover git lock in {target_repo_path}; remove it first.",
         )
         require(not git_index_lock_present(reviewer_repo), f"leftover git lock in {reviewer_repo}; remove it first.")
+        stack = resolve_stack(project_dir, plan, config)
+        branch = branch_for_plan(project_dir, plan)
         if plan.state == PlanState.IMPLEMENTING:
+            # Equality, not just the feat/* shape: `check` pushes whatever *target_repo* is
+            # on but hands reviewer the plan's recorded branch, so the two must be the same.
             current_branch = git_current_branch(target_repo_path)
             require(
-                current_branch.startswith(BRANCH_PREFIX),
-                f"{target_repo} must be on a feat/* branch, currently on {current_branch!r}.",
+                current_branch == branch,
+                f"{target_repo} must be on {branch!r} (the branch of {plan.name}), "
+                f"currently on {current_branch!r}.",
             )
 
         # On a resume where a prior run already transitioned the plan to checking, these
@@ -1469,9 +1474,6 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_v
                 if not force_validation and any(result.status == "fail" for result in results):
                     ctx.exit(1)
                     return
-
-        stack = resolve_stack(project_dir, plan, config)
-        branch = branch_for_plan(project_dir, plan)
 
         resume = ResumePlan(title="check")
         _classify_check_steps(resume, stack, project_dir, target_repo, branch)
@@ -1761,11 +1763,11 @@ def reject(ctx: click.Context, plan_path: str, target_repo: RepoName) -> None:
         if fm is not None and repo_branch is not None:
             console.print(f"[yellow]Note:[/yellow] {fm.onto} and this plan share the branch {repo_branch.branch}.")
             console.print("To drop this plan's commits from the branch:")
-            # `branch -f` rather than `reset --hard`: it cannot discard a working tree.
-            # The checkout first because git refuses to force a branch that is checked out.
+            # The checkout first: after `check`, builder sits on 'main', where an
+            # unqualified reset would rewind main instead of the shared branch.
             builder_repo = project_dir / RepoName.builder
-            console.print(f"    git -C {builder_repo} checkout main")
-            console.print(f"    git -C {builder_repo} branch -f {repo_branch.branch} {repo_branch.base}")
+            console.print(f"    git -C {builder_repo} checkout {repo_branch.branch}")
+            console.print(f"    git -C {builder_repo} reset --hard {repo_branch.base}")
         else:
             branch_prefix = _BRANCH_PREFIX_FOR_STATE.get(plan.state)
             if branch_prefix == "feat":

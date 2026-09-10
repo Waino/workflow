@@ -135,8 +135,8 @@ operations (push/pull/merge) needed at each handoff.
     transition. The plan's branch is deliberately *not* merged and *not* deleted;
     the command prints a note naming the branch you may delete by hand.
     ``--target-repo`` selects which repo holds the plan being rejected (default
-    ``canon``). On a stacked plan, the note instead gives the concrete
-    ``git branch -f`` that rewinds the shared branch past this plan's commits (see
+    ``canon``). On a stacked plan, the note instead gives the concrete checkout and
+    ``git reset --hard`` that rewind the shared branch past this plan's commits (see
     `Stacked plans`_); rejecting a plan that itself has a child stacked on it prints
     an additional warning that the child's commits stay on the branch regardless.
 
