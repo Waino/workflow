@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+DOCS_REPO = "docs"
+"""Frontmatter key for the docs repo's branch entry (the only key used in in-band mode)."""
+
 
 class RepoName(StrEnum):
     """Workflow repos with fixed built-in responsibilities."""
