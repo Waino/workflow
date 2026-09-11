@@ -116,6 +116,8 @@ plans share one feature branch, so the whole stack is reviewed and merged once:
   stacked on it. It records ``B``'s ``onto`` and the branch/anchor commit in ``B``'s
   plan file frontmatter, then merges current ``main`` into the shared branch.
   ``--onto`` with no value infers the base from the branch builder is already on.
+  An explicit base is a plan name or a sequence number (``006_bar``, ``006``, ``6``),
+  looked up in canon -- unlike a plan argument, it is not fuzzily resolved.
 * ``check TIP`` and ``accept TIP`` must be run on the stack's tip (the plan nothing
   else is stacked on); both cascade the transition to every member of the stack in
   one commit. ``accept`` still deletes only the one shared branch.

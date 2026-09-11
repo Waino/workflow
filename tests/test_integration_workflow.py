@@ -19,7 +19,7 @@ import workflow.git_helpers as git_helpers_module
 from workflow.audit import read_audit_log
 from workflow.cli import main
 from workflow.config import WORKFLOW_ROOT_MARKER
-from workflow.git_helpers import CommitResult
+from workflow.git_helpers import CommitResult, git_path_exists_at_ref
 from workflow.names import RepoName
 from workflow.validate import CheckResult, _check_agents_md
 
@@ -988,6 +988,11 @@ def test_implement_needs_continue_for_leftover_branch(tmp_path: Path, monkeypatc
     result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005_foo", "--continue"])
     assert result.exit_code == 0, result.output
     assert (tmp_path / "canon" / "docs" / "plans" / "implementing" / "005_foo.md").exists()
+    # Builder is parked on main, so the transition cannot be merged into the branch here;
+    # the run must hand that over explicitly instead of reporting a clean skip.
+    assert "builder is not on feat/005_foo" in result.output
+    assert "merge origin/main" in result.output
+    assert not git_path_exists_at_ref(builder, "feat/005_foo", "docs/plans/implementing/005_foo.md")
 
 
 # ---------------------------------------------------------------------------
@@ -1390,6 +1395,28 @@ def test_implement_onto_refused_when_reviewer_has_unpushed_commits(
     _git(["push"], cwd=reviewer)
     _advance_clock()
     assert _run(config_path, "implement", "006_bar", "--onto", "005_foo").exit_code == 0
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_implement_onto_refused_when_base_was_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`reject` leaves the branch (and its plan file) behind, so only canon's state rules it out."""
+    config_path = _setup_stacked_project(tmp_path, monkeypatch)
+
+    _create_and_todo_plan(config_path, tmp_path, "005_foo")
+    assert _run(config_path, "implement", "005_foo").exit_code == 0
+    _builder_commit(tmp_path, "foo.txt", "builder work on foo")
+    assert _run(config_path, "reject", "005_foo").exit_code == 0
+    _advance_clock()
+
+    _create_and_todo_plan(config_path, tmp_path, "006_bar")
+    result = _run(config_path, "implement", "006_bar", "--onto", "005_foo")
+
+    assert result.exit_code == 1
+    assert "got 'rejected'" in result.output
+    assert not (tmp_path / "canon" / "docs" / "plans" / "implementing" / "006_bar.md").exists()
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -28,14 +27,6 @@ from workflow.stack import (
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-def _silence_tmux(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Return a dead libtmux server so resolve_plan's tmux source never touches a real session."""
-    dead = MagicMock()
-    dead.is_alive.return_value = False
-    monkeypatch.setattr("workflow.plan_resolver.libtmux.Server", lambda: dead)
-
-
 def _make_plan(  # noqa: PLR0913 - test helper, kept explicit rather than bundling into a struct
     root: Path,
     repo: str,
@@ -57,7 +48,7 @@ def _make_plan(  # noqa: PLR0913 - test helper, kept explicit rather than bundli
     (d / filename).write_text(body, encoding="utf-8")
     seq, slug = filename.removesuffix(".md").split("_", maxsplit=1)
     return Plan(
-        sequence_number=[int(seq)],
+        sequence_number=[int(part) for part in seq.split(".")],
         slug=slug,
         state=state,
         path=Path(repo) / "docs" / "plans" / state.value / filename,
@@ -210,10 +201,20 @@ def test_find_stack_member_matches_canonical_name(tmp_path: Path) -> None:
     assert result.name == plan.name
 
 
-def test_find_stack_member_matches_bare_sequence_number(tmp_path: Path) -> None:
+@pytest.mark.parametrize("reference", ["001", "1", "01"])
+def test_find_stack_member_matches_padded_or_unpadded_sequence_number(tmp_path: Path, reference: str) -> None:
     plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
 
-    result = find_stack_member(tmp_path, "001")
+    result = find_stack_member(tmp_path, reference)
+
+    assert result is not None
+    assert result.name == plan.name
+
+
+def test_find_stack_member_matches_unpadded_hierarchical_sequence_number(tmp_path: Path) -> None:
+    plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "023.1_sub.md")
+
+    result = find_stack_member(tmp_path, "23.1")
 
     assert result is not None
     assert result.name == plan.name

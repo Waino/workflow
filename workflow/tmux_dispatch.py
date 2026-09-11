@@ -213,7 +213,9 @@ def _setup_has_plan(
             today=today,
             stack=stack,
         )
-    except WorkflowError as exc:
+    except (PlanCollisionError, WorkflowError) as exc:
+        # PlanCollisionError is not a WorkflowError: stack_child/stack_entries scan whole
+        # repos, so a sequence-number collision reaches here and must render, not traceback.
         error_console.print(f"Plan resolved to: {plan.path}")
         print_workflow_error(exc)
         return None

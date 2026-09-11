@@ -874,9 +874,31 @@ _STEP_IMPLEMENT_MERGE_MAIN = "merge origin/main into existing feature branch"
 
 
 def _merge_origin_main_into(builder_repo: Path, *, dry_run: bool) -> None:
-    """Fetch and merge origin/main into builder's current branch; a no-op when already merged."""
+    """Fetch and merge origin/main into builder's current branch; a no-op when already merged.
+
+    Fetches even though the callers just ran :func:`_sync_repos_best_effort`: that sync only
+    warns on failure, and merging a stale origin/main would silently drop the very commit
+    this merge exists to deliver.
+    """
     git_fetch(builder_repo, dry_run=dry_run)
     git_merge(builder_repo, "origin/main", ff_only=False, dry_run=dry_run)
+
+
+def _plan_file_on_branch(builder_repo: Path, branch: str, state: PlanState, filename: str) -> bool:
+    """Whether *filename* sits under *state*'s directory on *branch*, per builder's ref or origin's.
+
+    Both refs are consulted because which one carries the latest transition depends on the
+    flags of the previous command: the default ``check`` commits in builder, while
+    ``check --target-repo reviewer`` commits in reviewer and only pushes, leaving builder's
+    local ref behind.
+    """
+    rel_path = f"docs/plans/{state.value}/{filename}"
+    return any(git_path_exists_at_ref(builder_repo, ref, rel_path) for ref in (branch, f"origin/{branch}"))
+
+
+def _manual_merge_hint(builder_repo: Path, feature_branch: str) -> str:
+    """The commands that land origin/main on *feature_branch* by hand, for when this run cannot."""
+    return f"git -C {builder_repo} checkout {feature_branch} && git -C {builder_repo} merge origin/main"
 
 
 def _classify_transfer_and_todo_steps(resume: ResumePlan, plan: Plan, project_dir: Path) -> None:
@@ -950,6 +972,7 @@ def _classify_implement_steps(
     # it (and possibly has work in progress) -- fetch/checkout-main/pull must not run, or
     # a rerun on an already-fully-implemented plan would force builder off its own branch.
     branch_exists = git_branch_exists(builder_repo, feature_branch)
+    current_branch = git_current_branch(builder_repo)
     if branch_exists:
         resume.satisfied(_STEP_IMPLEMENT_FETCH_BUILDER, "feature branch already exists")
         resume.satisfied(_STEP_IMPLEMENT_CHECKOUT_MAIN_BUILDER, "feature branch already exists")
@@ -957,13 +980,20 @@ def _classify_implement_steps(
         # the fresh-branch path), so builder's current branch is a sound predicate here: the
         # same push-moves-main gap as _STEP_IMPLEMENT_ONTO_MERGE_MAIN, but only reachable when
         # builder is already sitting on the branch that push is about to leave behind.
-        if git_current_branch(builder_repo) == feature_branch:
+        if current_branch == feature_branch:
             resume.will_run(_STEP_IMPLEMENT_MERGE_MAIN)
         else:
-            resume.satisfied(_STEP_IMPLEMENT_MERGE_MAIN, "builder is not on the feature branch")
+            # Not satisfied, just impossible here: forcing builder off its current branch is
+            # worse than leaving the transition commit unmerged, so demand --continue and hand
+            # the merge over (the run step warns again with the same commands).
+            resume.needs_continue(
+                _STEP_IMPLEMENT_MERGE_MAIN,
+                f"builder is on {current_branch!r}, not {feature_branch!r}; the plan file will not "
+                f"reach the branch until you run: {_manual_merge_hint(builder_repo, feature_branch)}",
+            )
     else:
         resume.will_run(_STEP_IMPLEMENT_FETCH_BUILDER)
-        if git_current_branch(builder_repo) == "main":
+        if current_branch == "main":
             resume.satisfied(_STEP_IMPLEMENT_CHECKOUT_MAIN_BUILDER, "builder already on main")
         else:
             resume.will_run(_STEP_IMPLEMENT_CHECKOUT_MAIN_BUILDER)
@@ -1022,7 +1052,13 @@ def _run_implement_steps(  # noqa: PLR0913
         git_pull(builder_repo, dry_run=dry_run)
         git_checkout(builder_repo, feature_branch, create=True, dry_run=dry_run)
     if resume.should_run(_STEP_IMPLEMENT_MERGE_MAIN):
-        _merge_origin_main_into(builder_repo, dry_run=dry_run)
+        if git_current_branch(builder_repo) == feature_branch:
+            _merge_origin_main_into(builder_repo, dry_run=dry_run)
+        else:
+            error_console.print(
+                f"[yellow]\\[!] builder is not on {feature_branch}; origin/main was not merged into it. "
+                f"Run: {_manual_merge_hint(builder_repo, feature_branch)}[/yellow]",
+            )
 
     return new_plan
 
@@ -1058,14 +1094,16 @@ def _resolve_onto_base_plan(project_dir: Path, builder_repo: Path, onto: str) ->
     """Resolve the ``--onto`` base plan: explicit name, or inferred from builder's current branch."""
     if onto != "":
         base_plan = find_stack_member(project_dir, onto)
-        require(base_plan is not None, f"--onto {onto!r} does not resolve to a plan.")
-        assert base_plan is not None  # narrows for mypy; require() above already guaranteed it
+        if base_plan is None:
+            msg = f"--onto {onto!r} does not resolve to a plan."
+            raise WorkflowError(msg)
         return base_plan
     current = git_current_branch(builder_repo)
     require(current.startswith(BRANCH_PREFIX), f"builder is on {current!r}, not a feat/* branch; pass --onto <plan>.")
     base_plan = tip_plan_for_branch(project_dir, current)
-    require(base_plan is not None, f"no plan resolves to branch {current!r} in builder.")
-    assert base_plan is not None  # narrows for mypy; require() above already guaranteed it
+    if base_plan is None:
+        msg = f"no plan resolves to branch {current!r} in builder."
+        raise WorkflowError(msg)
     return base_plan
 
 
@@ -1090,18 +1128,24 @@ def _check_onto_preconditions(
     if child is not None:
         msg = f"{base_plan.name} already has {child.name} stacked on it; use --onto {child.name} instead."
         raise WorkflowError(msg)
+    # Canon never shows 'checking' (only `check`'s target_repo does; canon jumps straight
+    # from 'implementing' to 'done' at `accept`), so this one state covers both. It still
+    # has to be checked: a rejected base keeps its branch, and that branch's tree keeps the
+    # plan file, so the ref reads below would happily accept it.
+    require(
+        base_plan.state == PlanState.IMPLEMENTING,
+        f"--onto base {base_plan.name} must be in 'implementing' or 'checking', "
+        f"got {base_plan.state.value!r} (canon shows a plan in checking as 'implementing').",
+    )
     require(
         git_branch_exists(builder_repo, base_branch),
         f"branch {base_branch!r} (for {base_plan.name}) does not exist in builder.",
     )
-    # base_plan.state is derived from canon's directory layout, which never sees
-    # 'checking' (only `check`'s target_repo, builder, does; canon jumps straight from
-    # 'implementing' to 'done' at `accept`). builder's local branch ref, however, always
-    # carries the latest transition commit -- check() commits it there before pushing and
-    # switching away -- so read the checking/implementing distinction from that ref's tree
-    # instead of the possibly-stale Plan.state.
+    # The implementing/checking distinction is invisible in canon (see above), so read it
+    # from the branch's own tree: `check` commits that transition on the branch itself.
+    git_fetch(builder_repo)
     filename = base_plan.path.name
-    if git_path_exists_at_ref(builder_repo, base_branch, f"docs/plans/checking/{filename}"):
+    if _plan_file_on_branch(builder_repo, base_branch, PlanState.CHECKING, filename):
         git_fetch(reviewer_repo)
         ahead = git_commits_ahead_of_remote(reviewer_repo, base_branch)
         require(
@@ -1111,9 +1155,9 @@ def _check_onto_preconditions(
         )
     else:
         require(
-            git_path_exists_at_ref(builder_repo, base_branch, f"docs/plans/implementing/{filename}"),
-            f"--onto base {base_plan.name} must be in 'implementing' or 'checking', "
-            f"got {base_plan.state.value!r} (per canon).",
+            _plan_file_on_branch(builder_repo, base_branch, PlanState.IMPLEMENTING, filename),
+            f"{base_plan.name}'s plan file is on branch {base_branch!r} under neither "
+            f"docs/plans/implementing/ nor docs/plans/checking/; merge origin/main into that branch first.",
         )
     fm = read_plan_frontmatter(project_dir, plan)
     if fm is not None and fm.onto not in (None, base_plan.name):
@@ -1131,7 +1175,7 @@ def _classify_implement_onto_steps(
 ) -> None:
     _classify_transfer_and_todo_steps(resume, plan, project_dir)
 
-    git_fetch(builder_repo)
+    # No fetch: _check_onto_preconditions just fetched builder, so origin/* is current.
     on_branch = git_current_branch(builder_repo) == feature_branch
     # A base still in 'implementing' may never have been pushed (only `check` publishes
     # a branch); with no upstream there is nothing to be behind on.
@@ -1180,7 +1224,7 @@ def _run_implement_onto_steps(  # noqa: PLR0913
     )
 
     if resume.should_run(_STEP_IMPLEMENT_ONTO_CHECKOUT):
-        git_fetch(builder_repo, dry_run=dry_run)
+        # No fetch: classification already fetched, and the pull below fetches again anyway.
         _ensure_branch_checked_out(builder_repo, feature_branch, dry_run=dry_run)
         git_pull(builder_repo, dry_run=dry_run, skip_if_no_upstream=True)
 

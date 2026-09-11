@@ -88,17 +88,29 @@ def branch_for_plan(project_dir: Path, plan: Plan) -> str:
     return f"{BRANCH_PREFIX}{plan.name}"
 
 
-def find_stack_member(project_dir: Path, reference: str, prefer_repo: str = RepoName.canon) -> Plan | None:
-    """Find the plan named by a stack reference (`onto` value or `--onto` argument).
+def _normalize_stack_reference(reference: str) -> str:
+    """Strip any state prefix and `.md` suffix, and zero-pad a bare sequence number.
 
-    Matches the canonical plan name, or the bare sequence number for a hand-written
-    reference. Searches *prefer_repo* first, then canon, so a stack resolved from an
-    agent's clone keeps that clone's paths. Not state-filtered: a rejected or done base
-    must still be findable so a stack with such a member does not become unresolvable.
+    Zero-padding keeps hand-written references like ``--onto 25`` or ``onto: 23.1``
+    working, since plan file names always carry the three-digit form.
     """
     normalized = reference.rsplit("/", 1)[-1].removesuffix(".md")
-    repos = [prefer_repo] if prefer_repo == RepoName.canon else [prefer_repo, RepoName.canon]
-    for repo in repos:
+    head, _, rest = normalized.partition(".")
+    if head.isdigit():
+        return f"{head.zfill(3)}{'.' if rest else ''}{rest}"
+    return normalized
+
+
+def find_stack_member(project_dir: Path, reference: str, prefer_repo: RepoName = RepoName.canon) -> Plan | None:
+    """Find the plan named by a stack reference (`onto` value or `--onto` argument).
+
+    Matches the canonical plan name, or the (optionally unpadded) sequence number for a
+    hand-written reference. Searches *prefer_repo* first, then canon, so a stack resolved
+    from an agent's clone keeps that clone's paths. Not state-filtered: a rejected or done
+    base must still be findable so a stack with such a member does not become unresolvable.
+    """
+    normalized = _normalize_stack_reference(reference)
+    for repo in dict.fromkeys([prefer_repo, RepoName.canon]):
         candidates = [
             candidate for candidate in find_all_plans_in_repo(project_dir, repo) if not isinstance(candidate, Review)
         ]
@@ -131,7 +143,9 @@ def resolve_stack(project_dir: Path, plan: Plan) -> list[Plan]:
         if len(chain) >= _MAX_STACK_DEPTH:
             msg = f"stack depth exceeds {_MAX_STACK_DEPTH} while resolving {current.name!r}'s onto; check for a cycle"
             raise WorkflowError(msg)
-        prefer_repo = current.path.parts[0]
+        # Plan paths are repo-prefixed; fall back to canon rather than crash on a hand-built path.
+        head = current.path.parts[0] if current.path.parts else ""
+        prefer_repo = RepoName(head) if head in RepoName.__members__ else RepoName.canon
         base_plan = find_stack_member(project_dir, onto, prefer_repo=prefer_repo)
         if base_plan is None:
             msg = (
