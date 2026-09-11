@@ -2,7 +2,7 @@
 set -eux
 
 # Reformat using black
-black --skip-string-normalization workflow tests/*
+black --skip-string-normalization workflow tests/* scripts
 
 # Lint using ruff
 ruff check --fix
@@ -11,4 +11,4 @@ ruff check --fix
 python -m pytest -m "not slow"
 
 # Type checking
-mypy workflow tests
+mypy workflow tests scripts

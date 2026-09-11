@@ -9,16 +9,19 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from tests.conftest import create_project_marker
 from workflow.cli import main
 from workflow.commands.doctor import (
     _active_branches,
     _check_bare,
     _check_worktree,
     _duplicate_plan_anomalies,
+    _legacy_marker_anomalies,
     _stack_anomalies,
 )
-from workflow.config import WORKFLOW_ROOT_MARKER, WorkflowConfig, load_config
+from workflow.config import WorkflowConfig, load_config
 from workflow.frontmatter import PlanFrontmatter, RepoBranch, render_frontmatter
+from workflow.metadata import LEGACY_ROOT_MARKER
 from workflow.names import RepoName
 
 _GIT = shutil.which("git") or "git"
@@ -57,6 +60,7 @@ def _make_plan(
 
 
 def _config_for(tmp_path: Path) -> WorkflowConfig:
+    create_project_marker(tmp_path)
     shutil.copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
     return load_config(tmp_path / "config.yaml", project_dir=tmp_path)
 
@@ -227,7 +231,7 @@ def _make_doctor_config(tmp_path: Path) -> Path:
     src = Path(__file__).parent.parent / "docs" / "default_config.yaml"
     dest = tmp_path / "config.yaml"
     dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-    (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+    create_project_marker(tmp_path)
     return dest
 
 
@@ -243,6 +247,19 @@ def test_doctor_cli_exits_zero_on_clean_setup(tmp_path: Path, monkeypatch: pytes
     result = CliRunner().invoke(main, ["--config", str(config_path), "doctor"])
 
     assert result.exit_code == 0, result.output
+
+
+def test_legacy_marker_anomalies_flags_leftover_marker(tmp_path: Path) -> None:
+    create_project_marker(tmp_path)
+    (tmp_path / LEGACY_ROOT_MARKER).touch()
+
+    assert _legacy_marker_anomalies(tmp_path) == ["legacy .workflow_root marker present; run scripts/migrate_023.py"]
+
+
+def test_legacy_marker_anomalies_clean_without_marker(tmp_path: Path) -> None:
+    create_project_marker(tmp_path)
+
+    assert _legacy_marker_anomalies(tmp_path) == []
 
 
 def test_doctor_cli_exits_nonzero_and_reports_anomaly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

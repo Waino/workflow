@@ -13,6 +13,7 @@ import yaml
 from click.testing import CliRunner
 
 import workflow.commands.agents_md as cm_cmd
+from tests.conftest import create_project_marker
 from workflow import main
 from workflow.agents_md import (
     MARKER_BEGIN,
@@ -27,7 +28,7 @@ from workflow.agents_md import (
     render_workflow_section,
     replace_managed_section,
 )
-from workflow.config import WORKFLOW_ROOT_MARKER, WorkflowConfig, load_config
+from workflow.config import WorkflowConfig, load_config
 from workflow.exceptions import AgentsMdGenerationError
 
 # ---------------------------------------------------------------------------
@@ -197,6 +198,7 @@ def test_parse_hash_file_raises_on_malformed() -> None:
 
 
 def _load_default_config(tmp_path: Path) -> WorkflowConfig:
+    create_project_marker(tmp_path)
     copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
     return load_config(tmp_path / "config.yaml", project_dir=tmp_path)
 
@@ -278,7 +280,7 @@ def test_generate_and_write_agents_md_is_world_readable(tmp_path: Path) -> None:
 
 
 def _make_project(tmp_path: Path) -> Path:
-    (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+    create_project_marker(tmp_path)
     copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
     for repo in ("canon", "planner", "builder", "reviewer"):
         (tmp_path / repo).mkdir(exist_ok=True)

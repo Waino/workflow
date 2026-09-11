@@ -16,10 +16,11 @@ from click.testing import CliRunner
 
 import workflow.commands.workflow as wc
 import workflow.git_helpers as git_helpers_module
+from tests.conftest import create_project_marker
 from workflow.audit import read_audit_log
 from workflow.cli import main
-from workflow.config import WORKFLOW_ROOT_MARKER
 from workflow.git_helpers import CommitResult, git_path_exists_at_ref
+from workflow.metadata import METADATA_FILENAME
 from workflow.names import RepoName
 from workflow.validate import CheckResult, _check_agents_md
 
@@ -114,7 +115,7 @@ def _make_integration_config(tmp_path: Path) -> Path:
     src = Path(__file__).parent.parent / "docs" / "default_config.yaml"
     dest = tmp_path / "config.yaml"
     dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-    (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+    create_project_marker(tmp_path)
     (tmp_path / "canon" / ".git-pre-commit-hook").touch()
     (tmp_path / "env.list").touch()
     return dest
@@ -301,7 +302,7 @@ def test_init_rerun_with_continue_succeeds(tmp_path: Path, monkeypatch: pytest.M
     second = CliRunner().invoke(main, ["--config", str(config_path), "init", "--continue"])
 
     assert second.exit_code == 0, second.output
-    assert (tmp_path / WORKFLOW_ROOT_MARKER).exists()
+    assert (tmp_path / METADATA_FILENAME).exists()
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
@@ -364,7 +365,7 @@ def test_init_dry_run_previews_resume_without_mutating(tmp_path: Path, monkeypat
     first = CliRunner().invoke(main, ["--config", str(config_path), "init"])
     assert first.exit_code == 0, first.output
 
-    marker_before = (tmp_path / WORKFLOW_ROOT_MARKER).exists()
+    marker_before = (tmp_path / METADATA_FILENAME).exists()
     bare_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "bare").stdout
 
     # Rerunning without --continue hits the rough (clone-exists) gate even in dry-run;
@@ -376,14 +377,14 @@ def test_init_dry_run_previews_resume_without_mutating(tmp_path: Path, monkeypat
     assert "[skip] bare clone" in result.output
     assert "[skip] AGENTS.md committed" in result.output
     assert "--continue" in result.output
-    assert marker_before == (tmp_path / WORKFLOW_ROOT_MARKER).exists()
+    assert marker_before == (tmp_path / METADATA_FILENAME).exists()
     assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "bare").stdout == bare_head_before
 
     # With --continue, dry-run previews the same plan and completes without mutating.
     result_cont = CliRunner().invoke(main, ["--dry-run", "--config", str(config_path), "init", "--continue"])
     assert result_cont.exit_code == 0, result_cont.output
     assert "[skip] bare clone" in result_cont.output
-    assert marker_before == (tmp_path / WORKFLOW_ROOT_MARKER).exists()
+    assert marker_before == (tmp_path / METADATA_FILENAME).exists()
     assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "bare").stdout == bare_head_before
 
 

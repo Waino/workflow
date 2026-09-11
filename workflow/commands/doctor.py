@@ -25,6 +25,7 @@ from workflow.git_helpers import (
     git_rev_parse,
     git_status_porcelain,
 )
+from workflow.metadata import LEGACY_ROOT_MARKER
 from workflow.models import PlanState
 from workflow.names import DOCS_REPO, RepoName
 from workflow.plan_resolver import find_all_plans_in_repo, resolve_plan
@@ -170,6 +171,13 @@ def _duplicate_plan_anomalies(project_dir: Path) -> list[str]:
     return anomalies
 
 
+def _legacy_marker_anomalies(project_dir: Path) -> list[str]:
+    """Return an anomaly if a leftover legacy .workflow_root marker is present."""
+    if (project_dir / LEGACY_ROOT_MARKER).exists():
+        return ["legacy .workflow_root marker present; run scripts/migrate_023.py"]
+    return []
+
+
 def _branch_exists_anywhere(project_dir: Path, branch: str) -> bool:
     """Return whether *branch* exists in bare or in any repo worktree.
 
@@ -280,5 +288,16 @@ def doctor(ctx: click.Context) -> None:
         for msg in stack_anomalies:
             console.print(f"  - {msg}")
 
-    any_anomaly = any(c.anomalies for c in checks) or bool(duplicate_anomalies) or bool(stack_anomalies)
+    legacy_marker_anomalies = _legacy_marker_anomalies(project_dir)
+    if legacy_marker_anomalies:
+        console.print("[bold]Project anomalies:[/bold]")
+        for msg in legacy_marker_anomalies:
+            console.print(f"  - {msg}")
+
+    any_anomaly = (
+        any(c.anomalies for c in checks)
+        or bool(duplicate_anomalies)
+        or bool(stack_anomalies)
+        or bool(legacy_marker_anomalies)
+    )
     ctx.exit(1 if any_anomaly else 0)

@@ -7,19 +7,21 @@ import yaml
 
 import workflow.commands.info
 import workflow.commands.workflow  # noqa: F401  — populates script registry
+from tests.conftest import create_project_marker
 from workflow.config import (
-    WORKFLOW_ROOT_MARKER,
     TmuxConfig,
+    find_legacy_project_root,
     find_project_root,
     load_config,
 )
+from workflow.metadata import LEGACY_ROOT_MARKER
 from workflow.models import PlanState
 
 
 @pytest.fixture
 def project_dir(tmp_path: Path) -> Path:
     """Create a minimal project directory with marker and config."""
-    (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+    create_project_marker(tmp_path)
     config = {
         "agents": [
             {"name": "planner", "model": "claude-sonnet-4-20250514"},
@@ -43,17 +45,36 @@ def project_dir(tmp_path: Path) -> Path:
 
 class TestFindProjectRoot:
     def test_finds_marker_in_current_dir(self, tmp_path: Path) -> None:
-        (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+        create_project_marker(tmp_path)
         assert find_project_root(tmp_path) == tmp_path
 
     def test_finds_marker_in_parent(self, tmp_path: Path) -> None:
-        (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+        create_project_marker(tmp_path)
         child = tmp_path / "sub" / "deep"
         child.mkdir(parents=True)
         assert find_project_root(child) == tmp_path
 
     def test_returns_none_when_not_found(self, tmp_path: Path) -> None:
         assert find_project_root(tmp_path) is None
+
+    def test_finds_metadata_file_from_nested_cwd(self, tmp_path: Path) -> None:
+        create_project_marker(tmp_path)
+        child = tmp_path / "sub" / "deep"
+        child.mkdir(parents=True)
+        assert find_project_root(child) == tmp_path
+
+
+class TestFindLegacyProjectRoot:
+    def test_finds_legacy_marker(self, tmp_path: Path) -> None:
+        (tmp_path / LEGACY_ROOT_MARKER).touch()
+        assert find_legacy_project_root(tmp_path) == tmp_path
+
+    def test_returns_none_when_not_found(self, tmp_path: Path) -> None:
+        assert find_legacy_project_root(tmp_path) is None
+
+    def test_ignores_metadata_file(self, tmp_path: Path) -> None:
+        create_project_marker(tmp_path)
+        assert find_legacy_project_root(tmp_path) is None
 
 
 class TestLoadConfig:
@@ -79,21 +100,35 @@ class TestLoadConfig:
         for key in config.states:
             assert isinstance(key, PlanState)
 
+    def test_populates_metadata(self, project_dir: Path) -> None:
+        config = load_config(project_dir=project_dir)
+        assert config.metadata is not None
+        assert config.metadata.mode.value == "in_band"
+
+
+class TestLoadConfigLegacyMarker:
+    def test_raises_with_migration_hint(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        (tmp_path / LEGACY_ROOT_MARKER).touch()
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(Exception, match=r"migrate_023\.py"):
+            load_config()
+
 
 class TestLoadConfigNoProjectRoot:
     def test_project_dir_is_none_when_no_root_found(self, tmp_path: Path) -> None:
-        """When no .workflow_root marker exists, project_dir and project_name are None."""
+        """When no .workflow.json exists, project_dir and project_name are None."""
         config = {
             "agents": [{"name": "planner", "model": "test"}],
             "states": {"intent": {"description": "Plans being explored.", "agent": "planner", "commands": []}},
         }
         config_path = tmp_path / "config.yaml"
         config_path.write_text(yaml.dump(config))
-        # No .workflow_root in tmp_path, and no find_project_root() from cwd either
-        # (the dev repo has no .workflow_root marker).
+        # No .workflow.json in tmp_path, and no find_project_root() from cwd either
+        # (the dev repo has no .workflow.json marker).
         result = load_config(config_path=config_path)
         assert result.project_dir is None
         assert result.project_name is None
+        assert result.metadata is None
 
 
 class TestWorkflowConfigValidation:
@@ -109,6 +144,7 @@ class TestWorkflowConfigValidation:
         assert config.states[PlanState.TODO].agent is None
 
     def test_rejects_duplicate_agent_names(self, tmp_path: Path) -> None:
+        create_project_marker(tmp_path)
         config = {
             "agents": [
                 {"name": "planner", "model": "test"},
@@ -121,6 +157,7 @@ class TestWorkflowConfigValidation:
             load_config(project_dir=tmp_path)
 
     def test_rejects_multiple_manual_shell_agents(self, tmp_path: Path) -> None:
+        create_project_marker(tmp_path)
         config = {
             "agents": [
                 {"name": "planner", "model": "test", "manual_shell": True},
@@ -133,6 +170,7 @@ class TestWorkflowConfigValidation:
             load_config(project_dir=tmp_path)
 
     def test_accepts_single_manual_shell_agent(self, tmp_path: Path) -> None:
+        create_project_marker(tmp_path)
         config = {
             "agents": [
                 {"name": "planner", "model": "test"},
@@ -161,7 +199,7 @@ class TestDescriptionValidation:
             load_config(project_dir=project_dir)
 
     def test_rejects_whitespace_only_command_description(self, tmp_path: Path) -> None:
-        (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+        create_project_marker(tmp_path)
         config = {
             "agents": [{"name": "planner", "model": "test"}],
             "states": {
@@ -181,7 +219,7 @@ class TestDescriptionValidation:
 
 class TestCommandModels:
     def test_prompt_command_in_config(self, tmp_path: Path) -> None:
-        (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+        create_project_marker(tmp_path)
         config = {
             "agents": [{"name": "planner", "model": "test"}],
             "states": {
@@ -228,7 +266,7 @@ class TestTmuxConfig:
         assert cfg.prompt_send_delay == 1.0
 
     def test_loaded_from_yaml(self, tmp_path: Path) -> None:
-        (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+        create_project_marker(tmp_path)
         config = {
             "agents": [{"name": "planner", "model": "test"}],
             "tmux": {"session_name": "myproject", "prompt_send_delay": 0.5},
@@ -247,13 +285,14 @@ class TestTmuxConfig:
 
 
 class TestDefaultConfig:
-    def test_default_config_loads(self) -> None:
+    def test_default_config_loads(self, tmp_path: Path) -> None:
         """Verify docs/default_config.yaml is valid and parseable."""
         default_path = Path(__file__).parent.parent / "docs" / "default_config.yaml"
         if not default_path.exists():
             pytest.skip("default config not found")
         # Use a dummy project dir since we're just validating the YAML structure
-        config = load_config(config_path=default_path, project_dir=Path("/tmp"))
+        create_project_marker(tmp_path)
+        config = load_config(config_path=default_path, project_dir=tmp_path)
         assert len(config.agents) == 3
         assert PlanState.INTENT in config.states
         assert PlanState.REVIEW in config.states

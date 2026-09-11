@@ -13,15 +13,17 @@ from click.testing import CliRunner
 
 import workflow.commands.info as wi
 import workflow.commands.workflow as wc
+from tests.conftest import create_project_marker
 from workflow import git_helpers, main
 from workflow.audit import read_audit_log, write_audit_log
 from workflow.commands.info import _parse_datetime
-from workflow.config import WORKFLOW_ROOT_MARKER
 from workflow.exceptions import WorkflowError
 from workflow.git_helpers import CommitResult
+from workflow.metadata import METADATA_FILENAME, ProjectMetadata, write_metadata
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import RepoName
 from workflow.plan_resolver import next_intent_number
+from workflow.steps import ResumePlan
 from workflow.validate import CheckResult
 
 
@@ -34,7 +36,7 @@ def _make_project(tmp_path: Path, *, marker: bool = True) -> Path:
     or initialise the repo themselves.
     """
     if marker:
-        (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+        create_project_marker(tmp_path)
     copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
     for repo in ("canon", "planner", "builder", "reviewer"):
         (tmp_path / repo).mkdir(exist_ok=True)
@@ -51,6 +53,25 @@ def _make_plan(project_dir: Path, repo: str, state: str, filename: str) -> None:
 
 def _plan(repo: str, state: PlanState, name: str = "005_foo") -> Plan:
     return Plan(sequence_number=[5], slug="foo", state=state, path=Path(f"{repo}/docs/plans/{state.value}/{name}.md"))
+
+
+class TestClassifyMarkerStep:
+    def test_will_run_when_metadata_file_absent(self, tmp_path: Path) -> None:
+        resume = ResumePlan(title="init")
+        wc._classify_marker_step(resume, tmp_path)
+        assert resume.should_run("project metadata")
+
+    def test_satisfied_when_metadata_file_present_and_valid(self, tmp_path: Path) -> None:
+        write_metadata(tmp_path, ProjectMetadata())
+        resume = ResumePlan(title="init")
+        wc._classify_marker_step(resume, tmp_path)
+        assert not resume.should_run("project metadata")
+
+    def test_will_run_when_metadata_file_is_malformed(self, tmp_path: Path) -> None:
+        (tmp_path / METADATA_FILENAME).write_text("not json")
+        resume = ResumePlan(title="init")
+        wc._classify_marker_step(resume, tmp_path)
+        assert resume.should_run("project metadata")
 
 
 def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -139,7 +160,7 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
             "--reset",
         ],
     ]
-    assert (tmp_path / WORKFLOW_ROOT_MARKER).exists()
+    assert (tmp_path / METADATA_FILENAME).exists()
 
     # AGENTS.md must be generated, added, and committed before the bare clone.
     method_names = [name for name, _, _ in manager.method_calls]
@@ -167,7 +188,7 @@ def test_init_succeeds_when_agents_md_unchanged(tmp_path: Path, monkeypatch: pyt
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
     assert result.exit_code == 0, result.output
-    assert (tmp_path / WORKFLOW_ROOT_MARKER).exists()
+    assert (tmp_path / METADATA_FILENAME).exists()
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")

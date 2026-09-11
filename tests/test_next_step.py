@@ -7,6 +7,7 @@ from shutil import copyfile
 
 import pytest
 
+from tests.conftest import create_project_marker
 from workflow.config import ManualStep, PromptCommand, ScriptCommand, WorkflowConfig, load_config
 from workflow.models import PlanState
 from workflow.next_step import (
@@ -17,6 +18,7 @@ from workflow.next_step import (
 
 
 def _make_config(tmp_path: Path) -> WorkflowConfig:
+    create_project_marker(tmp_path)
     copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
     return load_config(tmp_path / "config.yaml", project_dir=tmp_path)
 

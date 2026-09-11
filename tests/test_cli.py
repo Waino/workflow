@@ -13,8 +13,9 @@ import yaml
 from click.testing import CliRunner
 
 import workflow.commands.workflow as workflow_commands
+from tests.conftest import create_project_marker
 from workflow import main, registry, tmux_dispatch
-from workflow.config import WORKFLOW_ROOT_MARKER, load_config
+from workflow.config import load_config
 from workflow.exceptions import WorkflowError
 from workflow.validate import CheckResult
 
@@ -31,7 +32,7 @@ def _make_project(tmp_path: Path) -> Path:
     git-history resolver source) must either monkey-patch the relevant helpers
     or initialise the repo themselves.
     """
-    (tmp_path / WORKFLOW_ROOT_MARKER).touch()
+    create_project_marker(tmp_path)
     config_path = tmp_path / "config.yaml"
     copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", config_path)
     for repo in ("canon", "planner", "builder", "reviewer"):

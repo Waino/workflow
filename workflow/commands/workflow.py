@@ -16,7 +16,7 @@ import jinja2
 
 from workflow.audit import write_audit_log
 from workflow.commands.agents_md import generate_and_write_agents_md, prepare_agents_md_update
-from workflow.config import WORKFLOW_ROOT_MARKER, AgentConfig, WorkflowConfig
+from workflow.config import AgentConfig, WorkflowConfig
 from workflow.config import ScriptCommand as _ScriptCommand
 from workflow.exceptions import (
     AgentsMdGenerationError,
@@ -54,6 +54,7 @@ from workflow.git_helpers import (
     refresh_main,
     transfer_branch_to_main,
 )
+from workflow.metadata import METADATA_FILENAME, ProjectMetadata, read_metadata, write_metadata
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import DOCS_REPO, AgentName, RepoName
 from workflow.next_step import find_command, find_next_step, find_reminder_name, format_next_step_invocation
@@ -296,7 +297,7 @@ def _wire_canon_to_bare(canon_repo: Path, bare_path: Path, *, dry_run: bool) -> 
 _STEP_AGENTS_MD = "AGENTS.md committed"
 _STEP_BARE_CLONE = "bare clone"
 _STEP_WIRE_CANON = "wire canon to bare"
-_STEP_MARKER = "workflow marker"
+_STEP_MARKER = "project metadata"
 
 
 def _classify_agents_md_step(resume: ResumePlan, config: WorkflowConfig, project_dir: Path) -> None:
@@ -358,8 +359,14 @@ def _classify_wire_canon_step(resume: ResumePlan, canon_repo: Path, bare_path: P
 
 
 def _classify_marker_step(resume: ResumePlan, project_dir: Path) -> None:
-    if (project_dir / WORKFLOW_ROOT_MARKER).exists():
-        resume.satisfied(_STEP_MARKER, "marker file exists")
+    metadata_path = project_dir / METADATA_FILENAME
+    if metadata_path.exists():
+        try:
+            read_metadata(project_dir)
+        except WorkflowError:
+            resume.will_run(_STEP_MARKER)
+        else:
+            resume.satisfied(_STEP_MARKER, "metadata file exists")
     else:
         resume.will_run(_STEP_MARKER)
 
@@ -463,7 +470,7 @@ def _run_init_steps(  # noqa: PLR0913
         _wire_canon_to_bare(canon_repo, bare_path, dry_run=dry_run)
 
     if resume.should_run(_STEP_MARKER) and not dry_run:
-        (project_dir / WORKFLOW_ROOT_MARKER).touch()
+        write_metadata(project_dir, ProjectMetadata())
 
     # Create venvs (always via --reset: cheap on first creation, destructive-but-
     # confirmed via --continue when a venv already exists; see _classify_init_steps).

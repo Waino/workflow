@@ -160,3 +160,15 @@ substantially different pipeline (a different number of agents, extra states, a
 different git strategy), the recommended path is to fork the repository and have
 your own agent(s) implement the changes, rather than trying to bend the existing
 configuration to fit.
+
+Config vs. state
+----------------
+
+A project directory holds two distinct kinds of files, and the two must not be
+confused:
+
+* ``config.yaml`` — hand-authored configuration. Edited freely by the operator;
+  resolved from a CLI flag, the project directory, or ``~/.config/workflow/``.
+* ``.workflow.json`` — tool-owned state. Written only by ``workflow`` commands
+  (currently just ``init``); never hand-edited. Its presence marks the project
+  root, the way ``.workflow_root`` used to.

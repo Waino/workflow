@@ -10,10 +10,11 @@ import yaml
 from pydantic import BaseModel, Field, model_validator
 from rich.text import Text
 
+from workflow.exceptions import WorkflowError
+from workflow.metadata import LEGACY_ROOT_MARKER, METADATA_FILENAME, ProjectMetadata, read_metadata
 from workflow.models import PlanState
 from workflow.names import RepoName
 
-WORKFLOW_ROOT_MARKER = ".workflow_root"
 CONFIG_FILENAME = "config.yaml"
 
 
@@ -131,14 +132,15 @@ class TmuxConfig(BaseModel):
 class WorkflowConfig(BaseModel):
     """Top-level configuration.
 
-    project_dir and project_name are not in the YAML config file.
+    project_dir, project_name, and metadata are not in the YAML config file.
     They are discovered at runtime and populated by load_config.
-    Both are None when no .workflow_root marker was found (i.e. outside a project directory).
+    All three are None when no .workflow.json was found (i.e. outside a project directory).
     Only the 'init' and 'cheat' commands are supported in that case.
     """
 
     project_dir: Path | None = None
     project_name: str | None = None
+    metadata: ProjectMetadata | None = None
     agents: list[AgentConfig]
     tmux: TmuxConfig = Field(default_factory=TmuxConfig)
     states: dict[PlanState, StateConfig]
@@ -198,13 +200,25 @@ class WorkflowConfig(BaseModel):
 
 
 def find_project_root(start: Path | None = None) -> Path | None:
-    """Walk from start (default: cwd) towards filesystem root, looking for .workflow_root.
+    """Walk from start (default: cwd) towards filesystem root, looking for .workflow.json.
 
     Returns the directory containing the marker, or None if not found.
     """
+    return _walk_for_marker(start, METADATA_FILENAME)
+
+
+def find_legacy_project_root(start: Path | None = None) -> Path | None:
+    """Walk from start (default: cwd) towards filesystem root, looking for the legacy .workflow_root marker.
+
+    Returns the directory containing the marker, or None if not found.
+    """
+    return _walk_for_marker(start, LEGACY_ROOT_MARKER)
+
+
+def _walk_for_marker(start: Path | None, marker: str) -> Path | None:
     current = (start or Path.cwd()).resolve()
     while True:
-        if (current / WORKFLOW_ROOT_MARKER).exists():
+        if (current / marker).exists():
             return current
         parent = current.parent
         if parent == current:
@@ -226,13 +240,24 @@ def load_config(config_path: Path | None = None, project_dir: Path | None = None
     project_dir is discovered via find_project_root() unless explicitly provided.
     project_name is derived from project_dir.
 
-    If no project root is found and no project_dir is given, project_dir and
-    project_name are set to None in the returned config. Commands that require
-    a project directory must check for this and fail fast with a clear error.
-    Only 'init' and 'cheat' are supported without a project root.
+    If no project root is found and no project_dir is given, project_dir,
+    project_name, and metadata are set to None in the returned config. Commands
+    that require a project directory must check for this and fail fast with a
+    clear error. Only 'init' and 'cheat' are supported without a project root.
+
+    Raises WorkflowError if only a legacy .workflow_root marker is found (no
+    .workflow.json), naming the migration script to run.
     """
     if project_dir is None:
         project_dir = find_project_root()
+        if project_dir is None:
+            legacy_dir = find_legacy_project_root()
+            if legacy_dir is not None:
+                msg = (
+                    f"{legacy_dir} contains a legacy .workflow_root marker but no .workflow.json.\n"
+                    f"Run `python scripts/migrate_023.py --project-dir {legacy_dir}` to migrate."
+                )
+                raise WorkflowError(msg)
     if project_dir is not None:
         project_dir = project_dir.resolve()
 
@@ -246,6 +271,7 @@ def load_config(config_path: Path | None = None, project_dir: Path | None = None
 
     raw["project_dir"] = str(project_dir) if project_dir is not None else None
     raw["project_name"] = project_dir.name if project_dir is not None else None
+    raw["metadata"] = read_metadata(project_dir) if project_dir is not None else None
 
     return WorkflowConfig(**raw)
 

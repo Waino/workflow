@@ -15,6 +15,7 @@ import libtmux
 import pytest
 from rich.console import Console
 
+from tests.conftest import create_project_marker
 from workflow.audit import build_audit_command_repo_state, write_audit_log
 from workflow.config import WorkflowConfig, load_config
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
@@ -77,6 +78,7 @@ def _make_review(root: Path, repo: str, sub_state: ReviewSubState, filename: str
 
 def _make_config(tmp_path: Path) -> WorkflowConfig:
     """Build a workflow config rooted at tmp_path using the default YAML."""
+    create_project_marker(tmp_path)
     copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
     return load_config(tmp_path / "config.yaml", project_dir=tmp_path)
 
@@ -703,7 +705,7 @@ class TestParseGitLogOutput:
             capture_output=True,
         )
         # Create a minimal project around this repo
-        (tmp_path / ".workflow_root").touch()
+        create_project_marker(tmp_path)
         config = _make_config(tmp_path)
         plan = resolve_plan("005", tmp_path, config=config)
         assert plan.state == PlanState.IMPLEMENTING

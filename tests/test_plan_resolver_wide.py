@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import BaseModel, ConfigDict
 
+from tests.conftest import create_project_marker
 from workflow.audit import write_audit_log
 from workflow.config import WorkflowConfig, load_config
 from workflow.exceptions import AmbiguousPlanError
@@ -358,7 +359,7 @@ _CASES: list[ResolverCase] = [
 @pytest.fixture(scope="module")
 def world(tmp_path_factory: pytest.TempPathFactory) -> Path:
     w = tmp_path_factory.mktemp("workflow_world")
-    (w / ".workflow_root").touch()
+    create_project_marker(w)
     _build_world(w, _SCENARIOS)
     return w
 
