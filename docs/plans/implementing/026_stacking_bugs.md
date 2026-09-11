@@ -217,3 +217,7 @@ conflict with the in-flight 023.x series, which touches different modules.
   "stacked_plans_created_and_todoed_before_either_is_implemented" verification test does) hit exactly
   the same-second git-log-ordering ambiguity the helper's docstring already documents; this fix is
   a strictly-smaller-scope application of that documented pattern, not a new mechanism.
+- The "one-off manual check in this project" (`workflow --dry-run ask 023.2` against the in-flight
+  023.1/023.2 stack) was **not run**: this sandbox's builder clone has no sibling canon/planner/reviewer
+  checkouts or project config, so there is no live multi-repo project to check against. Left for the
+  human operator or reviewer to run in the real project.
