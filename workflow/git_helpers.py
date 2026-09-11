@@ -254,6 +254,24 @@ def git_commits_ahead_of_remote(repo_path: Path, branch: str) -> int:
     return int(stdout)
 
 
+def git_path_exists_at_ref(repo_path: Path, ref: str, rel_path: str) -> bool:
+    """Return whether *rel_path* exists in the tree of *ref* in *repo_path*.
+
+    Reads the ref's tree directly (``git cat-file -e``) rather than the working tree,
+    so it sees a branch's true state even when nothing local is checked out to it --
+    unlike a Plan's directory-derived state, which can lag behind a branch only a
+    feature branch (not canon) has moved on to. Read-only guard query: always runs for
+    real, even in dry-run.
+    """
+    result = subprocess.run(  # noqa: S603
+        ["git", "cat-file", "-e", f"{ref}:{rel_path}"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def git_branch_delete(repo_path: Path, branch: str, *, dry_run: bool = False) -> None:
     """Delete the local *branch* in *repo_path* via ``git branch -d``.
 

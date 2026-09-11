@@ -4,25 +4,21 @@ Single home for everything stack-shaped: ``branch_for_plan`` is THE branch-name
 helper (no ``"feat/"`` literal belongs anywhere else in the package), and
 ``resolve_stack``/``stack_child``/``tip_plan_for_branch`` are how commands
 discover a stack's other members. Imports :mod:`workflow.frontmatter` and
-:mod:`workflow.plan_resolver`, never the reverse.
+:mod:`workflow.plan_resolver`'s ``find_all_plans_in_repo`` only, never the reverse.
 """
 
 from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003 - used at runtime by Pydantic
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
-from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
+from workflow.exceptions import WorkflowError
 from workflow.frontmatter import PlanFrontmatter, parse_frontmatter
 from workflow.models import Plan, PlanState, Review
 from workflow.names import DOCS_REPO, RepoName
-from workflow.plan_resolver import find_all_plans_in_repo, resolve_plan
+from workflow.plan_resolver import find_all_plans_in_repo
 from workflow.state import locate_plan_file
-
-if TYPE_CHECKING:
-    from workflow.config import WorkflowConfig
 
 BRANCH_PREFIX = "feat/"
 
@@ -92,7 +88,30 @@ def branch_for_plan(project_dir: Path, plan: Plan) -> str:
     return f"{BRANCH_PREFIX}{plan.name}"
 
 
-def resolve_stack(project_dir: Path, plan: Plan, config: WorkflowConfig) -> list[Plan]:
+def find_stack_member(project_dir: Path, reference: str, prefer_repo: str = RepoName.canon) -> Plan | None:
+    """Find the plan named by a stack reference (`onto` value or `--onto` argument).
+
+    Matches the canonical plan name, or the bare sequence number for a hand-written
+    reference. Searches *prefer_repo* first, then canon, so a stack resolved from an
+    agent's clone keeps that clone's paths. Not state-filtered: a rejected or done base
+    must still be findable so a stack with such a member does not become unresolvable.
+    """
+    normalized = reference.rsplit("/", 1)[-1].removesuffix(".md")
+    repos = [prefer_repo] if prefer_repo == RepoName.canon else [prefer_repo, RepoName.canon]
+    for repo in repos:
+        candidates = [
+            candidate for candidate in find_all_plans_in_repo(project_dir, repo) if not isinstance(candidate, Review)
+        ]
+        for candidate in candidates:
+            if candidate.name == normalized:
+                return candidate
+        for candidate in candidates:
+            if candidate.sequence_number_str == normalized:
+                return candidate
+    return None
+
+
+def resolve_stack(project_dir: Path, plan: Plan) -> list[Plan]:
     """Resolve the full stack *plan* belongs to, base-first, including *plan* itself.
 
     Walks ``onto`` upward. Raises :class:`WorkflowError` on a cycle, an unresolvable
@@ -112,11 +131,14 @@ def resolve_stack(project_dir: Path, plan: Plan, config: WorkflowConfig) -> list
         if len(chain) >= _MAX_STACK_DEPTH:
             msg = f"stack depth exceeds {_MAX_STACK_DEPTH} while resolving {current.name!r}'s onto; check for a cycle"
             raise WorkflowError(msg)
-        try:
-            base_plan = resolve_plan(onto, project_dir, config=config)
-        except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError, WorkflowError) as exc:
-            msg = f"{current.name}'s onto={onto!r} does not resolve to a plan: {exc}"
-            raise WorkflowError(msg) from exc
+        prefer_repo = current.path.parts[0]
+        base_plan = find_stack_member(project_dir, onto, prefer_repo=prefer_repo)
+        if base_plan is None:
+            msg = (
+                f"{current.name}'s onto={onto!r} does not resolve to a plan: "
+                f"searched {prefer_repo!r} and {RepoName.canon!r}"
+            )
+            raise WorkflowError(msg)
         chain.append(base_plan)
         seen.add(onto)
         current = base_plan
@@ -172,14 +194,14 @@ def tip_plan_for_branch(project_dir: Path, branch: str) -> Plan | None:
     return tips[0]
 
 
-def stack_entries(project_dir: Path, plan: Plan, config: WorkflowConfig) -> list[StackEntry]:
+def stack_entries(project_dir: Path, plan: Plan) -> list[StackEntry]:
     """Return prompt-rendering entries for *plan*'s stack, base-first, *plan* itself last.
 
     Empty for an unstacked plan. ``commit_range`` is assembled from the frontmatter
     anchors only (no git calls): member *i* spans ``base(i)..base(i+1)``, the root
     starts at ``origin/main``, the tip ends at ``HEAD``.
     """
-    chain = resolve_stack(project_dir, plan, config)
+    chain = resolve_stack(project_dir, plan)
     if len(chain) == 1:
         return []
     bases: list[str] = []

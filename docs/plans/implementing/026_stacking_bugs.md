@@ -192,3 +192,28 @@ satisfied and merge as a no-op. No manual repair beyond the merge already perfor
 
 Builds on `done/025_stacked_plans.md` (fixes its implementation). No other plan dependencies; does not
 conflict with the in-flight 023.x series, which touches different modules.
+
+## Deviations (recorded during implementation)
+
+- **`_check_onto_preconditions`'s checking/implementing distinction can't come from `find_stack_member`'s
+  result.** Canon's directory layout never sees `checking`: only `check`'s `target_repo` (builder)
+  gets that transition, and canon jumps straight from `implementing` to `done` at `accept`. The old
+  `resolve_plan`-based code got away with reading `base_plan.state` because its audit-log source
+  widened the state constraint across all repos; `find_stack_member` deliberately doesn't do that
+  (decision 2). Fix: `_check_onto_preconditions` now reads the checking/implementing distinction
+  directly from `base_branch`'s tree in `builder_repo` (a new `git_path_exists_at_ref` helper), since
+  `check` always commits that transition to builder's local branch ref before pushing and switching
+  builder back to `main` — that ref reflects the branch's true current state even when nothing is
+  presently checked out to it. `base_plan.state` is kept only for the error message shown when neither
+  state matches (labelled "per canon" since it can be stale).
+- Added `git_path_exists_at_ref` to `workflow/git_helpers.py` (not listed as an in-scope file in the
+  plan, but required by the above; no other git_helpers changes).
+- `_check_onto_preconditions`'s existing checks were reordered: `stack_child`/`git_branch_exists` now
+  run before the checking/implementing detection, since the latter needs `base_branch` to already be
+  known to exist in builder for its git-ref reads to be meaningful.
+- `tests/test_integration_workflow.py`'s `_create_and_todo_plan` helper now calls `_advance_clock()`
+  between the planner's own commit and the `todo` transition commit it triggers, not only at the end.
+  Without it, a plan created and `todo`'d back-to-back with a second one (as the plan's own
+  "stacked_plans_created_and_todoed_before_either_is_implemented" verification test does) hit exactly
+  the same-second git-log-ordering ambiguity the helper's docstring already documents; this fix is
+  a strictly-smaller-scope application of that documented pattern, not a new mechanism.

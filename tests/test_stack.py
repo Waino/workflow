@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from shutil import copyfile
 from unittest.mock import MagicMock
 
 import pytest
 
-from workflow.config import WorkflowConfig, load_config
 from workflow.exceptions import WorkflowError
 from workflow.frontmatter import PlanFrontmatter, RepoBranch, render_frontmatter
 from workflow.models import Plan, PlanState
+from workflow.names import RepoName
 from workflow.stack import (
     _MAX_STACK_DEPTH,
     branch_for_plan,
+    find_stack_member,
     read_plan_frontmatter,
     resolve_stack,
     stack_child,
@@ -34,11 +34,6 @@ def _silence_tmux(monkeypatch: pytest.MonkeyPatch) -> None:
     dead = MagicMock()
     dead.is_alive.return_value = False
     monkeypatch.setattr("workflow.plan_resolver.libtmux.Server", lambda: dead)
-
-
-def _make_config(tmp_path: Path) -> WorkflowConfig:
-    copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
-    return load_config(tmp_path / "config.yaml", project_dir=tmp_path)
 
 
 def _make_plan(  # noqa: PLR0913 - test helper, kept explicit rather than bundling into a struct
@@ -100,16 +95,14 @@ def test_branch_for_plan_uses_recorded_branch(tmp_path: Path) -> None:
 
 
 def test_resolve_stack_depth_one_unstacked(tmp_path: Path) -> None:
-    config = _make_config(tmp_path)
     plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
 
-    stack = resolve_stack(tmp_path, plan, config)
+    stack = resolve_stack(tmp_path, plan)
 
     assert [p.name for p in stack] == ["001_base"]
 
 
 def test_resolve_stack_depth_two(tmp_path: Path) -> None:
-    config = _make_config(tmp_path)
     _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
     stacked = _make_plan(
         tmp_path,
@@ -121,13 +114,12 @@ def test_resolve_stack_depth_two(tmp_path: Path) -> None:
         base="abc1234",
     )
 
-    stack = resolve_stack(tmp_path, stacked, config)
+    stack = resolve_stack(tmp_path, stacked)
 
     assert [p.name for p in stack] == ["001_base", "002_stacked"]
 
 
 def test_resolve_stack_depth_three(tmp_path: Path) -> None:
-    config = _make_config(tmp_path)
     _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
     _make_plan(
         tmp_path,
@@ -148,22 +140,20 @@ def test_resolve_stack_depth_three(tmp_path: Path) -> None:
         base="c1",
     )
 
-    stack = resolve_stack(tmp_path, tip, config)
+    stack = resolve_stack(tmp_path, tip)
 
     assert [p.name for p in stack] == ["001_base", "002_middle", "003_tip"]
 
 
 def test_resolve_stack_cycle_raises(tmp_path: Path) -> None:
-    config = _make_config(tmp_path)
     a = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_a.md", onto="002_b", branch="feat/001_a", base="x")
     _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "002_b.md", onto="001_a", branch="feat/001_a", base="y")
 
     with pytest.raises(WorkflowError, match="cycle"):
-        resolve_stack(tmp_path, a, config)
+        resolve_stack(tmp_path, a)
 
 
 def test_resolve_stack_unresolvable_onto_raises(tmp_path: Path) -> None:
-    config = _make_config(tmp_path)
     plan = _make_plan(
         tmp_path,
         "canon",
@@ -175,11 +165,10 @@ def test_resolve_stack_unresolvable_onto_raises(tmp_path: Path) -> None:
     )
 
     with pytest.raises(WorkflowError, match="999_missing"):
-        resolve_stack(tmp_path, plan, config)
+        resolve_stack(tmp_path, plan)
 
 
 def test_resolve_stack_depth_cap_raises(tmp_path: Path) -> None:
-    config = _make_config(tmp_path)
     chain_length = _MAX_STACK_DEPTH + 5
     _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_p1.md")
     for i in range(2, chain_length + 1):
@@ -204,7 +193,82 @@ def test_resolve_stack_depth_cap_raises(tmp_path: Path) -> None:
     )
 
     with pytest.raises(WorkflowError, match="depth"):
-        resolve_stack(tmp_path, tip, config)
+        resolve_stack(tmp_path, tip)
+
+
+# ---------------------------------------------------------------------------
+# find_stack_member / repo-scoped onto resolution
+# ---------------------------------------------------------------------------
+
+
+def test_find_stack_member_matches_canonical_name(tmp_path: Path) -> None:
+    plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
+
+    result = find_stack_member(tmp_path, "001_base")
+
+    assert result is not None
+    assert result.name == plan.name
+
+
+def test_find_stack_member_matches_bare_sequence_number(tmp_path: Path) -> None:
+    plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
+
+    result = find_stack_member(tmp_path, "001")
+
+    assert result is not None
+    assert result.name == plan.name
+
+
+@pytest.mark.parametrize(
+    "reference",
+    ["001_base", "implementing/001_base", "implementing/001_base.md", "001_base.md"],
+)
+def test_find_stack_member_normalizes_reference_forms(tmp_path: Path, reference: str) -> None:
+    plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
+
+    result = find_stack_member(tmp_path, reference)
+
+    assert result is not None
+    assert result.name == plan.name
+
+
+def test_find_stack_member_none_when_missing(tmp_path: Path) -> None:
+    _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
+
+    assert find_stack_member(tmp_path, "999_missing") is None
+
+
+def test_find_stack_member_finds_rejected_base(tmp_path: Path) -> None:
+    """A rejected base must still resolve, or a stack with such a member becomes unresolvable."""
+    plan = _make_plan(tmp_path, "canon", PlanState.REJECTED, "001_base.md")
+
+    result = find_stack_member(tmp_path, "001_base")
+
+    assert result is not None
+    assert result.name == plan.name
+
+
+def test_resolve_stack_prefers_referring_plans_own_repo(tmp_path: Path) -> None:
+    """A base present in both canon and builder in the same state resolves without ambiguity.
+
+    It also keeps the referring plan's own repo's path (not canon's).
+    """
+    _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md", branch="feat/001_base")
+    _make_plan(tmp_path, "builder", PlanState.IMPLEMENTING, "001_base.md", branch="feat/001_base")
+    stacked = _make_plan(
+        tmp_path,
+        "builder",
+        PlanState.IMPLEMENTING,
+        "002_stacked.md",
+        onto="001_base",
+        branch="feat/001_base",
+        base="abc1234",
+    )
+
+    stack = resolve_stack(tmp_path, stacked)
+
+    assert [p.name for p in stack] == ["001_base", "002_stacked"]
+    assert stack[0].path.parts[0] == RepoName.builder
 
 
 # ---------------------------------------------------------------------------
@@ -295,14 +359,12 @@ def test_tip_plan_for_branch_none_when_no_match(tmp_path: Path) -> None:
 
 
 def test_stack_entries_empty_when_unstacked(tmp_path: Path) -> None:
-    config = _make_config(tmp_path)
     plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
 
-    assert stack_entries(tmp_path, plan, config) == []
+    assert stack_entries(tmp_path, plan) == []
 
 
 def test_stack_entries_commit_ranges_for_three_plan_stack(tmp_path: Path) -> None:
-    config = _make_config(tmp_path)
     _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
     _make_plan(
         tmp_path,
@@ -323,7 +385,7 @@ def test_stack_entries_commit_ranges_for_three_plan_stack(tmp_path: Path) -> Non
         base="c1",
     )
 
-    entries = stack_entries(tmp_path, tip, config)
+    entries = stack_entries(tmp_path, tip)
 
     assert [(e.name, e.commit_range) for e in entries] == [
         ("001_base", "origin/main..b1"),

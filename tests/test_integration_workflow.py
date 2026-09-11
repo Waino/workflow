@@ -1028,6 +1028,10 @@ def _create_and_todo_plan(config_path: Path, tmp_path: Path, plan_name: str) -> 
     _make_plan(planner, "planning", f"{plan_name}.md")
     _git(["add", "."], cwd=planner)
     _git(["commit", "-m", f"add planning plan {plan_name}"], cwd=planner)
+    # Same-second tie between this commit and `todo`'s own transition commit would otherwise
+    # be broken by git log traversal order, not recency, once a third branch is in play (see
+    # _advance_clock's docstring).
+    _advance_clock()
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "todo", plan_name])
     assert result.exit_code == 0, result.output
@@ -1100,6 +1104,67 @@ def test_stacked_plans_full_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert accept_entry.output_plans == ["005_foo"]
     implement_entry = next(e for e in entries if e.command == "implement" and e.input_plan == "006_bar")
     assert implement_entry.stacked_on == ["005_foo"]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_stacked_plans_created_and_todoed_before_either_is_implemented(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the merge-classified-too-early bug (both plans `todo`ed before A is implemented).
+
+    `test_stacked_plans_full_loop` creates and `todo`s B only after A's branch already exists, which
+    advances `main` and makes the `origin/main` merge run "by accident". Here both plans reach `todo`
+    before `implement 005_foo` runs, so `main` has not moved since the branch was cut and the merge
+    must run unconditionally to land B's file on the branch at all.
+    """
+    config_path = _setup_stacked_project(tmp_path, monkeypatch)
+    canon = tmp_path / "canon"
+    builder = tmp_path / "builder"
+
+    _create_and_todo_plan(config_path, tmp_path, "005_foo")
+    _create_and_todo_plan(config_path, tmp_path, "006_bar")
+
+    result = _run(config_path, "implement", "005_foo")
+    assert result.exit_code == 0, result.output
+    _builder_commit(tmp_path, "foo.txt", "builder work on foo")
+
+    result = _run(config_path, "implement", "006_bar", "--onto", "005_foo")
+    assert result.exit_code == 0, result.output
+    assert "[skip] merge origin/main into stack branch" not in result.output
+
+    assert (canon / "docs" / "plans" / "implementing" / "006_bar.md").exists()
+    assert (builder / "docs" / "plans" / "implementing" / "006_bar.md").exists()
+
+    result = _run(config_path, "check", "006_bar")
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_implement_continue_on_pre_existing_branch_merges_main_too(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plain `implement --continue` on a pre-existing branch must also land the transition commit.
+
+    Reproduces the sibling of the `--onto` bug: when the feature branch already exists, builder is
+    never fetched/checked-out separately, so without the fix builder's branch never receives the
+    push that just moved canon's `main`.
+    """
+    config_path = _setup_stacked_project(tmp_path, monkeypatch)
+    builder = tmp_path / "builder"
+
+    _create_and_todo_plan(config_path, tmp_path, "005_foo")
+
+    # Leave the plan in 'todo' but pre-create its feature branch in builder, as if a prior
+    # `implement` run had gotten that far and stopped.
+    _git(["fetch", "origin"], cwd=builder)
+    _git(["checkout", "-b", "feat/005_foo", "origin/main"], cwd=builder)
+
+    result = _run(config_path, "implement", "005_foo", "--continue")
+    assert result.exit_code == 0, result.output
+
+    assert (builder / "docs" / "plans" / "implementing" / "005_foo.md").exists()
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")

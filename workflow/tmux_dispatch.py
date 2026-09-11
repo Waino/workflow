@@ -204,7 +204,7 @@ def _setup_has_plan(
                 raise WorkflowError(msg)
         branch, commit = _git_metadata(target, config, dry_run=dry_run)
         today = datetime.now(tz=UTC).date().isoformat()
-        stack = stack_entries(config.project_dir, plan, config)
+        stack = stack_entries(config.project_dir, plan)
         rendered = _render_prompt(
             target.command.prompt,
             plan=plan,
