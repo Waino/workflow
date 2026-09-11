@@ -33,7 +33,7 @@ class AmbiguousPlanError(Exception):
         """Store the fuzzy path and the list of ambiguous candidate plans."""
         self.fuzzy_path = fuzzy_path
         self.candidates = candidates
-        super().__init__(f"Ambiguous reference {fuzzy_path!r}: {len(candidates)} candidates")
+        super().__init__(f"Ambiguous reference {fuzzy_path!r}: {len(candidates)} candidates: {candidates}")
 
 
 class PlanCollisionError(Exception):
