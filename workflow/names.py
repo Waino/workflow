@@ -8,7 +8,7 @@ DOCS_REPO = "docs"
 """Frontmatter key for the docs repo's branch entry (the only key used in in-band mode)."""
 
 
-class RepoName(StrEnum):
+class WorktreeName(StrEnum):
     """Workflow repos with fixed built-in responsibilities."""
 
     canon = "canon"

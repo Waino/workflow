@@ -4,7 +4,7 @@ Single home for everything stack-shaped: ``branch_for_plan`` is THE branch-name
 helper (no ``"feat/"`` literal belongs anywhere else in the package), and
 ``resolve_stack``/``stack_child``/``tip_plan_for_branch`` are how commands
 discover a stack's other members. Imports :mod:`workflow.frontmatter` and
-:mod:`workflow.plan_resolver`'s ``find_all_plans_in_repo`` only, never the reverse.
+:mod:`workflow.plan_resolver`'s ``find_all_plans_in_worktree`` only, never the reverse.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ from pydantic import BaseModel, ConfigDict
 from workflow.exceptions import WorkflowError
 from workflow.frontmatter import PlanFrontmatter, parse_frontmatter
 from workflow.models import Plan, PlanState, Review
-from workflow.names import DOCS_REPO, RepoName
-from workflow.plan_resolver import find_all_plans_in_repo
+from workflow.names import DOCS_REPO, WorktreeName
+from workflow.plan_resolver import find_all_plans_in_worktree
 from workflow.state import locate_plan_file
 
 BRANCH_PREFIX = "feat/"
@@ -67,7 +67,7 @@ def read_plan_frontmatter(project_dir: Path, plan: Plan) -> PlanFrontmatter | No
     """
     path = project_dir / plan.path
     if not path.is_file():
-        located = locate_plan_file(project_dir, RepoName.canon, plan.path.name)
+        located = locate_plan_file(project_dir, WorktreeName.canon, plan.path.name)
         if located is None:
             return None
         path = located
@@ -101,7 +101,7 @@ def _normalize_stack_reference(reference: str) -> str:
     return normalized
 
 
-def find_stack_member(project_dir: Path, reference: str, prefer_repo: RepoName = RepoName.canon) -> Plan | None:
+def find_stack_member(project_dir: Path, reference: str, prefer_repo: WorktreeName = WorktreeName.canon) -> Plan | None:
     """Find the plan named by a stack reference (`onto` value or `--onto` argument).
 
     Matches the canonical plan name, or the (optionally unpadded) sequence number for a
@@ -110,9 +110,11 @@ def find_stack_member(project_dir: Path, reference: str, prefer_repo: RepoName =
     base must still be findable so a stack with such a member does not become unresolvable.
     """
     normalized = _normalize_stack_reference(reference)
-    for repo in dict.fromkeys([prefer_repo, RepoName.canon]):
+    for repo in dict.fromkeys([prefer_repo, WorktreeName.canon]):
         candidates = [
-            candidate for candidate in find_all_plans_in_repo(project_dir, repo) if not isinstance(candidate, Review)
+            candidate
+            for candidate in find_all_plans_in_worktree(project_dir, repo)
+            if not isinstance(candidate, Review)
         ]
         for candidate in candidates:
             if candidate.name == normalized:
@@ -145,12 +147,12 @@ def resolve_stack(project_dir: Path, plan: Plan) -> list[Plan]:
             raise WorkflowError(msg)
         # Plan paths are repo-prefixed; fall back to canon rather than crash on a hand-built path.
         head = current.path.parts[0] if current.path.parts else ""
-        prefer_repo = RepoName(head) if head in RepoName.__members__ else RepoName.canon
+        prefer_repo = WorktreeName(head) if head in WorktreeName.__members__ else WorktreeName.canon
         base_plan = find_stack_member(project_dir, onto, prefer_repo=prefer_repo)
         if base_plan is None:
             msg = (
                 f"{current.name}'s onto={onto!r} does not resolve to a plan: "
-                f"searched {prefer_repo!r} and {RepoName.canon!r}"
+                f"searched {prefer_repo!r} and {WorktreeName.canon!r}"
             )
             raise WorkflowError(msg)
         chain.append(base_plan)
@@ -168,7 +170,7 @@ def _stackable_plans(project_dir: Path) -> list[Plan]:
     """
     return [
         candidate
-        for candidate in find_all_plans_in_repo(project_dir, RepoName.canon)
+        for candidate in find_all_plans_in_worktree(project_dir, WorktreeName.canon)
         if not isinstance(candidate, Review) and candidate.state != PlanState.REJECTED
     ]
 

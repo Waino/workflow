@@ -10,7 +10,7 @@ import pytest
 from workflow.exceptions import WorkflowError
 from workflow.frontmatter import PlanFrontmatter, RepoBranch, render_frontmatter
 from workflow.models import Plan, PlanState
-from workflow.names import RepoName
+from workflow.names import WorktreeName
 from workflow.stack import (
     _MAX_STACK_DEPTH,
     branch_for_plan,
@@ -269,7 +269,7 @@ def test_resolve_stack_prefers_referring_plans_own_repo(tmp_path: Path) -> None:
     stack = resolve_stack(tmp_path, stacked)
 
     assert [p.name for p in stack] == ["001_base", "002_stacked"]
-    assert stack[0].path.parts[0] == RepoName.builder
+    assert stack[0].path.parts[0] == WorktreeName.builder
 
 
 # ---------------------------------------------------------------------------

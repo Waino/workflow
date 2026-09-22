@@ -21,7 +21,7 @@ from workflow.exceptions import WorkflowError
 from workflow.git_helpers import CommitResult
 from workflow.metadata import METADATA_FILENAME, ProjectMetadata, write_metadata
 from workflow.models import AuditLogEntry, Plan, PlanState
-from workflow.names import RepoName
+from workflow.names import WorktreeName
 from workflow.plan_resolver import next_intent_number
 from workflow.steps import ResumePlan
 from workflow.validate import CheckResult
@@ -552,7 +552,7 @@ def test_push_pushes_resolved_repo_without_transition(tmp_path: Path, monkeypatc
     assert result.exit_code == 0
     assert [c.args[0] for c in fake_push.call_args_list] == [tmp_path / "canon"]
     # intent-state push has pull_target=planner, which triggers a whole-project main sync
-    assert {c.args[0] for c in fake_refresh.call_args_list} == {tmp_path / repo for repo in RepoName}
+    assert {c.args[0] for c in fake_refresh.call_args_list} == {tmp_path / repo for repo in WorktreeName}
     assert "workflow ask 005_foo" in result.output
 
 
@@ -1136,7 +1136,7 @@ def test_push_with_pull_target_syncs_after_push(tmp_path: Path, monkeypatch: pyt
 
     assert result.exit_code == 0
     assert fake_push.call_args_list[0].args[0] == tmp_path / "canon"
-    assert {c.args[0] for c in fake_refresh.call_args_list} == {tmp_path / repo for repo in RepoName}
+    assert {c.args[0] for c in fake_refresh.call_args_list} == {tmp_path / repo for repo in WorktreeName}
 
 
 def test_push_main_branch_guard_non_canon_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

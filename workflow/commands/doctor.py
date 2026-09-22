@@ -27,8 +27,8 @@ from workflow.git_helpers import (
 )
 from workflow.metadata import LEGACY_ROOT_MARKER
 from workflow.models import PlanState
-from workflow.names import DOCS_REPO, RepoName
-from workflow.plan_resolver import find_all_plans_in_repo, resolve_plan
+from workflow.names import DOCS_REPO, WorktreeName
+from workflow.plan_resolver import find_all_plans_in_worktree, resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console, error_console
 from workflow.stack import BRANCH_PREFIX, branch_for_plan, read_plan_frontmatter
@@ -49,7 +49,7 @@ _PIPELINE_STATES = frozenset(PlanState) - {PlanState.INTENT, PlanState.REVIEW}
 
 
 @dataclass
-class RepoCheck:
+class WorktreeCheck:
     """Diagnostic snapshot of a single clone."""
 
     name: str
@@ -66,11 +66,11 @@ class RepoCheck:
 def _active_branches(project_dir: Path) -> set[str]:
     """Return `plan/<name>`/stack branches expected for plans currently in flight."""
     branches: set[str] = set()
-    for repo in RepoName:
+    for repo in WorktreeName:
         if not (project_dir / repo).is_dir():
             continue
         try:
-            plans = find_all_plans_in_repo(project_dir, repo)
+            plans = find_all_plans_in_worktree(project_dir, repo)
         except PlanCollisionError:
             continue
         for plan in plans:
@@ -81,8 +81,8 @@ def _active_branches(project_dir: Path) -> set[str]:
     return branches
 
 
-def _check_bare(bare_path: Path) -> RepoCheck:
-    check = RepoCheck(name="bare", exists=bare_path.is_dir())
+def _check_bare(bare_path: Path) -> WorktreeCheck:
+    check = WorktreeCheck(name="bare", exists=bare_path.is_dir())
     if not check.exists:
         check.anomalies.append("missing")
         return check
@@ -95,7 +95,7 @@ def _check_bare(bare_path: Path) -> RepoCheck:
     return check
 
 
-def _check_staleness(check: RepoCheck, repo_path: Path, bare_path: Path, active_branches: set[str]) -> None:
+def _check_staleness(check: WorktreeCheck, repo_path: Path, bare_path: Path, active_branches: set[str]) -> None:
     """Compare *repo_path* against *bare_path* directly: fetch-free, matching doctor's contract."""
     if not bare_path.is_dir():
         return
@@ -110,13 +110,13 @@ def _check_staleness(check: RepoCheck, repo_path: Path, bare_path: Path, active_
 
 
 def _check_worktree(
-    repo_name: RepoName,
+    repo_name: WorktreeName,
     repo_path: Path,
     *,
     active_branches: set[str],
     bare_path: Path,
-) -> RepoCheck:
-    check = RepoCheck(name=repo_name.value, exists=repo_path.is_dir())
+) -> WorktreeCheck:
+    check = WorktreeCheck(name=repo_name.value, exists=repo_path.is_dir())
     if not check.exists:
         check.anomalies.append("missing")
         return check
@@ -135,10 +135,10 @@ def _check_worktree(
     if check.dirty:
         check.anomalies.append("uncommitted changes")
 
-    if repo_name == RepoName.canon and check.branch != "main":
+    if repo_name == WorktreeName.canon and check.branch != "main":
         check.anomalies.append(f"expected 'main', on {check.branch!r}")
     elif (
-        repo_name in (RepoName.builder, RepoName.reviewer)
+        repo_name in (WorktreeName.builder, WorktreeName.reviewer)
         and check.branch != "main"
         and check.branch not in active_branches
     ):
@@ -151,11 +151,11 @@ def _check_worktree(
 def _duplicate_plan_anomalies(project_dir: Path) -> list[str]:
     """Return one message per plan that appears under more than one state dir in the same repo."""
     anomalies: list[str] = []
-    for repo in RepoName:
+    for repo in WorktreeName:
         if not (project_dir / repo).is_dir():
             continue
         try:
-            plans = find_all_plans_in_repo(project_dir, repo)
+            plans = find_all_plans_in_worktree(project_dir, repo)
         except PlanCollisionError as exc:
             anomalies.append(f"{repo}: sequence number collision on {exc.sequence_number!r}")
             continue
@@ -187,7 +187,7 @@ def _branch_exists_anywhere(project_dir: Path, branch: str) -> bool:
     bare_path = project_dir / "bare"
     if bare_path.is_dir() and git_branch_exists(bare_path, branch):
         return True
-    return any(git_branch_exists(project_dir / repo, branch) for repo in RepoName if (project_dir / repo).is_dir())
+    return any(git_branch_exists(project_dir / repo, branch) for repo in WorktreeName if (project_dir / repo).is_dir())
 
 
 def _stack_anomalies(project_dir: Path, config: WorkflowConfig) -> list[str]:
@@ -197,7 +197,7 @@ def _stack_anomalies(project_dir: Path, config: WorkflowConfig) -> list[str]:
     branch that exists nowhere.
     """
     try:
-        plans = [p for p in find_all_plans_in_repo(project_dir, RepoName.canon) if p.state in _PIPELINE_STATES]
+        plans = [p for p in find_all_plans_in_worktree(project_dir, WorktreeName.canon) if p.state in _PIPELINE_STATES]
     except PlanCollisionError:
         return []  # already reported by _duplicate_plan_anomalies
 
@@ -231,7 +231,7 @@ def _stack_anomalies(project_dir: Path, config: WorkflowConfig) -> list[str]:
     return anomalies
 
 
-def _render_table(checks: list[RepoCheck]) -> Table:
+def _render_table(checks: list[WorktreeCheck]) -> Table:
     table = Table(title="Workflow Doctor")
     table.add_column("repo")
     table.add_column("exists")
@@ -272,7 +272,7 @@ def doctor(ctx: click.Context) -> None:
     checks = [_check_bare(bare_path)]
     checks.extend(
         _check_worktree(repo, project_dir / repo, active_branches=active_branches, bare_path=bare_path)
-        for repo in RepoName
+        for repo in WorktreeName
     )
     console.print(_render_table(checks))
 

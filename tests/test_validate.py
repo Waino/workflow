@@ -46,10 +46,10 @@ def _plan(state: PlanState, repo: str) -> Plan:
 def test_infer_target_repo_uses_state_agent_or_canon(tmp_path: Path) -> None:
     config = _config(tmp_path)
 
-    assert dc.infer_target_repo(_plan(PlanState.PLANNING, "planner"), config) == "planner"
-    assert dc.infer_target_repo(_plan(PlanState.CHECKING, "reviewer"), config) == "reviewer"
-    assert dc.infer_target_repo(_plan(PlanState.TODO, "canon"), config) == "canon"
-    assert dc.infer_target_repo(_plan(PlanState.CHECKING, "reviewer"), config, "builder") == "builder"
+    assert dc.infer_target_worktree(_plan(PlanState.PLANNING, "planner"), config) == "planner"
+    assert dc.infer_target_worktree(_plan(PlanState.CHECKING, "reviewer"), config) == "reviewer"
+    assert dc.infer_target_worktree(_plan(PlanState.TODO, "canon"), config) == "canon"
+    assert dc.infer_target_worktree(_plan(PlanState.CHECKING, "reviewer"), config, "builder") == "builder"
 
 
 @pytest.mark.parametrize(

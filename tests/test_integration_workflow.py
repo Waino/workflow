@@ -21,7 +21,7 @@ from workflow.audit import read_audit_log
 from workflow.cli import main
 from workflow.git_helpers import CommitResult, git_path_exists_at_ref
 from workflow.metadata import METADATA_FILENAME
-from workflow.names import RepoName
+from workflow.names import WorktreeName
 from workflow.validate import CheckResult, _check_agents_md
 
 # ---------------------------------------------------------------------------
@@ -736,7 +736,7 @@ def test_todo_rebases_sibling_branch_cut_from_the_same_base(tmp_path: Path, monk
         ).stdout
     )
     # post_rebase_verify re-ran the pre-commit hook, against planner (the rebased repo).
-    assert [call.args[1] for call in hook.call_args_list] == [RepoName.planner]
+    assert [call.args[1] for call in hook.call_args_list] == [WorktreeName.planner]
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
@@ -756,7 +756,7 @@ def test_implement_rebases_sibling_branch_cut_from_the_same_base(
     assert (canon / "docs" / "plans" / "implementing" / "006_bar.md").exists()
     assert (canon / "docs" / "plans" / "todo" / "005_foo.md").exists()
     assert _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path / "builder").stdout.strip() == b"feat/006_bar"
-    assert [call.args[1] for call in hook.call_args_list] == [RepoName.planner]
+    assert [call.args[1] for call in hook.call_args_list] == [WorktreeName.planner]
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")

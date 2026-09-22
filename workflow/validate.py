@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from workflow.agents_md import parse_hash_file
 from workflow.exceptions import AgentsMdGenerationError, WorkflowError
 from workflow.git_helpers import git_diff_branch, git_fetch
-from workflow.names import RepoName
+from workflow.names import WorktreeName
 
 if TYPE_CHECKING:
     from workflow.config import WorkflowConfig
@@ -45,11 +45,11 @@ class CheckResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def infer_target_repo(
+def infer_target_worktree(
     plan: Plan,
     config: WorkflowConfig,
-    target_repo_override: RepoName | str | None = None,
-) -> RepoName | str:
+    target_repo_override: WorktreeName | str | None = None,
+) -> WorktreeName | str:
     """Return the repo name to inspect for *plan*, honouring any override.
 
     Falls back to the agent configured for the plan's state in *config*.
@@ -59,7 +59,7 @@ def infer_target_repo(
         return target_repo_override
     state_cfg = config.states.get(plan.state)
     if state_cfg is None or state_cfg.agent is None:
-        return RepoName.canon
+        return WorktreeName.canon
     return state_cfg.agent
 
 
@@ -68,7 +68,7 @@ def validate(
     project_dir: Path,
     config: WorkflowConfig,
     *,
-    target_repo_override: RepoName | str | None = None,
+    target_repo_override: WorktreeName | str | None = None,
     dry_run: bool = False,
 ) -> list[CheckResult]:
     """Run all verification checks.  Returns a list of results (pass/warn/fail).
@@ -77,7 +77,7 @@ def validate(
     Missing prerequisites (missing hash file, fetch failure) raise
     :class:`~workflow.exceptions.WorkflowError`.
     """
-    target_repo = infer_target_repo(plan, config, target_repo_override)
+    target_repo = infer_target_worktree(plan, config, target_repo_override)
     repo_path = project_dir / target_repo
 
     if dry_run:
@@ -114,7 +114,7 @@ def _read_branch_diff(repo_path: Path, *extra_args: str) -> str:
         raise WorkflowError(msg) from exc
 
 
-def _check_file_scope(changed_files: list[str], target_repo: RepoName | str) -> CheckResult:
+def _check_file_scope(changed_files: list[str], target_repo: WorktreeName | str) -> CheckResult:
     violations = [f for f in changed_files if not _is_allowed(f, target_repo)]
     if violations:
         return CheckResult(
@@ -126,20 +126,20 @@ def _check_file_scope(changed_files: list[str], target_repo: RepoName | str) -> 
     return CheckResult(check_name="file-scope", status="pass", message="All changed files within scope")
 
 
-def _is_allowed(file_path: str, target_repo: RepoName | str) -> bool:
+def _is_allowed(file_path: str, target_repo: WorktreeName | str) -> bool:
     """Return True if *file_path* (relative to repo root) may be changed by *target_repo*."""
     parts = Path(file_path).parts
     under_plans = parts[:2] == ("docs", "plans")
     is_intent = under_plans and parts[2:3] == ("intent",)
     is_review = under_plans and parts[2:3] == ("reviews",)
 
-    if target_repo == RepoName.canon:
+    if target_repo == WorktreeName.canon:
         return True
-    if target_repo == RepoName.planner:
+    if target_repo == WorktreeName.planner:
         return under_plans and not is_review
-    if target_repo == RepoName.builder:
+    if target_repo == WorktreeName.builder:
         return not is_intent and not is_review
-    if target_repo == RepoName.reviewer:
+    if target_repo == WorktreeName.reviewer:
         return not is_intent
     return True  # unknown repo: allow
 

@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from rich.console import Console
 
 from workflow.models import AuditLogEntry, PlanState
-from workflow.names import RepoName
+from workflow.names import WorktreeName
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 AUDIT_LOG_FILENAME = "workflow.log.jsonl"
 
 
-def build_audit_command_repo_state(config: WorkflowConfig) -> dict[str, tuple[RepoName, PlanState]]:
+def build_audit_command_repo_state(config: WorkflowConfig) -> dict[str, tuple[WorktreeName, PlanState]]:
     """Derive the audit `command` → `(repo, state)` mapping from *config*.
 
     For each command (script or prompt) in any state with a non-``None``
@@ -36,7 +36,7 @@ def build_audit_command_repo_state(config: WorkflowConfig) -> dict[str, tuple[Re
     # Lazy import to avoid a hard dependency from audit.py to config.py at import time.
     from workflow.config import PromptCommand, ScriptCommand  # noqa: PLC0415
 
-    mapping: dict[str, tuple[RepoName, PlanState]] = {}
+    mapping: dict[str, tuple[WorktreeName, PlanState]] = {}
     for state_config in config.states.values():
         for cmd in state_config.commands:
             if not isinstance(cmd, (PromptCommand, ScriptCommand)):
@@ -46,10 +46,10 @@ def build_audit_command_repo_state(config: WorkflowConfig) -> dict[str, tuple[Re
             target_state = cmd.transition
             target_cfg = config.states.get(target_state)
             agent = getattr(target_cfg, "agent", None) if target_cfg is not None else None
-            repo = RepoName.canon
+            repo = WorktreeName.canon
             if agent is not None:
                 with suppress(ValueError):
-                    repo = RepoName(agent)
+                    repo = WorktreeName(agent)
             mapping[cmd.name] = (repo, target_state)
     return mapping
 

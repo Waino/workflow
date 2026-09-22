@@ -20,14 +20,14 @@ from workflow.audit import build_audit_command_repo_state, read_audit_log
 from workflow.config import PromptCommand, ScriptCommand, WorkflowConfig
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.models import Plan, PlanState, Review, ReviewSubState
-from workflow.names import RepoName
+from workflow.names import WorktreeName
 
 # Color styles for the SourcesDisagreeError rendering.
-_REPO_STYLES: dict[RepoName, str] = {
-    RepoName.canon: "steel_blue3",
-    RepoName.planner: "turquoise4",
-    RepoName.builder: "gold3",
-    RepoName.reviewer: "light_salmon3",
+_REPO_STYLES: dict[WorktreeName, str] = {
+    WorktreeName.canon: "steel_blue3",
+    WorktreeName.planner: "turquoise4",
+    WorktreeName.builder: "gold3",
+    WorktreeName.reviewer: "light_salmon3",
 }
 _STATE_STYLES: dict[PlanState, str] = {
     PlanState.INTENT: "steel_blue3",
@@ -145,7 +145,7 @@ def _check_collisions(plans: list[Plan]) -> None:
             raise PlanCollisionError(seq_str, group)
 
 
-def find_all_plans_in_repo(project_dir: Path, repo: str = RepoName.canon) -> list[Plan]:
+def find_all_plans_in_worktree(project_dir: Path, repo: str = WorktreeName.canon) -> list[Plan]:
     """Scan docs/plans/ in a single repo and return all plans found.
 
     Raises PlanCollisionError if two non-intent plans with the same sequence number
@@ -191,10 +191,10 @@ def find_all_plans_in_repo(project_dir: Path, repo: str = RepoName.canon) -> lis
     return plans
 
 
-def find_plan_file_in_repo(project_dir: Path, repo_name: str, plan_file_name: str) -> Path | None:
+def find_plan_file_in_worktree(project_dir: Path, repo_name: str, plan_file_name: str) -> Path | None:
     """Return the absolute path of *plan_file_name* under any state dir of *repo_name*, or ``None``.
 
-    Reuses :func:`find_all_plans_in_repo`'s walk rather than re-globbing. Excludes
+    Reuses :func:`find_all_plans_in_worktree`'s walk rather than re-globbing. Excludes
     ``docs/plans/reviews/`` and ``docs/plans/intent`` (reviews and intents are never
     transitioned). Raises
     :class:`~workflow.exceptions.PlanCollisionError` if *plan_file_name* exists under more
@@ -204,7 +204,7 @@ def find_plan_file_in_repo(project_dir: Path, repo_name: str, plan_file_name: st
     """
     matches = [
         plan
-        for plan in find_all_plans_in_repo(project_dir, repo_name)
+        for plan in find_all_plans_in_worktree(project_dir, repo_name)
         if plan.state not in (PlanState.INTENT, PlanState.REVIEW) and plan.path.name == plan_file_name
     ]
     if len(matches) > 1:
@@ -258,10 +258,10 @@ def find_all_plans(project_dir: Path) -> list[Plan]:
     """
     merged: dict[str, Plan] = {}
 
-    for repo in RepoName:
+    for repo in WorktreeName:
         if not (project_dir / repo).is_dir():
             continue
-        for plan in find_all_plans_in_repo(project_dir, repo):
+        for plan in find_all_plans_in_worktree(project_dir, repo):
             if isinstance(plan, Review):
                 key = f"review:{plan.name}"
             else:
@@ -350,7 +350,7 @@ def _disambiguate(fuzzy_path: str, matches: list[Plan], repos_searched: list[str
 
 _T = TypeVar("_T")
 
-_ALL_REPOS: frozenset[RepoName] = frozenset(RepoName)
+_ALL_REPOS: frozenset[WorktreeName] = frozenset(WorktreeName)
 _ALL_STATES: frozenset[PlanState] = frozenset(s for s in PlanState if s != PlanState.REVIEW)
 
 
@@ -363,7 +363,7 @@ class _Constraint(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    repos: frozenset[RepoName] | None = None
+    repos: frozenset[WorktreeName] | None = None
     states: frozenset[PlanState] | None = None
 
 
@@ -404,7 +404,7 @@ class _BestGitTouch(BaseModel):
 
     timestamp: int
     state: PlanState
-    repo: RepoName
+    repo: WorktreeName
 
 
 class _PathComponents(BaseModel):
@@ -412,7 +412,7 @@ class _PathComponents(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    repo: RepoName | None = None
+    repo: WorktreeName | None = None
     state: PlanState | None = None
     seq: list[int] | None = None
     slug: str | None = None
@@ -432,7 +432,7 @@ class _RepoStatePair(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    repo: RepoName
+    repo: WorktreeName
     state: PlanState
 
 
@@ -459,7 +459,7 @@ def _extract_components(
 ) -> _PathComponents:
     """Parse normalized path parts into a _PathComponents with repo/state/seq/slug hints."""
     state_values = {s.value: s for s in PlanState}
-    repo_hint: RepoName | None = None
+    repo_hint: WorktreeName | None = None
     state_hint: PlanState | None = None
     seq_hint: list[int] | None = None
     slug_hint: str | None = None
@@ -467,7 +467,7 @@ def _extract_components(
     idx = 0
     if idx < len(parts):
         with suppress(ValueError):
-            repo_hint = RepoName(parts[idx])
+            repo_hint = WorktreeName(parts[idx])
             idx += 1
 
     if idx + 1 < len(parts) and parts[idx] == "docs" and parts[idx + 1] == "plans":
@@ -498,12 +498,12 @@ def _from_fuzzy_path(fuzzy_path: str) -> _PathHints:
     return _PathHints(constraint=_Constraint(repos=repos, states=states), seq=components.seq, slug=components.slug)
 
 
-def _agent_repo(agent: str | None, default: RepoName) -> RepoName:
-    """Resolve an agent name string into a RepoName, falling back to *default*."""
+def _agent_repo(agent: str | None, default: WorktreeName) -> WorktreeName:
+    """Resolve an agent name string into a WorktreeName, falling back to *default*."""
     if agent is None:
         return default
     try:
-        return RepoName(agent)
+        return WorktreeName(agent)
     except ValueError:
         return default
 
@@ -512,7 +512,7 @@ def _accumulate_subcommand_contribution(
     cmd: PromptCommand | ScriptCommand,
     state: PlanState,
     state_config: object,
-    repos: set[RepoName],
+    repos: set[WorktreeName],
     states: set[PlanState],
 ) -> None:
     """Add one command's contribution to the running repos/states sets."""
@@ -522,17 +522,17 @@ def _accumulate_subcommand_contribution(
         # plans in any state (UX goal: do not enforce the workflow rigidly).
         if agent is not None:
             with suppress(ValueError):
-                repos.add(RepoName(agent))
+                repos.add(WorktreeName(agent))
         return
     states.add(state)
     # Plans may already have been transitioned by the previous step's agent.
     if cmd.transition is not None:
         states.add(cmd.transition)
     states.update(cmd.also_valid_in_states)
-    if cmd.repo_override is not None:
-        repos.add(cmd.repo_override)
+    if cmd.worktree_override is not None:
+        repos.add(cmd.worktree_override)
     else:
-        repos.add(_agent_repo(agent, RepoName.canon))
+        repos.add(_agent_repo(agent, WorktreeName.canon))
 
 
 def _from_subcommand(
@@ -546,13 +546,13 @@ def _from_subcommand(
     Prompt commands contribute the agent's repo as a soft routing hint; this
     contribution is suppressed when *path_provides_repos* is True because the
     caller has already pinned the repo explicitly.  Script commands contribute
-    their ``repo_override`` if set, otherwise the state's agent or canon.
+    their ``worktree_override`` if set, otherwise the state's agent or canon.
     Scripts also contribute the states they are defined in (plus their
     transition target).
     """
     if command_name is None:
         return _Constraint()
-    repos: set[RepoName] = set()
+    repos: set[WorktreeName] = set()
     states: set[PlanState] = set()
     found = False
     for state, state_config in config.states.items():
@@ -571,7 +571,7 @@ def _from_subcommand(
                 for extra_state in cmd.also_valid_in_states:
                     extra_cfg = config.states.get(extra_state)
                     extra_agent = getattr(extra_cfg, "agent", None) if extra_cfg is not None else None
-                    repos.add(_agent_repo(extra_agent, RepoName.canon))
+                    repos.add(_agent_repo(extra_agent, WorktreeName.canon))
     if not found:
         return _Constraint()
     return _Constraint(
@@ -688,7 +688,7 @@ def _from_git_history(
     even when its committer date matches an older sibling.
     """
     best: _BestGitTouch | None = None
-    for repo in RepoName:
+    for repo in WorktreeName:
         repo_path = project_dir / repo
         if not (repo_path / ".git").exists():
             continue
@@ -719,7 +719,7 @@ def _name_matches_seq(plan_name: str, seq_str: str) -> bool:
 def _from_audit_log(
     project_dir: Path,
     seq: list[int],
-    mapping: dict[str, tuple[RepoName, PlanState]],
+    mapping: dict[str, tuple[WorktreeName, PlanState]],
     *,
     path_provides_repos: bool = False,
 ) -> _Constraint:
@@ -741,7 +741,7 @@ def _from_audit_log(
     explicit path hint, so the audit repo is suppressed to avoid false conflicts.
     """
     seq_str = _seq_to_str(seq)
-    most_recent: tuple[RepoName, PlanState] | None = None
+    most_recent: tuple[WorktreeName, PlanState] | None = None
     for entry in read_audit_log(project_dir):
         names = [entry.input_plan, *entry.output_plans]
         if not any(n is not None and _name_matches_seq(n, seq_str) for n in names):
@@ -758,8 +758,8 @@ def _from_audit_log(
     return _Constraint(repos=repos, states=forward)
 
 
-def _active_tmux_repo(session_name: str) -> RepoName | None:
-    """Return the RepoName of the active window in the named tmux session, or None."""
+def _active_tmux_repo(session_name: str) -> WorktreeName | None:
+    """Return the WorktreeName of the active window in the named tmux session, or None."""
     try:
         server = libtmux.Server()
         if not server.is_alive():
@@ -771,7 +771,7 @@ def _active_tmux_repo(session_name: str) -> RepoName | None:
         if active is None or active.name is None:
             return None
         try:
-            return RepoName(active.name)
+            return WorktreeName(active.name)
         except ValueError:
             return None
     except (OSError, libtmux.exc.LibTmuxException):
@@ -783,14 +783,14 @@ def _from_tmux(config: WorkflowConfig) -> _Constraint:
     repo = _active_tmux_repo(config.tmux.session_name)
     if repo is None:
         return _Constraint()
-    if repo == RepoName.canon:
-        return _Constraint(repos=frozenset({RepoName.canon}))
-    return _Constraint(repos=frozenset({repo, RepoName.canon}))
+    if repo == WorktreeName.canon:
+        return _Constraint(repos=frozenset({WorktreeName.canon}))
+    return _Constraint(repos=frozenset({repo, WorktreeName.canon}))
 
 
 def _filesystem_matches(
     project_dir: Path,
-    repos: frozenset[RepoName],
+    repos: frozenset[WorktreeName],
     states: frozenset[PlanState],
     seq: list[int],
     slug: str | None,
@@ -800,7 +800,7 @@ def _filesystem_matches(
     for repo in repos:
         if not (project_dir / repo).is_dir():
             continue
-        for plan in find_all_plans_in_repo(project_dir, repo):
+        for plan in find_all_plans_in_worktree(project_dir, repo):
             if isinstance(plan, Review):
                 continue
             if plan.state not in states:
@@ -881,7 +881,7 @@ def resolve_plan(
     *,
     config: WorkflowConfig,
     command_name: str | None = None,
-    git_provides_repo: bool = False,
+    git_provides_worktree: bool = False,
 ) -> Plan:
     """Resolve a fuzzy path reference to a canonical Plan.
 
@@ -897,7 +897,7 @@ def resolve_plan(
         config: Workflow configuration; provides the subcommand and tmux sources.
         command_name: Name of the CLI subcommand being resolved. ``None`` skips
             the subcommand source entirely.
-        git_provides_repo: When True, the git data source contributes a repo
+        git_provides_worktree: When True, the git data source contributes a repo
             constraint (the clone with the newest commit touching the plan
             file). Only ``push`` opts in: it needs to identify the clone with
             unpushed manual edits. All other callers leave git silent on the
@@ -939,7 +939,7 @@ def resolve_plan(
         ),
         _Source(
             label="git",
-            constraint=_from_git_history(project_dir, hints.seq, hints.slug, provides_repo=git_provides_repo),
+            constraint=_from_git_history(project_dir, hints.seq, hints.slug, provides_repo=git_provides_worktree),
         ),
         _Source(
             label="audit",

@@ -13,7 +13,7 @@ from rich.text import Text
 from workflow.exceptions import WorkflowError
 from workflow.metadata import LEGACY_ROOT_MARKER, METADATA_FILENAME, ProjectMetadata, read_metadata
 from workflow.models import PlanState
-from workflow.names import RepoName
+from workflow.names import WorktreeName
 
 CONFIG_FILENAME = "config.yaml"
 
@@ -63,9 +63,9 @@ class ScriptCommand(WorkflowStep):
     script: str
     transition: PlanState | None = None
     reminder: str | None = None
-    repo_override: RepoName | None = None
+    worktree_override: WorktreeName | None = None
     also_valid_in_states: list[PlanState] = []
-    pull_target: RepoName | None = None
+    pull_target: WorktreeName | None = None
 
     def render(self) -> Text:
         """Render the cheatsheet representation of the workflow step."""

@@ -22,7 +22,7 @@ from workflow.commands.doctor import (
 from workflow.config import WorkflowConfig, load_config
 from workflow.frontmatter import PlanFrontmatter, RepoBranch, render_frontmatter
 from workflow.metadata import LEGACY_ROOT_MARKER
-from workflow.names import RepoName
+from workflow.names import WorktreeName
 
 _GIT = shutil.which("git") or "git"
 
@@ -94,7 +94,7 @@ def test_check_bare_invalid_reports_anomaly(tmp_path: Path) -> None:
 
 def test_check_worktree_clean_main_has_no_anomalies(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path / "canon")
-    check = _check_worktree(RepoName.canon, repo, active_branches=set(), bare_path=tmp_path / "bare")
+    check = _check_worktree(WorktreeName.canon, repo, active_branches=set(), bare_path=tmp_path / "bare")
     assert check.branch == "main"
     assert check.dirty is False
     assert check.anomalies == []
@@ -103,14 +103,14 @@ def test_check_worktree_clean_main_has_no_anomalies(tmp_path: Path) -> None:
 def test_check_worktree_canon_off_main_is_an_anomaly(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path / "canon")
     _git(["checkout", "-b", "some-branch"], cwd=repo)
-    check = _check_worktree(RepoName.canon, repo, active_branches=set(), bare_path=tmp_path / "bare")
+    check = _check_worktree(WorktreeName.canon, repo, active_branches=set(), bare_path=tmp_path / "bare")
     assert any("expected 'main'" in a for a in check.anomalies)
 
 
 def test_check_worktree_builder_stray_branch_is_an_anomaly(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path / "builder")
     _git(["checkout", "-b", "leftover"], cwd=repo)
-    check = _check_worktree(RepoName.builder, repo, active_branches=set(), bare_path=tmp_path / "bare")
+    check = _check_worktree(WorktreeName.builder, repo, active_branches=set(), bare_path=tmp_path / "bare")
     assert any("stray branch" in a for a in check.anomalies)
 
 
@@ -118,7 +118,7 @@ def test_check_worktree_builder_active_feature_branch_is_not_an_anomaly(tmp_path
     repo = _init_repo(tmp_path / "builder")
     _git(["checkout", "-b", "feat/005_foo"], cwd=repo)
     check = _check_worktree(
-        RepoName.builder,
+        WorktreeName.builder,
         repo,
         active_branches={"feat/005_foo"},
         bare_path=tmp_path / "bare",
@@ -129,7 +129,7 @@ def test_check_worktree_builder_active_feature_branch_is_not_an_anomaly(tmp_path
 def test_check_worktree_dirty_tree_is_an_anomaly(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path / "canon")
     (repo / "README.md").write_text("changed\n", encoding="utf-8")
-    check = _check_worktree(RepoName.canon, repo, active_branches=set(), bare_path=tmp_path / "bare")
+    check = _check_worktree(WorktreeName.canon, repo, active_branches=set(), bare_path=tmp_path / "bare")
     assert "uncommitted changes" in check.anomalies
 
 
@@ -145,7 +145,7 @@ def test_check_worktree_stale_main_is_an_anomaly(tmp_path: Path) -> None:
     _git(["commit", "-m", "advance main"], cwd=pusher)
     _git(["push"], cwd=pusher)
 
-    check = _check_worktree(RepoName.canon, canon, active_branches=set(), bare_path=bare)
+    check = _check_worktree(WorktreeName.canon, canon, active_branches=set(), bare_path=bare)
 
     assert "main differs from bare (stale or unpushed)" in check.anomalies
 
@@ -173,7 +173,7 @@ def test_check_worktree_rebase_pending_branch_is_a_note_not_an_anomaly(tmp_path:
     _git(["fetch", "origin", "main:main"], cwd=reviewer)
 
     check = _check_worktree(
-        RepoName.reviewer,
+        WorktreeName.reviewer,
         reviewer,
         active_branches={"feat/005_foo"},
         bare_path=bare,

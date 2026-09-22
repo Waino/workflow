@@ -7,7 +7,7 @@ from pathlib import Path
 from workflow.exceptions import PlanCollisionError, WorkflowError
 from workflow.git_helpers import git_mv
 from workflow.models import Plan, PlanState
-from workflow.plan_resolver import find_plan_file_in_repo
+from workflow.plan_resolver import find_plan_file_in_worktree
 
 
 def locate_plan_file(project_dir: Path, repo_name: str, plan_file_name: str) -> Path | None:
@@ -17,7 +17,7 @@ def locate_plan_file(project_dir: Path, repo_name: str, plan_file_name: str) -> 
     it also surfaces here -- with a message about the wrong plan unless it is reframed.
     """
     try:
-        return find_plan_file_in_repo(project_dir, repo_name, plan_file_name)
+        return find_plan_file_in_worktree(project_dir, repo_name, plan_file_name)
     except PlanCollisionError as exc:
         msg = (
             f"cannot transition {plan_file_name} while sequence number {exc.sequence_number!r} collides "
@@ -30,7 +30,7 @@ def transition_plan(
     plan: Plan,
     target_state: PlanState,
     project_dir: Path,
-    repo_override: str | None = None,
+    worktree_override: str | None = None,
     *,
     dry_run: bool = False,
 ) -> Plan:
@@ -41,17 +41,17 @@ def transition_plan(
     Does NOT commit — the caller is responsible for committing.
 
     *plan.path* is relative to *project_dir* and its first component is the repo name
-    (e.g. ``planner/docs/plans/planning/005_foo.md``). *repo_override* redirects the
+    (e.g. ``planner/docs/plans/planning/005_foo.md``). *worktree_override* redirects the
     transition to a different repo — in practice always ``"canon"``, because tickets
     are pushed and pulled there before transitioning.
 
     The source file is located by name in *repo_name* rather than trusted from
     *plan.path*'s state directory: *plan.path* reflects whichever repo the resolver
-    found the plan in, which can disagree with *repo_override* (e.g. a plan resolved
+    found the plan in, which can disagree with *worktree_override* (e.g. a plan resolved
     from a feature branch's ``checking/`` while canon's ``main`` still has it under
     ``implementing/``).
     """
-    repo_name = repo_override or plan.path.parts[0]
+    repo_name = worktree_override or plan.path.parts[0]
     repo_path = project_dir / repo_name
     source = locate_plan_file(project_dir, repo_name, plan.path.name)
     if source is None:

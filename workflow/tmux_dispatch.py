@@ -34,7 +34,7 @@ from workflow.exceptions import (
 )
 from workflow.git_helpers import git_commit_hash, git_current_branch, git_pull, refresh_main
 from workflow.models import AuditLogEntry, Plan, PlanState
-from workflow.names import RepoName, command_cli_name
+from workflow.names import WorktreeName, command_cli_name
 from workflow.plan_resolver import resolve_plan
 from workflow.shell import console, error_console, print_workflow_error
 from workflow.stack import stack_child, stack_entries
@@ -48,17 +48,17 @@ CONTROL_PANE_OPTION = "@workflow_control_pane"
 _TMUX_HINT = "Run 'workflow start' to create the tmux session."
 
 # Reverse map: which workflow repo serves each prompt-eligible plan state.
-_REPO_FOR_PROMPT_STATE: dict[PlanState, RepoName] = {
-    PlanState.INTENT: RepoName.planner,
-    PlanState.PLANNING: RepoName.planner,
-    PlanState.TODO: RepoName.canon,
-    PlanState.IMPLEMENTING: RepoName.builder,
-    PlanState.CHECKING: RepoName.reviewer,
-    PlanState.REVIEW: RepoName.reviewer,
+_REPO_FOR_PROMPT_STATE: dict[PlanState, WorktreeName] = {
+    PlanState.INTENT: WorktreeName.planner,
+    PlanState.PLANNING: WorktreeName.planner,
+    PlanState.TODO: WorktreeName.canon,
+    PlanState.IMPLEMENTING: WorktreeName.builder,
+    PlanState.CHECKING: WorktreeName.reviewer,
+    PlanState.REVIEW: WorktreeName.reviewer,
 }
 
 
-def _repo_for_prompt_state(state: PlanState) -> RepoName:
+def _repo_for_prompt_state(state: PlanState) -> WorktreeName:
     """Return the workflow repo that owns prompt dispatch for *state*."""
     try:
         return _REPO_FOR_PROMPT_STATE[state]
@@ -75,7 +75,7 @@ class _PromptTarget(BaseModel):
     command: PromptCommand
     state: PlanState
     agent_name: str | None
-    repo_name: RepoName
+    repo_name: WorktreeName
     has_plan: bool
 
 
@@ -85,7 +85,7 @@ class _PromptContext(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     agent_name: str
-    repo_name: RepoName
+    repo_name: WorktreeName
     prompt: str
     audit_input_plan: str | None = None
 

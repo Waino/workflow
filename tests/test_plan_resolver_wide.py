@@ -24,7 +24,7 @@ from workflow.audit import write_audit_log
 from workflow.config import WorkflowConfig, load_config
 from workflow.exceptions import AmbiguousPlanError
 from workflow.models import AuditLogEntry, PlanState
-from workflow.names import RepoName
+from workflow.names import WorktreeName
 from workflow.plan_resolver import SourcesDisagreeError, resolve_plan
 
 # ---------------------------------------------------------------------------
@@ -61,9 +61,9 @@ class PlanScenario(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
     plan_id: str
-    on_disk: list[tuple[RepoName, PlanState]]
+    on_disk: list[tuple[WorktreeName, PlanState]]
     audit_entries: list[_AuditDraft] = []
-    commit_in: list[RepoName] = []
+    commit_in: list[WorktreeName] = []
 
 
 class ResolverCase(BaseModel):
@@ -74,8 +74,8 @@ class ResolverCase(BaseModel):
     plan_id: str
     command: str | None = None
     fuzzy_input: str | None = None
-    git_provides_repo: bool = False
-    expected_repo: RepoName | None = None
+    git_provides_worktree: bool = False
+    expected_repo: WorktreeName | None = None
     expected_state: PlanState | None = None
     expected_error: type[Exception] | None = None
 
@@ -148,7 +148,7 @@ def _build_world(world: Path, scenarios: list[PlanScenario]) -> None:
 # and WIP plans (one canonical clone, optional stale copies). See plan 015.
 # ---------------------------------------------------------------------------
 
-_ALL_REPOS: list[RepoName] = [RepoName.canon, RepoName.planner, RepoName.builder, RepoName.reviewer]
+_ALL_REPOS: list[WorktreeName] = [WorktreeName.canon, WorktreeName.planner, WorktreeName.builder, WorktreeName.reviewer]
 
 _SCENARIOS: list[PlanScenario] = [
     # Synced older plans -----------------------------------------------------
@@ -176,79 +176,79 @@ _SCENARIOS: list[PlanScenario] = [
     ),
     PlanScenario(
         plan_id="004_flawed",
-        on_disk=[(RepoName.builder, PlanState.CHECKING), (RepoName.reviewer, PlanState.CHECKING)],
+        on_disk=[(WorktreeName.builder, PlanState.CHECKING), (WorktreeName.reviewer, PlanState.CHECKING)],
         audit_entries=[_AuditDraft(actor="reviewer", command="check", input_plan="004_flawed")],
-        commit_in=[RepoName.builder, RepoName.reviewer],
+        commit_in=[WorktreeName.builder, WorktreeName.reviewer],
     ),
     PlanScenario(
         plan_id="005_next_in_line",
-        on_disk=[(RepoName.canon, PlanState.TODO)],
+        on_disk=[(WorktreeName.canon, PlanState.TODO)],
         audit_entries=[_AuditDraft(actor="human", command="todo", input_plan="005_next_in_line")],
-        commit_in=[RepoName.canon],
+        commit_in=[WorktreeName.canon],
     ),
     PlanScenario(
         plan_id="006_draft",
-        on_disk=[(RepoName.planner, PlanState.PLANNING)],
+        on_disk=[(WorktreeName.planner, PlanState.PLANNING)],
         audit_entries=[_AuditDraft(actor="planner", command="plan", input_plan="006_draft")],
-        commit_in=[RepoName.planner],
+        commit_in=[WorktreeName.planner],
     ),
     # WIP plans --------------------------------------------------------------
     # Row 15: canon is the canonical (newer) copy; planner has an older stale
     # intent copy. Committing planner first then canon makes canon's %ct
-    # win when git_provides_repo=True.
+    # win when git_provides_worktree=True.
     PlanScenario(
         plan_id="007_newly_created",
-        on_disk=[(RepoName.canon, PlanState.INTENT), (RepoName.planner, PlanState.INTENT)],
+        on_disk=[(WorktreeName.canon, PlanState.INTENT), (WorktreeName.planner, PlanState.INTENT)],
         audit_entries=[],
-        commit_in=[RepoName.planner, RepoName.canon],
+        commit_in=[WorktreeName.planner, WorktreeName.canon],
     ),
     PlanScenario(
         plan_id="008_newly_planned",
-        on_disk=[(RepoName.planner, PlanState.PLANNING)],
+        on_disk=[(WorktreeName.planner, PlanState.PLANNING)],
         audit_entries=[_AuditDraft(actor="planner", command="plan", input_plan="008_newly_planned")],
-        commit_in=[RepoName.planner],
+        commit_in=[WorktreeName.planner],
     ),
     PlanScenario(
         plan_id="009_not_pulled",
-        on_disk=[(RepoName.canon, PlanState.TODO)],
+        on_disk=[(WorktreeName.canon, PlanState.TODO)],
         audit_entries=[_AuditDraft(actor="human", command="todo", input_plan="009_not_pulled")],
-        commit_in=[RepoName.canon],
+        commit_in=[WorktreeName.canon],
     ),
     # Row 18: builder canonical, canon stale. Commit canon first so builder
     # has the newer %ct (canonical-last rule from plan 015 §Risks).
     PlanScenario(
         plan_id="010_active_build",
-        on_disk=[(RepoName.builder, PlanState.IMPLEMENTING), (RepoName.canon, PlanState.IMPLEMENTING)],
+        on_disk=[(WorktreeName.builder, PlanState.IMPLEMENTING), (WorktreeName.canon, PlanState.IMPLEMENTING)],
         audit_entries=[_AuditDraft(actor="builder", command="implement", input_plan="010_active_build")],
-        commit_in=[RepoName.canon, RepoName.builder],
+        commit_in=[WorktreeName.canon, WorktreeName.builder],
     ),
     # Row 19: reviewer canonical, builder stale (same canonical-last rule).
     PlanScenario(
         plan_id="011_under_review",
-        on_disk=[(RepoName.reviewer, PlanState.CHECKING), (RepoName.builder, PlanState.CHECKING)],
+        on_disk=[(WorktreeName.reviewer, PlanState.CHECKING), (WorktreeName.builder, PlanState.CHECKING)],
         audit_entries=[_AuditDraft(actor="reviewer", command="check", input_plan="011_under_review")],
-        commit_in=[RepoName.builder, RepoName.reviewer],
+        commit_in=[WorktreeName.builder, WorktreeName.reviewer],
     ),
     PlanScenario(
         plan_id="012_merged_without_review",
-        on_disk=[(RepoName.canon, PlanState.DONE)],
+        on_disk=[(WorktreeName.canon, PlanState.DONE)],
         audit_entries=[_AuditDraft(actor="human", command="accept", input_plan="012_merged_without_review")],
-        commit_in=[RepoName.canon],
+        commit_in=[WorktreeName.canon],
     ),
     PlanScenario(
         plan_id="013_another_bad_idea",
-        on_disk=[(RepoName.canon, PlanState.REJECTED)],
+        on_disk=[(WorktreeName.canon, PlanState.REJECTED)],
         audit_entries=[_AuditDraft(actor="human", command="reject", input_plan="013_another_bad_idea")],
-        commit_in=[RepoName.canon],
+        commit_in=[WorktreeName.canon],
     ),
     # Row 22: audit lags on-disk state. Plan is at checking/ but audit's most
     # recent mapped entry is `implement` (→ implementing). `_from_audit_log`
     # must widen forward so the intersection still includes checking.
     PlanScenario(
         plan_id="014_post_build_mv",
-        on_disk=[(RepoName.builder, PlanState.CHECKING)],
+        on_disk=[(WorktreeName.builder, PlanState.CHECKING)],
         audit_entries=[_AuditDraft(actor="builder", command="implement", input_plan="014_post_build_mv")],
-        commit_in=[RepoName.builder],
+        commit_in=[WorktreeName.builder],
     ),
 ]
 
@@ -262,7 +262,7 @@ def _ok(
     case_id: str,
     plan_id: str,
     command: str | None,
-    repo: RepoName,
+    repo: WorktreeName,
     state: PlanState,
     **kw: object,
 ) -> ResolverCase:
@@ -294,17 +294,24 @@ _CASES: list[ResolverCase] = [
     # NB: changing find_all_plans to dedup at FS level would silently flip this
     # to a successful resolution — see plan 015 risks §Ambiguity row.
     _err("synced-001-ask-ambiguous", "001_idea", "ask", AmbiguousPlanError),
-    _ok("synced-001-ask-repo-hint", "001_idea", "ask", RepoName.planner, PlanState.INTENT, fuzzy_input="planner/001"),
-    _ok("synced-001-critique", "001_idea", "critique", RepoName.planner, PlanState.INTENT),
-    _ok("synced-001-plan", "001_idea", "plan", RepoName.planner, PlanState.INTENT),
-    _ok("synced-001-subdivide", "001_idea", "subdivide", RepoName.planner, PlanState.INTENT),
+    _ok(
+        "synced-001-ask-repo-hint",
+        "001_idea",
+        "ask",
+        WorktreeName.planner,
+        PlanState.INTENT,
+        fuzzy_input="planner/001",
+    ),
+    _ok("synced-001-critique", "001_idea", "critique", WorktreeName.planner, PlanState.INTENT),
+    _ok("synced-001-plan", "001_idea", "plan", WorktreeName.planner, PlanState.INTENT),
+    _ok("synced-001-subdivide", "001_idea", "subdivide", WorktreeName.planner, PlanState.INTENT),
     # --- synced rejected/002, done/003, checking/004 -----------------------
     _err("synced-002-rejected-ask", "002_bad_idea", "ask", SourcesDisagreeError),
     _ok(
         "synced-002-rejected-ask-hints",
         "002_bad_idea",
         "ask",
-        RepoName.planner,
+        WorktreeName.planner,
         PlanState.REJECTED,
         fuzzy_input="planner/002",
     ),
@@ -314,40 +321,40 @@ _CASES: list[ResolverCase] = [
         "synced-004-checking-ask-hints",
         "004_flawed",
         "ask",
-        RepoName.reviewer,
+        WorktreeName.reviewer,
         PlanState.CHECKING,
         fuzzy_input="reviewer/004",
     ),
-    _ok("synced-004-pr", "004_flawed", "pr", RepoName.reviewer, PlanState.CHECKING),
-    _ok("synced-004-fix", "004_flawed", "fix", RepoName.reviewer, PlanState.CHECKING),
+    _ok("synced-004-pr", "004_flawed", "pr", WorktreeName.reviewer, PlanState.CHECKING),
+    _ok("synced-004-fix", "004_flawed", "fix", WorktreeName.reviewer, PlanState.CHECKING),
     # --- synced todo/005, planning/006 -------------------------------------
     _err("synced-005-todo-ask", "005_next_in_line", "ask", SourcesDisagreeError),
     _err("synced-005-todo-critique", "005_next_in_line", "critique", SourcesDisagreeError),
-    _ok("synced-006-planning-ask", "006_draft", "ask", RepoName.planner, PlanState.PLANNING),
-    _ok("synced-006-planning-critique", "006_draft", "critique", RepoName.planner, PlanState.PLANNING),
-    _ok("synced-006-planning-subdivide", "006_draft", "subdivide", RepoName.planner, PlanState.PLANNING),
+    _ok("synced-006-planning-ask", "006_draft", "ask", WorktreeName.planner, PlanState.PLANNING),
+    _ok("synced-006-planning-critique", "006_draft", "critique", WorktreeName.planner, PlanState.PLANNING),
+    _ok("synced-006-planning-subdivide", "006_draft", "subdivide", WorktreeName.planner, PlanState.PLANNING),
     # --- WIP plans ----------------------------------------------------------
-    # Row 15: push with git_provides_repo=True; git ties repos to canon
-    # (newer %ct), subcommand's repo_override=canon confirms.
+    # Row 15: push with git_provides_worktree=True; git ties repos to canon
+    # (newer %ct), subcommand's worktree_override=canon confirms.
     _ok(
         "wip-007-push-git-provides-repo",
         "007_newly_created",
         "push",
-        RepoName.canon,
+        WorktreeName.canon,
         PlanState.INTENT,
-        git_provides_repo=True,
+        git_provides_worktree=True,
     ),
-    _ok("wip-008-planning-critique", "008_newly_planned", "critique", RepoName.planner, PlanState.PLANNING),
+    _ok("wip-008-planning-critique", "008_newly_planned", "critique", WorktreeName.planner, PlanState.PLANNING),
     # Row 17 exercises `implement`'s `also_valid_in_states=[planning]`.
-    _ok("wip-009-todo-implement", "009_not_pulled", "implement", RepoName.canon, PlanState.TODO),
-    _ok("wip-010-implementing-build", "010_active_build", "build", RepoName.builder, PlanState.IMPLEMENTING),
-    _ok("wip-011-checking-pr", "011_under_review", "pr", RepoName.reviewer, PlanState.CHECKING),
+    _ok("wip-009-todo-implement", "009_not_pulled", "implement", WorktreeName.canon, PlanState.TODO),
+    _ok("wip-010-implementing-build", "010_active_build", "build", WorktreeName.builder, PlanState.IMPLEMENTING),
+    _ok("wip-011-checking-pr", "011_under_review", "pr", WorktreeName.reviewer, PlanState.CHECKING),
     _err("wip-012-done-pr", "012_merged_without_review", "pr", SourcesDisagreeError),
     # no ok-with-hints for 012: it is done, but only exists in canon. Must be pushed before reviewer can see it.
     _err("wip-013-rejected-ask", "013_another_bad_idea", "ask", SourcesDisagreeError),
     # Row 22: `_from_audit_log` widening safety net (audit `implement` lags
     # an on-disk move into checking/; widened state set must include CHECKING).
-    _ok("wip-014-audit-widening", "014_post_build_mv", "check", RepoName.builder, PlanState.CHECKING),
+    _ok("wip-014-audit-widening", "014_post_build_mv", "check", WorktreeName.builder, PlanState.CHECKING),
 ]
 
 
@@ -386,7 +393,7 @@ def test_wide_resolver_matrix(case: ResolverCase, world: Path, config: WorkflowC
                 world,
                 config=config,
                 command_name=case.command,
-                git_provides_repo=case.git_provides_repo,
+                git_provides_worktree=case.git_provides_worktree,
             )
         return
     plan = resolve_plan(
@@ -394,7 +401,7 @@ def test_wide_resolver_matrix(case: ResolverCase, world: Path, config: WorkflowC
         world,
         config=config,
         command_name=case.command,
-        git_provides_repo=case.git_provides_repo,
+        git_provides_worktree=case.git_provides_worktree,
     )
     assert case.expected_repo is not None
     assert case.expected_state is not None

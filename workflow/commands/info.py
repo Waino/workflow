@@ -13,7 +13,7 @@ from workflow.config import WorkflowConfig
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.git_helpers import git_status
 from workflow.models import PlanState
-from workflow.names import RepoName
+from workflow.names import WorktreeName
 from workflow.next_step import find_next_step, find_source_state_for_command
 from workflow.plan_resolver import find_all_plans, next_intent_number, resolve_plan
 from workflow.registry import register_script
@@ -170,7 +170,7 @@ def status(ctx: click.Context, show_all: bool) -> None:  # noqa: FBT001
     next_number = next_intent_number(project_dir)
     console.print(f"Next free number: [bold]{next_number:03d}[/bold]")
 
-    for repo in RepoName:
+    for repo in WorktreeName:
         console.print(f"Git status for repo {repo}")
         git_status(project_dir / repo)
     ctx.exit(0)
