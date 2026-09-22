@@ -9,7 +9,7 @@ DOCS_REPO = "docs"
 
 
 class WorktreeName(StrEnum):
-    """Workflow repos with fixed built-in responsibilities."""
+    """The four agent-side worktrees: fixed, built-in clones, not to be confused with git repos."""
 
     canon = "canon"
     planner = "planner"

@@ -145,7 +145,7 @@ Python codebase, so that day-to-day tuning does not require touching code:
 * Prompt text for any prompt command (``ask``, ``critique``, ``plan``, ``build``, ...).
 * Adding, removing, or reordering prompt and manual commands within existing states.
 * Agent names, models, and tmux session settings.
-* Which repo a command reads from (``repo_override``).
+* Which worktree a command reads from (``worktree_override``).
 
 **Requires a code change** (fork the project and modify the Python source):
 

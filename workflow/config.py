@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, model_validator
 from rich.text import Text
 
 from workflow.exceptions import WorkflowError
+from workflow.layout import Layout
 from workflow.metadata import LEGACY_ROOT_MARKER, METADATA_FILENAME, ProjectMetadata, read_metadata
 from workflow.models import PlanState
 from workflow.names import WorktreeName
@@ -66,6 +67,18 @@ class ScriptCommand(WorkflowStep):
     worktree_override: WorktreeName | None = None
     also_valid_in_states: list[PlanState] = []
     pull_target: WorktreeName | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_repo_override(cls, data: object) -> object:
+        """Fail with a clear pointer to the migration script on a leftover repo_override key."""
+        if isinstance(data, dict) and "repo_override" in data:
+            msg = (
+                "config.yaml uses the old key 'repo_override' (renamed to 'worktree_override'). "
+                "Run `python scripts/migrate_023.py --project-dir <project>` to migrate."
+            )
+            raise ValueError(msg)
+        return data
 
     def render(self) -> Text:
         """Render the cheatsheet representation of the workflow step."""
@@ -194,6 +207,17 @@ class WorkflowConfig(BaseModel):
                 msg = f"State {state!r} references unknown agent {state_config.agent!r}"
                 raise ValueError(msg)
         return self
+
+    def layout(self) -> Layout:
+        """Build this project's Layout from project_dir and metadata.
+
+        Raises WorkflowError (matching _require_project_dir's wording) when either
+        is None, i.e. when not inside a workflow project directory.
+        """
+        if self.project_dir is None or self.metadata is None:
+            msg = "Error: not inside a workflow project directory."
+            raise WorkflowError(msg)
+        return Layout(project_dir=self.project_dir, metadata=self.metadata)
 
 
 # --- Project root discovery ---

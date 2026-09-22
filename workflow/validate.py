@@ -48,15 +48,15 @@ class CheckResult(BaseModel):
 def infer_target_worktree(
     plan: Plan,
     config: WorkflowConfig,
-    target_repo_override: WorktreeName | str | None = None,
+    target_worktree_override: WorktreeName | str | None = None,
 ) -> WorktreeName | str:
     """Return the repo name to inspect for *plan*, honouring any override.
 
     Falls back to the agent configured for the plan's state in *config*.
     States with no agent (e.g. ``todo``, ``done``, ``rejected``) map to ``"canon"``.
     """
-    if target_repo_override is not None:
-        return target_repo_override
+    if target_worktree_override is not None:
+        return target_worktree_override
     state_cfg = config.states.get(plan.state)
     if state_cfg is None or state_cfg.agent is None:
         return WorktreeName.canon
@@ -68,7 +68,7 @@ def validate(
     project_dir: Path,
     config: WorkflowConfig,
     *,
-    target_repo_override: WorktreeName | str | None = None,
+    target_worktree_override: WorktreeName | str | None = None,
     dry_run: bool = False,
 ) -> list[CheckResult]:
     """Run all verification checks.  Returns a list of results (pass/warn/fail).
@@ -77,7 +77,7 @@ def validate(
     Missing prerequisites (missing hash file, fetch failure) raise
     :class:`~workflow.exceptions.WorkflowError`.
     """
-    target_repo = infer_target_worktree(plan, config, target_repo_override)
+    target_repo = infer_target_worktree(plan, config, target_worktree_override)
     repo_path = project_dir / target_repo
 
     if dry_run:

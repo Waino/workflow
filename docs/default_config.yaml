@@ -25,7 +25,7 @@ states:
         name: push
         description: Push pending content to canon.
         script: push
-        repo_override: canon
+        worktree_override: canon
         pull_target: planner
         reminder: ask
       - command_type: prompt
@@ -155,7 +155,7 @@ states:
         name: push
         description: Push pending content to canon.
         script: push
-        repo_override: canon
+        worktree_override: canon
 
   implementing:
     description: Plans under active implementation.

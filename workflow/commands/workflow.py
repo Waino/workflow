@@ -176,7 +176,11 @@ def _transition_stack_members(  # noqa: PLR0913
         else:
             new_members.append(
                 transition_plan(
-                    member, target_state, project_dir, worktree_override=worktree_override, dry_run=dry_run,
+                    member,
+                    target_state,
+                    project_dir,
+                    worktree_override=worktree_override,
+                    dry_run=dry_run,
                 ),
             )
     git_commit_if_changed(
@@ -720,7 +724,7 @@ def todo(ctx: click.Context, plan_path: str, *, force_validation: bool, force_pu
         require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
         require(git_current_branch(canon_repo) == "main", "todo: canon must be on 'main'.")
 
-        results = run_validate(plan, project_dir, config, target_repo_override="planner", dry_run=dry_run)
+        results = run_validate(plan, project_dir, config, target_worktree_override="planner", dry_run=dry_run)
         if not dry_run:
             _print_results(results)
             if not force_validation and any(result.status == "fail" for result in results):
@@ -860,7 +864,11 @@ def _transition_if_needed(  # noqa: PLR0913
         new_plan = plan.model_copy(update={"state": target_state, "path": target_rel})
     else:
         new_plan = transition_plan(
-            plan, target_state, project_dir, worktree_override=worktree_override, dry_run=dry_run,
+            plan,
+            target_state,
+            project_dir,
+            worktree_override=worktree_override,
+            dry_run=dry_run,
         )
     git_commit_if_changed(
         project_dir / (commit_repo or repo_name),
@@ -965,7 +973,11 @@ def _run_transfer_and_todo_steps(  # noqa: PLR0913
         )
         _warn_if_rebased(result, planner_branch)
         plan = _transition_if_needed(
-            plan, PlanState.TODO, project_dir, worktree_override=WorktreeName.canon, dry_run=dry_run,
+            plan,
+            PlanState.TODO,
+            project_dir,
+            worktree_override=WorktreeName.canon,
+            dry_run=dry_run,
         )
     return plan, transfer_ran
 
@@ -1430,7 +1442,7 @@ def validate(
         return
 
     try:
-        results = run_validate(plan, config.project_dir, config, target_repo_override=target)
+        results = run_validate(plan, config.project_dir, config, target_worktree_override=target)
     except WorkflowError as exc:
         print_workflow_error(exc)
         ctx.exit(1)
@@ -1553,7 +1565,7 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_v
         # An operator who wants to re-run validation post-transition can use `workflow validate`.
         if plan.state == PlanState.IMPLEMENTING:
             _run_pre_commit_hook(config, target_repo, dry_run=dry_run)
-            results = run_validate(plan, project_dir, config, target_repo_override=target_repo, dry_run=dry_run)
+            results = run_validate(plan, project_dir, config, target_worktree_override=target_repo, dry_run=dry_run)
             if not dry_run:
                 _print_results(results)
                 if not force_validation and any(result.status == "fail" for result in results):
