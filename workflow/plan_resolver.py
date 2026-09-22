@@ -7,7 +7,7 @@ import subprocess
 from collections import defaultdict
 from contextlib import suppress
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TypeVar
 
 import libtmux
@@ -19,6 +19,7 @@ from rich.text import Text
 from workflow.audit import build_audit_command_repo_state, read_audit_log
 from workflow.config import PromptCommand, ScriptCommand, WorkflowConfig
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
+from workflow.layout import Layout
 from workflow.models import Plan, PlanState, Review, ReviewSubState
 from workflow.names import WorktreeName
 
@@ -68,8 +69,7 @@ _STATE_PROGRESSION: tuple[PlanState, ...] = (
 _MIN_PLAN_PARTS = 5  # (repo, docs, plans, state, filename)
 _MIN_REVIEW_PARTS = 6  # (repo, docs, plans, reviews, sub_state, filename)
 
-# Minimum path depths and field counts for git/audit parsing
-_MIN_RELATIVE_PLAN_PARTS = 4  # (docs, plans, state, filename)
+# Field counts for git log output parsing
 _GIT_HEADER_FIELDS = 2  # "<commit_hash> <timestamp>"
 _GIT_NAME_STATUS_FIELDS = 2  # "<status>\t<path>"
 _GIT_RENAME_FIELDS = 3  # "<status>\t<old>\t<new>"
@@ -145,14 +145,15 @@ def _check_collisions(plans: list[Plan]) -> None:
             raise PlanCollisionError(seq_str, group)
 
 
-def find_all_plans_in_worktree(project_dir: Path, repo: str = WorktreeName.canon) -> list[Plan]:
-    """Scan docs/plans/ in a single repo and return all plans found.
+def find_all_plans_in_worktree(layout: Layout, worktree: WorktreeName = WorktreeName.canon) -> list[Plan]:
+    """Scan docs/plans/ in a single worktree and return all plans found.
 
     Raises PlanCollisionError if two non-intent plans with the same sequence number
     are found. Skips docs/plans/reviews/full/ — full review documents are write-only
     output and are never resolved by fuzzy path.
     """
-    plans_dir = project_dir / repo / "docs" / "plans"
+    plans_dir = layout.plans_root(worktree)
+    project_dir = layout.project_dir
     plans: list[Plan] = []
 
     for state in PlanState:
@@ -191,25 +192,25 @@ def find_all_plans_in_worktree(project_dir: Path, repo: str = WorktreeName.canon
     return plans
 
 
-def find_plan_file_in_worktree(project_dir: Path, repo_name: str, plan_file_name: str) -> Path | None:
-    """Return the absolute path of *plan_file_name* under any state dir of *repo_name*, or ``None``.
+def find_plan_file_in_worktree(layout: Layout, worktree: WorktreeName, plan_file_name: str) -> Path | None:
+    """Return the absolute path of *plan_file_name* under any state dir of *worktree*, or ``None``.
 
     Reuses :func:`find_all_plans_in_worktree`'s walk rather than re-globbing. Excludes
     ``docs/plans/reviews/`` and ``docs/plans/intent`` (reviews and intents are never
     transitioned). Raises
     :class:`~workflow.exceptions.PlanCollisionError` if *plan_file_name* exists under more
-    than one state dir in *repo_name* -- that is the signature of a botched transition
+    than one state dir in *worktree* -- that is the signature of a botched transition
     (the same anomaly ``workflow doctor`` flags), and silently picking one would
     corrupt state.
     """
     matches = [
         plan
-        for plan in find_all_plans_in_worktree(project_dir, repo_name)
+        for plan in find_all_plans_in_worktree(layout, worktree)
         if plan.state not in (PlanState.INTENT, PlanState.REVIEW) and plan.path.name == plan_file_name
     ]
     if len(matches) > 1:
         raise PlanCollisionError(matches[0].sequence_number_str, matches)
-    return project_dir / matches[0].path if matches else None
+    return layout.project_dir / matches[0].path if matches else None
 
 
 def _top_level_number_from_name(plan_name: str) -> int | None:
@@ -227,14 +228,14 @@ def _top_level_number_from_name(plan_name: str) -> int | None:
     return sequence_number[0]
 
 
-def next_intent_number(project_dir: Path) -> int:
+def next_intent_number(layout: Layout) -> int:
     """Return the lowest positive integer not yet reserved by any plan or audit log entry.
 
-    Scans all repos for existing plans and the audit log for any previously
+    Scans all worktrees for existing plans and the audit log for any previously
     created plan names, then returns the first gap starting from 1.
     """
-    reserved = {plan.sequence_number[0] for plan in find_all_plans(project_dir)}
-    for entry in read_audit_log(project_dir):
+    reserved = {plan.sequence_number[0] for plan in find_all_plans(layout)}
+    for entry in read_audit_log(layout.project_dir):
         for plan_name in [entry.input_plan, *entry.output_plans]:
             if plan_name is None:
                 continue
@@ -247,21 +248,21 @@ def next_intent_number(project_dir: Path) -> int:
     return number
 
 
-def find_all_plans(project_dir: Path) -> list[Plan]:
-    """Scan all repos and return a merged, deduplicated list of plans.
+def find_all_plans(layout: Layout) -> list[Plan]:
+    """Scan all worktrees and return a merged, deduplicated list of plans.
 
-    When the same plan (same sequence_number_str + slug) appears in multiple repos,
+    When the same plan (same sequence_number_str + slug) appears in multiple worktrees,
     the copy with the most progressed state is kept.
     State ordering: intent < planning < todo < implementing < checking < done < rejected.
-    REJECTED ranks highest, so a rejected copy always wins regardless of other repos.
+    REJECTED ranks highest, so a rejected copy always wins regardless of other worktrees.
     REVIEW is not ranked and is never deduplicated (each review has a unique name).
     """
     merged: dict[str, Plan] = {}
 
-    for repo in WorktreeName:
-        if not (project_dir / repo).is_dir():
+    for worktree in WorktreeName:
+        if not layout.worktree_root(worktree).is_dir():
             continue
-        for plan in find_all_plans_in_worktree(project_dir, repo):
+        for plan in find_all_plans_in_worktree(layout, worktree):
             if isinstance(plan, Review):
                 key = f"review:{plan.name}"
             else:
@@ -580,15 +581,18 @@ def _from_subcommand(
     )
 
 
-def _parse_path_to_state(path_str: str) -> PlanState | None:
-    """Map a `docs/plans/<state>/<file>` path to its PlanState; reviews return None."""
+def _parse_path_to_state(path_str: str, plans_prefix: PurePosixPath) -> PlanState | None:
+    """Map a `<plans_prefix>/<state>/<file>` path to its PlanState; reviews return None."""
     parts = Path(path_str).parts
-    if len(parts) < _MIN_RELATIVE_PLAN_PARTS or parts[0] != "docs" or parts[1] != "plans":
+    prefix_parts = plans_prefix.parts
+    min_parts = len(prefix_parts) + 2  # (*prefix, state, filename)
+    if len(parts) < min_parts or parts[: len(prefix_parts)] != prefix_parts:
         return None
-    if parts[2] == "reviews":
+    state_part = parts[len(prefix_parts)]
+    if state_part == "reviews":
         return None
     try:
-        return PlanState(parts[2])
+        return PlanState(state_part)
     except ValueError:
         return None
 
@@ -618,7 +622,7 @@ def _git_log_chosen_path(lines: list[str]) -> str | None:
     return None
 
 
-def _parse_git_log_output(output: str) -> _GitTouch | None:
+def _parse_git_log_output(output: str, plans_prefix: PurePosixPath) -> _GitTouch | None:
     """Parse the `--format='%H %ct' --name-status` output to a _GitTouch."""
     lines = [ln for ln in output.splitlines() if ln.strip()]
     if not lines:
@@ -633,17 +637,22 @@ def _parse_git_log_output(output: str) -> _GitTouch | None:
     chosen = _git_log_chosen_path(lines[1:])
     if chosen is None:
         return None
-    state = _parse_path_to_state(chosen)
+    state = _parse_path_to_state(chosen, plans_prefix)
     if state is None:
         return None
     return _GitTouch(timestamp=timestamp, state=state)
 
 
-def _git_newest_touch(repo_path: Path, seq: list[int], slug: str | None) -> _GitTouch | None:
+def _git_newest_touch(
+    repo_path: Path,
+    plans_prefix: PurePosixPath,
+    seq: list[int],
+    slug: str | None,
+) -> _GitTouch | None:
     """Find the newest non-merge commit in *repo_path* touching a plan file matching seq/slug."""
     seq_str = _seq_to_str(seq)
     glob = f"{seq_str}_{slug}.md" if slug else f"{seq_str}_*.md"
-    pathspecs = [f":(glob)docs/plans/*/{glob}", f":(glob)docs/plans/reviews/*/{glob}"]
+    pathspecs = [f":(glob){plans_prefix}/*/{glob}", f":(glob){plans_prefix}/reviews/*/{glob}"]
     argv = [
         "git",
         "-C",
@@ -663,11 +672,11 @@ def _git_newest_touch(repo_path: Path, seq: list[int], slug: str | None) -> _Git
         return None
     if result.returncode != 0:
         return None
-    return _parse_git_log_output(result.stdout)
+    return _parse_git_log_output(result.stdout, plans_prefix)
 
 
 def _from_git_history(
-    project_dir: Path,
+    layout: Layout,
     seq: list[int],
     slug: str | None,
     *,
@@ -688,11 +697,11 @@ def _from_git_history(
     even when its committer date matches an older sibling.
     """
     best: _BestGitTouch | None = None
-    for repo in WorktreeName:
-        repo_path = project_dir / repo
+    for worktree in WorktreeName:
+        repo_path = layout.git_repo_root(worktree)
         if not (repo_path / ".git").exists():
             continue
-        touch = _git_newest_touch(repo_path, seq, slug)
+        touch = _git_newest_touch(repo_path, layout.plans_prefix, seq, slug)
         if touch is None:
             continue
         if (
@@ -700,7 +709,7 @@ def _from_git_history(
             or touch.timestamp > best.timestamp
             or (touch.timestamp == best.timestamp and _state_rank(touch.state) > _state_rank(best.state))
         ):
-            best = _BestGitTouch(timestamp=touch.timestamp, state=touch.state, repo=repo)
+            best = _BestGitTouch(timestamp=touch.timestamp, state=touch.state, repo=worktree)
     if best is None:
         return _Constraint()
     repos = frozenset({best.repo}) if provides_repo else None
@@ -789,7 +798,7 @@ def _from_tmux(config: WorkflowConfig) -> _Constraint:
 
 
 def _filesystem_matches(
-    project_dir: Path,
+    layout: Layout,
     repos: frozenset[WorktreeName],
     states: frozenset[PlanState],
     seq: list[int],
@@ -798,9 +807,9 @@ def _filesystem_matches(
     """Find Plan files in the *repos* x *states* grid whose seq (and slug) match."""
     matches: list[Plan] = []
     for repo in repos:
-        if not (project_dir / repo).is_dir():
+        if not layout.worktree_root(repo).is_dir():
             continue
-        for plan in find_all_plans_in_worktree(project_dir, repo):
+        for plan in find_all_plans_in_worktree(layout, repo):
             if isinstance(plan, Review):
                 continue
             if plan.state not in states:
@@ -877,7 +886,6 @@ def _is_review_path(fuzzy_path: str) -> bool:
 
 def resolve_plan(
     fuzzy_path: str,
-    project_dir: Path,
     *,
     config: WorkflowConfig,
     command_name: str | None = None,
@@ -886,15 +894,15 @@ def resolve_plan(
     """Resolve a fuzzy path reference to a canonical Plan.
 
     Combines constraints from the fuzzy path, the named CLI subcommand (if any),
-    git history across all repo clones, the audit log, and the active tmux
+    git history across all worktrees, the audit log, and the active tmux
     window. The result is the unique Plan whose (repo, state, sequence number)
     triple lies in the intersection of those constraints.
 
     Args:
         fuzzy_path: The user-provided path reference. Absolute paths and full
             `repo/docs/plans/state/name` paths short-circuit further inference.
-        project_dir: Root of the project (contains canon/, planner/, etc.).
-        config: Workflow configuration; provides the subcommand and tmux sources.
+        config: Workflow configuration; provides project_dir/metadata (via
+            config.layout()) plus the subcommand and tmux sources.
         command_name: Name of the CLI subcommand being resolved. ``None`` skips
             the subcommand source entirely.
         git_provides_worktree: When True, the git data source contributes a repo
@@ -908,10 +916,13 @@ def resolve_plan(
         PlanNotFoundError: No plan matches the combined constraints.
         AmbiguousPlanError: Multiple plans match and no clear winner.
         PlanCollisionError: Two tickets share the same sequence number.
-        WorkflowError: The constraint sources disagree (empty intersection).
+        WorkflowError: The constraint sources disagree (empty intersection), or
+            not inside a workflow project directory.
     """
+    layout = config.layout()
+
     if Path(fuzzy_path).is_absolute():
-        return _resolve_absolute(fuzzy_path, project_dir)
+        return _resolve_absolute(fuzzy_path, layout.project_dir)
 
     if _is_review_path(fuzzy_path):
         # Reviews are resolved by a separate entry point (not yet implemented).
@@ -925,7 +936,7 @@ def resolve_plan(
     fast_repos = hints.constraint.repos
     fast_states = hints.constraint.states
     if fast_repos is not None and len(fast_repos) == 1 and fast_states is not None and len(fast_states) == 1:
-        matches = _filesystem_matches(project_dir, fast_repos, fast_states, hints.seq, hints.slug)
+        matches = _filesystem_matches(layout, fast_repos, fast_states, hints.seq, hints.slug)
         if matches:
             return _disambiguate(fuzzy_path, matches, sorted(fast_repos))
 
@@ -939,11 +950,16 @@ def resolve_plan(
         ),
         _Source(
             label="git",
-            constraint=_from_git_history(project_dir, hints.seq, hints.slug, provides_repo=git_provides_worktree),
+            constraint=_from_git_history(layout, hints.seq, hints.slug, provides_repo=git_provides_worktree),
         ),
         _Source(
             label="audit",
-            constraint=_from_audit_log(project_dir, hints.seq, audit_mapping, path_provides_repos=path_provides_repos),
+            constraint=_from_audit_log(
+                layout.project_dir,
+                hints.seq,
+                audit_mapping,
+                path_provides_repos=path_provides_repos,
+            ),
         ),
         _Source(label="tmux", constraint=_from_tmux(config)),
     ]
@@ -956,5 +972,5 @@ def resolve_plan(
 
     effective_repos = repos if repos is not None else _ALL_REPOS
     effective_states = states if states is not None else _ALL_STATES
-    matches = _filesystem_matches(project_dir, effective_repos, effective_states, hints.seq, hints.slug)
+    matches = _filesystem_matches(layout, effective_repos, effective_states, hints.seq, hints.slug)
     return _disambiguate(fuzzy_path, matches, sorted(effective_repos))

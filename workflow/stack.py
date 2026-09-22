@@ -10,6 +10,7 @@ discover a stack's other members. Imports :mod:`workflow.frontmatter` and
 from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003 - used at runtime by Pydantic
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
@@ -19,6 +20,9 @@ from workflow.models import Plan, PlanState, Review
 from workflow.names import DOCS_REPO, WorktreeName
 from workflow.plan_resolver import find_all_plans_in_worktree
 from workflow.state import locate_plan_file
+
+if TYPE_CHECKING:
+    from workflow.layout import Layout
 
 BRANCH_PREFIX = "feat/"
 
@@ -59,28 +63,28 @@ def _read_frontmatter_cached(path: Path) -> PlanFrontmatter | None:
     return parsed
 
 
-def read_plan_frontmatter(project_dir: Path, plan: Plan) -> PlanFrontmatter | None:
+def read_plan_frontmatter(layout: Layout, plan: Plan) -> PlanFrontmatter | None:
     """Return *plan*'s parsed frontmatter, or ``None`` if it has none.
 
     Reads from *plan*'s resolved path, falling back to canon by file name: during a
     stack's life canon's ``main`` and the branch disagree about state directories.
     """
-    path = project_dir / plan.path
+    path = layout.project_dir / plan.path
     if not path.is_file():
-        located = locate_plan_file(project_dir, WorktreeName.canon, plan.path.name)
+        located = locate_plan_file(layout, WorktreeName.canon, plan.path.name)
         if located is None:
             return None
         path = located
     return _read_frontmatter_cached(path)
 
 
-def branch_for_plan(project_dir: Path, plan: Plan) -> str:
+def branch_for_plan(layout: Layout, plan: Plan) -> str:
     """Return the git branch *plan* lives (or will live) on.
 
     One frontmatter read, no chain walk -- this is why the resolved branch is stored
     rather than derived: a broken ``onto`` must not make a plan unroutable.
     """
-    fm = read_plan_frontmatter(project_dir, plan)
+    fm = read_plan_frontmatter(layout, plan)
     if fm is not None:
         repo_branch = fm.branches.get(DOCS_REPO)
         if repo_branch is not None:
@@ -101,7 +105,7 @@ def _normalize_stack_reference(reference: str) -> str:
     return normalized
 
 
-def find_stack_member(project_dir: Path, reference: str, prefer_repo: WorktreeName = WorktreeName.canon) -> Plan | None:
+def find_stack_member(layout: Layout, reference: str, prefer_repo: WorktreeName = WorktreeName.canon) -> Plan | None:
     """Find the plan named by a stack reference (`onto` value or `--onto` argument).
 
     Matches the canonical plan name, or the (optionally unpadded) sequence number for a
@@ -110,11 +114,9 @@ def find_stack_member(project_dir: Path, reference: str, prefer_repo: WorktreeNa
     base must still be findable so a stack with such a member does not become unresolvable.
     """
     normalized = _normalize_stack_reference(reference)
-    for repo in dict.fromkeys([prefer_repo, WorktreeName.canon]):
+    for worktree in dict.fromkeys([prefer_repo, WorktreeName.canon]):
         candidates = [
-            candidate
-            for candidate in find_all_plans_in_worktree(project_dir, repo)
-            if not isinstance(candidate, Review)
+            candidate for candidate in find_all_plans_in_worktree(layout, worktree) if not isinstance(candidate, Review)
         ]
         for candidate in candidates:
             if candidate.name == normalized:
@@ -125,7 +127,7 @@ def find_stack_member(project_dir: Path, reference: str, prefer_repo: WorktreeNa
     return None
 
 
-def resolve_stack(project_dir: Path, plan: Plan) -> list[Plan]:
+def resolve_stack(layout: Layout, plan: Plan) -> list[Plan]:
     """Resolve the full stack *plan* belongs to, base-first, including *plan* itself.
 
     Walks ``onto`` upward. Raises :class:`WorkflowError` on a cycle, an unresolvable
@@ -135,7 +137,7 @@ def resolve_stack(project_dir: Path, plan: Plan) -> list[Plan]:
     seen: set[str] = {plan.name}
     current = plan
     while True:
-        fm = read_plan_frontmatter(project_dir, current)
+        fm = read_plan_frontmatter(layout, current)
         onto = fm.onto if fm is not None else None
         if onto is None:
             break
@@ -148,7 +150,7 @@ def resolve_stack(project_dir: Path, plan: Plan) -> list[Plan]:
         # Plan paths are repo-prefixed; fall back to canon rather than crash on a hand-built path.
         head = current.path.parts[0] if current.path.parts else ""
         prefer_repo = WorktreeName(head) if head in WorktreeName.__members__ else WorktreeName.canon
-        base_plan = find_stack_member(project_dir, onto, prefer_repo=prefer_repo)
+        base_plan = find_stack_member(layout, onto, prefer_repo=prefer_repo)
         if base_plan is None:
             msg = (
                 f"{current.name}'s onto={onto!r} does not resolve to a plan: "
@@ -162,7 +164,7 @@ def resolve_stack(project_dir: Path, plan: Plan) -> list[Plan]:
     return chain
 
 
-def _stackable_plans(project_dir: Path) -> list[Plan]:
+def _stackable_plans(layout: Layout) -> list[Plan]:
     """Canon's plans that can take part in a stack: no reviews, no rejected plans.
 
     Rejected plans are ignored, which is what makes "reject the tip, then accept the
@@ -170,36 +172,34 @@ def _stackable_plans(project_dir: Path) -> list[Plan]:
     """
     return [
         candidate
-        for candidate in find_all_plans_in_worktree(project_dir, WorktreeName.canon)
+        for candidate in find_all_plans_in_worktree(layout, WorktreeName.canon)
         if not isinstance(candidate, Review) and candidate.state != PlanState.REJECTED
     ]
 
 
-def _children_by_onto(project_dir: Path) -> dict[str, Plan]:
+def _children_by_onto(layout: Layout) -> dict[str, Plan]:
     """Map each stacked-onto plan name to the plan stacked on it -- one scan for all lookups."""
     children: dict[str, Plan] = {}
-    for candidate in _stackable_plans(project_dir):
-        fm = read_plan_frontmatter(project_dir, candidate)
+    for candidate in _stackable_plans(layout):
+        fm = read_plan_frontmatter(layout, candidate)
         if fm is not None and fm.onto is not None and fm.onto != candidate.name:
             children[fm.onto] = candidate
     return children
 
 
-def stack_child(project_dir: Path, plan: Plan) -> Plan | None:
+def stack_child(layout: Layout, plan: Plan) -> Plan | None:
     """Return the non-rejected plan whose ``onto`` is *plan*, or ``None``."""
-    return _children_by_onto(project_dir).get(plan.name)
+    return _children_by_onto(layout).get(plan.name)
 
 
-def tip_plan_for_branch(project_dir: Path, branch: str) -> Plan | None:
+def tip_plan_for_branch(layout: Layout, branch: str) -> Plan | None:
     """Return the tip plan (the stack member with no child) resolving to *branch*, or ``None``.
 
     Raises :class:`WorkflowError` when plans claim *branch* but none of them is a tip,
     which means their ``onto`` chain is cyclic.
     """
-    children = _children_by_onto(project_dir)
-    candidates = [
-        candidate for candidate in _stackable_plans(project_dir) if branch_for_plan(project_dir, candidate) == branch
-    ]
+    children = _children_by_onto(layout)
+    candidates = [candidate for candidate in _stackable_plans(layout) if branch_for_plan(layout, candidate) == branch]
     if not candidates:
         return None
     tips = [candidate for candidate in candidates if candidate.name not in children]
@@ -210,19 +210,19 @@ def tip_plan_for_branch(project_dir: Path, branch: str) -> Plan | None:
     return tips[0]
 
 
-def stack_entries(project_dir: Path, plan: Plan) -> list[StackEntry]:
+def stack_entries(layout: Layout, plan: Plan) -> list[StackEntry]:
     """Return prompt-rendering entries for *plan*'s stack, base-first, *plan* itself last.
 
     Empty for an unstacked plan. ``commit_range`` is assembled from the frontmatter
     anchors only (no git calls): member *i* spans ``base(i)..base(i+1)``, the root
     starts at ``origin/main``, the tip ends at ``HEAD``.
     """
-    chain = resolve_stack(project_dir, plan)
+    chain = resolve_stack(layout, plan)
     if len(chain) == 1:
         return []
     bases: list[str] = []
     for member in chain[1:]:
-        fm = read_plan_frontmatter(project_dir, member)
+        fm = read_plan_frontmatter(layout, member)
         repo_branch = fm.branches.get(DOCS_REPO) if fm is not None else None
         if repo_branch is None:
             msg = f"{member.name} is stacked but has no recorded branch base"

@@ -11,6 +11,7 @@ import pytest
 import workflow.validate as dc
 from workflow.config import AgentConfig, StateConfig, WorkflowConfig
 from workflow.exceptions import WorkflowError
+from workflow.metadata import ProjectMetadata
 from workflow.models import Plan, PlanState
 
 
@@ -18,6 +19,7 @@ def _config(project_dir: Path) -> WorkflowConfig:
     return WorkflowConfig(
         project_dir=project_dir,
         project_name="workflow",
+        metadata=ProjectMetadata(),
         agents=[
             AgentConfig(name="planner", model="test"),
             AgentConfig(name="builder", model="test"),
@@ -183,7 +185,7 @@ def test_validate_wraps_fetch_failure(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(dc, "git_fetch", lambda _repo: (_ for _ in ()).throw(subprocess.CalledProcessError(1, ["git"])))
 
     with pytest.raises(WorkflowError, match="git fetch failed"):
-        dc.validate(_plan(PlanState.PLANNING, "planner"), tmp_path, config)
+        dc.validate(_plan(PlanState.PLANNING, "planner"), config)
 
 
 def test_validate_wraps_diff_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -197,4 +199,4 @@ def test_validate_wraps_diff_failure(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(dc, "git_diff_branch", raise_diff)
 
     with pytest.raises(WorkflowError, match="git diff failed"):
-        dc.validate(_plan(PlanState.PLANNING, "planner"), tmp_path, config)
+        dc.validate(_plan(PlanState.PLANNING, "planner"), config)

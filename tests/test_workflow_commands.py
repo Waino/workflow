@@ -13,7 +13,7 @@ from click.testing import CliRunner
 
 import workflow.commands.info as wi
 import workflow.commands.workflow as wc
-from tests.conftest import create_project_marker
+from tests.conftest import create_project_marker, make_layout
 from workflow import git_helpers, main
 from workflow.audit import read_audit_log, write_audit_log
 from workflow.commands.info import _parse_datetime
@@ -634,7 +634,7 @@ def test_next_intent_number_accounts_for_plans_and_audit_log(tmp_path: Path) -> 
             output_plans=["002_bar"],
         ),
     )
-    assert next_intent_number(tmp_path) == 3
+    assert next_intent_number(make_layout(tmp_path)) == 3
 
 
 # ---------------------------------------------------------------------------

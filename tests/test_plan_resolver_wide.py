@@ -383,14 +383,15 @@ def config(world: Path) -> WorkflowConfig:
 
 
 @pytest.mark.parametrize("case", _CASES, ids=lambda c: c.case_id)
-def test_wide_resolver_matrix(case: ResolverCase, world: Path, config: WorkflowConfig) -> None:
+def test_wide_resolver_matrix(case: ResolverCase, world: Path, config: WorkflowConfig) -> None:  # noqa: ARG001
+    # world: unused directly (resolve_plan takes config only) but required to trigger the
+    # module-scoped fixture that populates config.project_dir's filesystem.
     seq = case.plan_id.split("_", 1)[0]  # "001_idea" → "001"
     fuzzy = case.fuzzy_input if case.fuzzy_input is not None else seq
     if case.expected_error is not None:
         with pytest.raises(case.expected_error):
             resolve_plan(
                 fuzzy,
-                world,
                 config=config,
                 command_name=case.command,
                 git_provides_worktree=case.git_provides_worktree,
@@ -398,7 +399,6 @@ def test_wide_resolver_matrix(case: ResolverCase, world: Path, config: WorkflowC
         return
     plan = resolve_plan(
         fuzzy,
-        world,
         config=config,
         command_name=case.command,
         git_provides_worktree=case.git_provides_worktree,

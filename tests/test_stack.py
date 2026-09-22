@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import make_layout
 from workflow.exceptions import WorkflowError
 from workflow.frontmatter import PlanFrontmatter, RepoBranch, render_frontmatter
 from workflow.models import Plan, PlanState
@@ -63,7 +64,7 @@ def _make_plan(  # noqa: PLR0913 - test helper, kept explicit rather than bundli
 def test_branch_for_plan_defaults_without_frontmatter(tmp_path: Path) -> None:
     plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
 
-    assert branch_for_plan(tmp_path, plan) == "feat/001_base"
+    assert branch_for_plan(make_layout(tmp_path), plan) == "feat/001_base"
 
 
 def test_branch_for_plan_uses_recorded_branch(tmp_path: Path) -> None:
@@ -77,7 +78,7 @@ def test_branch_for_plan_uses_recorded_branch(tmp_path: Path) -> None:
         base="abc1234",
     )
 
-    assert branch_for_plan(tmp_path, plan) == "feat/001_base"
+    assert branch_for_plan(make_layout(tmp_path), plan) == "feat/001_base"
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +89,7 @@ def test_branch_for_plan_uses_recorded_branch(tmp_path: Path) -> None:
 def test_resolve_stack_depth_one_unstacked(tmp_path: Path) -> None:
     plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
 
-    stack = resolve_stack(tmp_path, plan)
+    stack = resolve_stack(make_layout(tmp_path), plan)
 
     assert [p.name for p in stack] == ["001_base"]
 
@@ -105,7 +106,7 @@ def test_resolve_stack_depth_two(tmp_path: Path) -> None:
         base="abc1234",
     )
 
-    stack = resolve_stack(tmp_path, stacked)
+    stack = resolve_stack(make_layout(tmp_path), stacked)
 
     assert [p.name for p in stack] == ["001_base", "002_stacked"]
 
@@ -131,7 +132,7 @@ def test_resolve_stack_depth_three(tmp_path: Path) -> None:
         base="c1",
     )
 
-    stack = resolve_stack(tmp_path, tip)
+    stack = resolve_stack(make_layout(tmp_path), tip)
 
     assert [p.name for p in stack] == ["001_base", "002_middle", "003_tip"]
 
@@ -141,7 +142,7 @@ def test_resolve_stack_cycle_raises(tmp_path: Path) -> None:
     _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "002_b.md", onto="001_a", branch="feat/001_a", base="y")
 
     with pytest.raises(WorkflowError, match="cycle"):
-        resolve_stack(tmp_path, a)
+        resolve_stack(make_layout(tmp_path), a)
 
 
 def test_resolve_stack_unresolvable_onto_raises(tmp_path: Path) -> None:
@@ -156,7 +157,7 @@ def test_resolve_stack_unresolvable_onto_raises(tmp_path: Path) -> None:
     )
 
     with pytest.raises(WorkflowError, match="999_missing"):
-        resolve_stack(tmp_path, plan)
+        resolve_stack(make_layout(tmp_path), plan)
 
 
 def test_resolve_stack_depth_cap_raises(tmp_path: Path) -> None:
@@ -184,7 +185,7 @@ def test_resolve_stack_depth_cap_raises(tmp_path: Path) -> None:
     )
 
     with pytest.raises(WorkflowError, match="depth"):
-        resolve_stack(tmp_path, tip)
+        resolve_stack(make_layout(tmp_path), tip)
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +196,7 @@ def test_resolve_stack_depth_cap_raises(tmp_path: Path) -> None:
 def test_find_stack_member_matches_canonical_name(tmp_path: Path) -> None:
     plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
 
-    result = find_stack_member(tmp_path, "001_base")
+    result = find_stack_member(make_layout(tmp_path), "001_base")
 
     assert result is not None
     assert result.name == plan.name
@@ -205,7 +206,7 @@ def test_find_stack_member_matches_canonical_name(tmp_path: Path) -> None:
 def test_find_stack_member_matches_padded_or_unpadded_sequence_number(tmp_path: Path, reference: str) -> None:
     plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
 
-    result = find_stack_member(tmp_path, reference)
+    result = find_stack_member(make_layout(tmp_path), reference)
 
     assert result is not None
     assert result.name == plan.name
@@ -214,7 +215,7 @@ def test_find_stack_member_matches_padded_or_unpadded_sequence_number(tmp_path: 
 def test_find_stack_member_matches_unpadded_hierarchical_sequence_number(tmp_path: Path) -> None:
     plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "023.1_sub.md")
 
-    result = find_stack_member(tmp_path, "23.1")
+    result = find_stack_member(make_layout(tmp_path), "23.1")
 
     assert result is not None
     assert result.name == plan.name
@@ -227,7 +228,7 @@ def test_find_stack_member_matches_unpadded_hierarchical_sequence_number(tmp_pat
 def test_find_stack_member_normalizes_reference_forms(tmp_path: Path, reference: str) -> None:
     plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
 
-    result = find_stack_member(tmp_path, reference)
+    result = find_stack_member(make_layout(tmp_path), reference)
 
     assert result is not None
     assert result.name == plan.name
@@ -236,14 +237,14 @@ def test_find_stack_member_normalizes_reference_forms(tmp_path: Path, reference:
 def test_find_stack_member_none_when_missing(tmp_path: Path) -> None:
     _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
 
-    assert find_stack_member(tmp_path, "999_missing") is None
+    assert find_stack_member(make_layout(tmp_path), "999_missing") is None
 
 
 def test_find_stack_member_finds_rejected_base(tmp_path: Path) -> None:
     """A rejected base must still resolve, or a stack with such a member becomes unresolvable."""
     plan = _make_plan(tmp_path, "canon", PlanState.REJECTED, "001_base.md")
 
-    result = find_stack_member(tmp_path, "001_base")
+    result = find_stack_member(make_layout(tmp_path), "001_base")
 
     assert result is not None
     assert result.name == plan.name
@@ -266,7 +267,7 @@ def test_resolve_stack_prefers_referring_plans_own_repo(tmp_path: Path) -> None:
         base="abc1234",
     )
 
-    stack = resolve_stack(tmp_path, stacked)
+    stack = resolve_stack(make_layout(tmp_path), stacked)
 
     assert [p.name for p in stack] == ["001_base", "002_stacked"]
     assert stack[0].path.parts[0] == WorktreeName.builder
@@ -280,7 +281,7 @@ def test_resolve_stack_prefers_referring_plans_own_repo(tmp_path: Path) -> None:
 def test_stack_child_none_when_unstacked(tmp_path: Path) -> None:
     base = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
 
-    assert stack_child(tmp_path, base) is None
+    assert stack_child(make_layout(tmp_path), base) is None
 
 
 def test_stack_child_ignores_rejected(tmp_path: Path) -> None:
@@ -295,7 +296,7 @@ def test_stack_child_ignores_rejected(tmp_path: Path) -> None:
         base="abc",
     )
 
-    assert stack_child(tmp_path, base) is None
+    assert stack_child(make_layout(tmp_path), base) is None
 
 
 def test_stack_child_returns_active_child(tmp_path: Path) -> None:
@@ -310,7 +311,7 @@ def test_stack_child_returns_active_child(tmp_path: Path) -> None:
         base="abc",
     )
 
-    result = stack_child(tmp_path, base)
+    result = stack_child(make_layout(tmp_path), base)
 
     assert result is not None
     assert result.name == child.name
@@ -324,7 +325,7 @@ def test_stack_child_returns_active_child(tmp_path: Path) -> None:
 def test_tip_plan_for_branch_unstacked(tmp_path: Path) -> None:
     plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
 
-    result = tip_plan_for_branch(tmp_path, "feat/001_base")
+    result = tip_plan_for_branch(make_layout(tmp_path), "feat/001_base")
 
     assert result is not None
     assert result.name == plan.name
@@ -342,7 +343,7 @@ def test_tip_plan_for_branch_returns_the_tip_of_a_stack(tmp_path: Path) -> None:
         base="abc",
     )
 
-    result = tip_plan_for_branch(tmp_path, "feat/001_base")
+    result = tip_plan_for_branch(make_layout(tmp_path), "feat/001_base")
 
     assert result is not None
     assert result.name == tip.name
@@ -351,7 +352,7 @@ def test_tip_plan_for_branch_returns_the_tip_of_a_stack(tmp_path: Path) -> None:
 def test_tip_plan_for_branch_none_when_no_match(tmp_path: Path) -> None:
     _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
 
-    assert tip_plan_for_branch(tmp_path, "feat/999_missing") is None
+    assert tip_plan_for_branch(make_layout(tmp_path), "feat/999_missing") is None
 
 
 # ---------------------------------------------------------------------------
@@ -362,7 +363,7 @@ def test_tip_plan_for_branch_none_when_no_match(tmp_path: Path) -> None:
 def test_stack_entries_empty_when_unstacked(tmp_path: Path) -> None:
     plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
 
-    assert stack_entries(tmp_path, plan) == []
+    assert stack_entries(make_layout(tmp_path), plan) == []
 
 
 def test_stack_entries_commit_ranges_for_three_plan_stack(tmp_path: Path) -> None:
@@ -386,7 +387,7 @@ def test_stack_entries_commit_ranges_for_three_plan_stack(tmp_path: Path) -> Non
         base="c1",
     )
 
-    entries = stack_entries(tmp_path, tip)
+    entries = stack_entries(make_layout(tmp_path), tip)
 
     assert [(e.name, e.commit_range) for e in entries] == [
         ("001_base", "origin/main..b1"),
@@ -421,7 +422,7 @@ def test_tip_plan_for_branch_raises_when_every_candidate_has_a_child(tmp_path: P
     _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "002_b.md", onto="001_a", branch="feat/001_a", base="y")
 
     with pytest.raises(WorkflowError, match="cyclic"):
-        tip_plan_for_branch(tmp_path, "feat/001_a")
+        tip_plan_for_branch(make_layout(tmp_path), "feat/001_a")
 
 
 def test_stack_child_ignores_a_plan_pointing_at_itself(tmp_path: Path) -> None:
@@ -436,18 +437,18 @@ def test_stack_child_ignores_a_plan_pointing_at_itself(tmp_path: Path) -> None:
         base="abc",
     )
 
-    assert stack_child(tmp_path, plan) is None
+    assert stack_child(make_layout(tmp_path), plan) is None
 
 
 def test_read_plan_frontmatter_sees_a_rewrite(tmp_path: Path) -> None:
     """The parse cache is keyed on file identity, so a rewritten plan file is re-read."""
     plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "002_stacked.md")
-    assert read_plan_frontmatter(tmp_path, plan) is None
+    assert read_plan_frontmatter(make_layout(tmp_path), plan) is None
 
     path = tmp_path / plan.path
     fm = PlanFrontmatter(onto="001_base", branches={"docs": RepoBranch(branch="feat/001_base", base="abc1234")})
     path.write_text(render_frontmatter(fm) + path.read_text(encoding="utf-8"), encoding="utf-8")
 
-    reread = read_plan_frontmatter(tmp_path, plan)
+    reread = read_plan_frontmatter(make_layout(tmp_path), plan)
     assert reread is not None
     assert reread.onto == "001_base"

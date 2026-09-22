@@ -47,8 +47,8 @@ CONTROL_PANE_OPTION = "@workflow_control_pane"
 
 _TMUX_HINT = "Run 'workflow start' to create the tmux session."
 
-# Reverse map: which workflow repo serves each prompt-eligible plan state.
-_REPO_FOR_PROMPT_STATE: dict[PlanState, WorktreeName] = {
+# Reverse map: which worktree serves each prompt-eligible plan state.
+_WORKTREE_FOR_PROMPT_STATE: dict[PlanState, WorktreeName] = {
     PlanState.INTENT: WorktreeName.planner,
     PlanState.PLANNING: WorktreeName.planner,
     PlanState.TODO: WorktreeName.canon,
@@ -58,10 +58,10 @@ _REPO_FOR_PROMPT_STATE: dict[PlanState, WorktreeName] = {
 }
 
 
-def _repo_for_prompt_state(state: PlanState) -> WorktreeName:
-    """Return the workflow repo that owns prompt dispatch for *state*."""
+def _worktree_for_prompt_state(state: PlanState) -> WorktreeName:
+    """Return the worktree that owns prompt dispatch for *state*."""
     try:
-        return _REPO_FOR_PROMPT_STATE[state]
+        return _WORKTREE_FOR_PROMPT_STATE[state]
     except KeyError as exc:
         msg = f"Prompt dispatch is not supported for state '{state.value}'."
         raise WorkflowError(msg) from exc
@@ -75,7 +75,7 @@ class _PromptTarget(BaseModel):
     command: PromptCommand
     state: PlanState
     agent_name: str | None
-    repo_name: WorktreeName
+    worktree_name: WorktreeName
     has_plan: bool
 
 
@@ -85,7 +85,7 @@ class _PromptContext(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     agent_name: str
-    repo_name: WorktreeName
+    worktree_name: WorktreeName
     prompt: str
     audit_input_plan: str | None = None
 
@@ -102,7 +102,7 @@ def _collect_prompt_targets(config: WorkflowConfig) -> dict[str, list[_PromptTar
                     command=cmd,
                     state=state,
                     agent_name=state_config.agent,
-                    repo_name=_repo_for_prompt_state(state),
+                    worktree_name=_worktree_for_prompt_state(state),
                     has_plan=state != PlanState.REVIEW,
                 ),
             )
@@ -144,29 +144,27 @@ def _resolve_plan_target(
     cmd_name: str,
     plan_path_str: str,
 ) -> tuple[_PromptTarget, Plan]:
-    """Resolve the plan and pick the prompt target for *cmd_name* in the plan's repo."""
-    assert config.project_dir is not None
+    """Resolve the plan and pick the prompt target for *cmd_name* in the plan's worktree."""
     targets = [target for target in _collect_prompt_targets(config).get(cmd_name, []) if target.has_plan]
     if not targets:
         msg = f"No '{cmd_name}' command found."
         raise WorkflowError(msg)
 
-    plan = resolve_plan(plan_path_str, config.project_dir, config=config, command_name=cmd_name)
-    plan_repo = plan.path.parts[0]
+    plan = resolve_plan(plan_path_str, config=config, command_name=cmd_name)
+    plan_worktree = plan.path.parts[0]
     for target in targets:
-        if target.repo_name == plan_repo:
+        if target.worktree_name == plan_worktree:
             return target, plan
     # Fall back to the first defined target — the resolver already restricted to valid repos.
     return targets[0], plan
 
 
 def _git_metadata(target: _PromptTarget, config: WorkflowConfig, *, dry_run: bool) -> tuple[str, str]:
-    """Return branch and commit metadata for the prompt target repo."""
+    """Return branch and commit metadata for the prompt target worktree."""
     if dry_run:
         return "<dry-run-branch>", "<dry-run-commit>"
 
-    assert config.project_dir is not None
-    repo_path = config.project_dir / target.repo_name
+    repo_path = config.layout().git_repo_root(target.worktree_name)
     try:
         return git_current_branch(repo_path), git_commit_hash(repo_path)
     except subprocess.CalledProcessError as exc:
@@ -195,16 +193,16 @@ def _setup_has_plan(
         error_console.print(f"Plan resolved to: {plan.path}")
         error_console.print(f"[red]No agent configured for state '{plan.state.value}'.[/red]")
         return None
-    assert config.project_dir is not None
+    layout = config.layout()
     try:
         if target.state == PlanState.CHECKING and cmd_name not in _STACK_TIP_EXEMPT_COMMANDS:
-            child = stack_child(config.project_dir, plan)
+            child = stack_child(layout, plan)
             if child is not None:
                 msg = f"{plan.name} has {child.name} stacked on it; run this command on {child.name} instead."
                 raise WorkflowError(msg)
         branch, commit = _git_metadata(target, config, dry_run=dry_run)
         today = datetime.now(tz=UTC).date().isoformat()
-        stack = stack_entries(config.project_dir, plan)
+        stack = stack_entries(layout, plan)
         rendered = _render_prompt(
             target.command.prompt,
             plan=plan,
@@ -221,7 +219,7 @@ def _setup_has_plan(
         return None
     return _PromptContext(
         agent_name=target.agent_name,
-        repo_name=target.repo_name,
+        worktree_name=target.worktree_name,
         prompt=rendered,
         audit_input_plan=plan.name,
     )
@@ -253,7 +251,7 @@ def _setup_stateless(
     except WorkflowError as exc:
         print_workflow_error(exc)
         return None
-    return _PromptContext(agent_name=target.agent_name, repo_name=target.repo_name, prompt=rendered)
+    return _PromptContext(agent_name=target.agent_name, worktree_name=target.worktree_name, prompt=rendered)
 
 
 def _dispatch_prompt(
@@ -282,17 +280,18 @@ def _dispatch_prompt(
         return 1
 
     agent_name = result.agent_name
-    repo_name = result.repo_name
+    worktree_name = result.worktree_name
     prompt = result.prompt
     audit_input_plan = result.audit_input_plan
 
+    repo_path = config.layout().git_repo_root(worktree_name)
     try:
-        git_pull(config.project_dir / repo_name, dry_run=dry_run, skip_if_no_upstream=True)
+        git_pull(repo_path, dry_run=dry_run, skip_if_no_upstream=True)
         # An agent asked to rebase (the 'rebase' prompt) needs a current origin/main;
         # the plain pull above only advances the checked-out branch.
-        refresh_main(config.project_dir / repo_name, dry_run=dry_run)
+        refresh_main(repo_path, dry_run=dry_run)
     except subprocess.CalledProcessError as exc:
-        error_console.print(f"[red]git sync failed in {config.project_dir / repo_name}: {exc}[/red]")
+        error_console.print(f"[red]git sync failed in {repo_path}: {exc}[/red]")
         return 1
 
     if edit_mode:

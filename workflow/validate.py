@@ -22,6 +22,7 @@ from workflow.names import WorktreeName
 
 if TYPE_CHECKING:
     from workflow.config import WorkflowConfig
+    from workflow.layout import Layout
     from workflow.models import Plan
 
 CHECK_NAMES: list[str] = ["file-scope", "noqa-nosec", "git-hooks", "agents-md"]
@@ -63,9 +64,22 @@ def infer_target_worktree(
     return state_cfg.agent
 
 
+def _repo_path(layout: Layout, target_repo: WorktreeName | str) -> Path:
+    """Resolve *target_repo* to a directory, via the layout when it names a real worktree.
+
+    Falls back to a direct join for a custom agent name with no matching worktree
+    (e.g. a manual-shell-only agent) -- the same latitude the plain path join gave it
+    before the layout refactor.
+    """
+    try:
+        worktree = WorktreeName(target_repo)
+    except ValueError:
+        return layout.project_dir / target_repo
+    return layout.git_repo_root(worktree)
+
+
 def validate(
     plan: Plan,
-    project_dir: Path,
     config: WorkflowConfig,
     *,
     target_worktree_override: WorktreeName | str | None = None,
@@ -77,8 +91,9 @@ def validate(
     Missing prerequisites (missing hash file, fetch failure) raise
     :class:`~workflow.exceptions.WorkflowError`.
     """
+    layout = config.layout()
     target_repo = infer_target_worktree(plan, config, target_worktree_override)
-    repo_path = project_dir / target_repo
+    repo_path = _repo_path(layout, target_repo)
 
     if dry_run:
         return []
@@ -96,7 +111,7 @@ def validate(
         _check_file_scope(changed_files, target_repo),
         _check_noqa_nosec(full_diff),
         _check_git_hooks(repo_path, config),
-        _check_agents_md(repo_path, project_dir, changed_files),
+        _check_agents_md(repo_path, layout.project_dir, changed_files),
     ]
 
 

@@ -24,6 +24,9 @@ from workflow.agents_md import (
 )
 from workflow.config import WorkflowConfig
 from workflow.exceptions import AgentsMdGenerationError, WorkflowError
+from workflow.layout import Layout
+from workflow.metadata import ProjectMetadata
+from workflow.names import WorktreeName
 from workflow.registry import register_script
 
 
@@ -53,7 +56,11 @@ def prepare_agents_md_update(
         msg = "config.project_dir must be set to generate AGENTS.md."
         raise AgentsMdGenerationError(msg)
     project_dir = config.project_dir
-    resolved_path = agents_md_path or (project_dir / "canon" / "AGENTS.md")
+    # in-band is the only mode init/agents_md support so far (--oob lands in 023.4); a fresh
+    # default metadata is used here rather than config.metadata since generate_and_write_agents_md
+    # is also called from `init`, before .workflow.json exists.
+    layout = Layout(project_dir=project_dir, metadata=config.metadata or ProjectMetadata())
+    resolved_path = agents_md_path or (layout.worktree_root(WorktreeName.canon) / "AGENTS.md")
     config_yaml_path = project_dir / "config.yaml"
     hash_file_path = project_dir / ".agents_md_hash"
 

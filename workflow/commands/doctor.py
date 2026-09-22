@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from workflow.config import WorkflowConfig
+    from workflow.layout import Layout
     from workflow.models import Plan
 
 _ACTIVE_FEATURE_BRANCH_STATES = (PlanState.IMPLEMENTING, PlanState.CHECKING)
@@ -63,21 +64,21 @@ class WorktreeCheck:
     """Informational, non-anomalous observations -- rendered but excluded from the exit code."""
 
 
-def _active_branches(project_dir: Path) -> set[str]:
+def _active_branches(layout: Layout) -> set[str]:
     """Return `plan/<name>`/stack branches expected for plans currently in flight."""
     branches: set[str] = set()
-    for repo in WorktreeName:
-        if not (project_dir / repo).is_dir():
+    for worktree in WorktreeName:
+        if not layout.worktree_root(worktree).is_dir():
             continue
         try:
-            plans = find_all_plans_in_worktree(project_dir, repo)
+            plans = find_all_plans_in_worktree(layout, worktree)
         except PlanCollisionError:
             continue
         for plan in plans:
             if plan.state == PlanState.PLANNING:
                 branches.add(f"plan/{plan.name}")
             elif plan.state in _ACTIVE_FEATURE_BRANCH_STATES:
-                branches.add(branch_for_plan(project_dir, plan))
+                branches.add(branch_for_plan(layout, plan))
     return branches
 
 
@@ -148,14 +149,14 @@ def _check_worktree(
     return check
 
 
-def _duplicate_plan_anomalies(project_dir: Path) -> list[str]:
+def _duplicate_plan_anomalies(layout: Layout) -> list[str]:
     """Return one message per plan that appears under more than one state dir in the same repo."""
     anomalies: list[str] = []
     for repo in WorktreeName:
-        if not (project_dir / repo).is_dir():
+        if not layout.worktree_root(repo).is_dir():
             continue
         try:
-            plans = find_all_plans_in_worktree(project_dir, repo)
+            plans = find_all_plans_in_worktree(layout, repo)
         except PlanCollisionError as exc:
             anomalies.append(f"{repo}: sequence number collision on {exc.sequence_number!r}")
             continue
@@ -178,39 +179,43 @@ def _legacy_marker_anomalies(project_dir: Path) -> list[str]:
     return []
 
 
-def _branch_exists_anywhere(project_dir: Path, branch: str) -> bool:
-    """Return whether *branch* exists in bare or in any repo worktree.
+def _branch_exists_anywhere(layout: Layout, branch: str) -> bool:
+    """Return whether *branch* exists in bare or in any worktree.
 
     ponytail: one git process per repo per queried branch; fine for a handful of
     in-flight plans, would want a single `for-each-ref` per repo if that grows.
     """
-    bare_path = project_dir / "bare"
+    bare_path = layout.bare_repo()
     if bare_path.is_dir() and git_branch_exists(bare_path, branch):
         return True
-    return any(git_branch_exists(project_dir / repo, branch) for repo in WorktreeName if (project_dir / repo).is_dir())
+    return any(
+        git_branch_exists(layout.git_repo_root(worktree), branch)
+        for worktree in WorktreeName
+        if layout.worktree_root(worktree).is_dir()
+    )
 
 
-def _stack_anomalies(project_dir: Path, config: WorkflowConfig) -> list[str]:
+def _stack_anomalies(layout: Layout, config: WorkflowConfig) -> list[str]:
     """Return one message per stack-related anomaly.
 
     Covers a broken `onto`, an orphaned stack branch, or a `branches` entry pointing at a
     branch that exists nowhere.
     """
     try:
-        plans = [p for p in find_all_plans_in_worktree(project_dir, WorktreeName.canon) if p.state in _PIPELINE_STATES]
+        plans = [p for p in find_all_plans_in_worktree(layout, WorktreeName.canon) if p.state in _PIPELINE_STATES]
     except PlanCollisionError:
         return []  # already reported by _duplicate_plan_anomalies
 
     anomalies: list[str] = []
     branch_members: dict[str, list[Plan]] = defaultdict(list)
     for plan in plans:
-        fm = read_plan_frontmatter(project_dir, plan)
-        branch_members[branch_for_plan(project_dir, plan)].append(plan)
+        fm = read_plan_frontmatter(layout, plan)
+        branch_members[branch_for_plan(layout, plan)].append(plan)
         if fm is None:
             continue
         if fm.onto is not None:
             try:
-                resolve_plan(fm.onto, project_dir, config=config)
+                resolve_plan(fm.onto, config=config)
             except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError, WorkflowError):
                 anomalies.append(f"{plan.name}: onto={fm.onto!r} does not resolve to a plan")
         repo_branch = fm.branches.get(DOCS_REPO)
@@ -219,12 +224,12 @@ def _stack_anomalies(project_dir: Path, config: WorkflowConfig) -> list[str]:
         if (
             repo_branch is not None
             and plan.state in _ACTIVE_FEATURE_BRANCH_STATES
-            and not _branch_exists_anywhere(project_dir, repo_branch.branch)
+            and not _branch_exists_anywhere(layout, repo_branch.branch)
         ):
             anomalies.append(f"{plan.name}: recorded branch {repo_branch.branch!r} exists nowhere")
 
     for branch, members in branch_members.items():
-        if not branch.startswith(BRANCH_PREFIX) or not _branch_exists_anywhere(project_dir, branch):
+        if not branch.startswith(BRANCH_PREFIX) or not _branch_exists_anywhere(layout, branch):
             continue
         if all(member.state in (PlanState.DONE, PlanState.REJECTED) for member in members):
             anomalies.append(f"{branch}: exists but every plan on it is done/rejected")
@@ -266,23 +271,24 @@ def doctor(ctx: click.Context) -> None:
         ctx.exit(1)
         return
     project_dir: Path = config.project_dir
-    bare_path = project_dir / "bare"
+    layout = config.layout()
+    bare_path = layout.bare_repo()
 
-    active_branches = _active_branches(project_dir)
+    active_branches = _active_branches(layout)
     checks = [_check_bare(bare_path)]
     checks.extend(
-        _check_worktree(repo, project_dir / repo, active_branches=active_branches, bare_path=bare_path)
-        for repo in WorktreeName
+        _check_worktree(worktree, layout.worktree_root(worktree), active_branches=active_branches, bare_path=bare_path)
+        for worktree in WorktreeName
     )
     console.print(_render_table(checks))
 
-    duplicate_anomalies = _duplicate_plan_anomalies(project_dir)
+    duplicate_anomalies = _duplicate_plan_anomalies(layout)
     if duplicate_anomalies:
         console.print("[bold]Duplicated plan files:[/bold]")
         for msg in duplicate_anomalies:
             console.print(f"  - {msg}")
 
-    stack_anomalies = _stack_anomalies(project_dir, config)
+    stack_anomalies = _stack_anomalies(layout, config)
     if stack_anomalies:
         console.print("[bold]Stack anomalies:[/bold]")
         for msg in stack_anomalies:

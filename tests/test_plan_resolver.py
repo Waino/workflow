@@ -7,7 +7,7 @@ import os
 import shutil
 import subprocess
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from shutil import copyfile
 from unittest.mock import MagicMock, patch
 
@@ -15,7 +15,7 @@ import libtmux
 import pytest
 from rich.console import Console
 
-from tests.conftest import create_project_marker
+from tests.conftest import create_project_marker, make_layout
 from workflow.audit import build_audit_command_repo_state, write_audit_log
 from workflow.config import WorkflowConfig, load_config
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
@@ -170,14 +170,14 @@ class TestParseReviewFilename:
 class TestFindAllPlansInRepo:
     def test_empty_dir_returns_empty(self, tmp_path: Path) -> None:
         (tmp_path / "canon" / "docs" / "plans").mkdir(parents=True)
-        assert find_all_plans_in_worktree(tmp_path, "canon") == []
+        assert find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon) == []
 
     def test_missing_repo_returns_empty(self, tmp_path: Path) -> None:
-        assert find_all_plans_in_worktree(tmp_path, "canon") == []
+        assert find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon) == []
 
     def test_single_intent_plan(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "canon", PlanState.INTENT, "001_idea.md")
-        plans = find_all_plans_in_worktree(tmp_path, "canon")
+        plans = find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon)
         assert len(plans) == 1
         assert plans[0].slug == "idea"
         assert plans[0].state == PlanState.INTENT
@@ -186,7 +186,7 @@ class TestFindAllPlansInRepo:
     def test_multiple_states(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "canon", PlanState.INTENT, "001_idea.md")
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plans = find_all_plans_in_worktree(tmp_path, "canon")
+        plans = find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon)
         assert len(plans) == 2
         assert {p.slug for p in plans} == {"idea", "pydantic_models"}
 
@@ -194,7 +194,7 @@ class TestFindAllPlansInRepo:
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_foo.md")
         _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "002_bar.md")
         with pytest.raises(PlanCollisionError) as exc_info:
-            find_all_plans_in_worktree(tmp_path, "canon")
+            find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon)
         assert exc_info.value.sequence_number == "002"
         assert len(exc_info.value.colliding) == 2
 
@@ -202,33 +202,33 @@ class TestFindAllPlansInRepo:
         # Same plan progressed — appears in two state dirs with same slug: not a collision
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_foo.md")
         _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "002_foo.md")
-        plans = find_all_plans_in_worktree(tmp_path, "canon")
+        plans = find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon)
         assert len(plans) == 2
 
     def test_intent_plans_never_collide(self, tmp_path: Path) -> None:
         # Intent plans are excluded from collision detection
         _make_plan(tmp_path, "canon", PlanState.INTENT, "001_idea_a.md")
         _make_plan(tmp_path, "canon", PlanState.INTENT, "001_idea_b.md")
-        plans = find_all_plans_in_worktree(tmp_path, "canon")
+        plans = find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon)
         assert len(plans) == 2
 
     def test_critique_review_included(self, tmp_path: Path) -> None:
         _make_review(tmp_path, "canon", ReviewSubState.CRITIQUE, "002_plan_2026-03-18T14-30-00Z.md")
-        plans = find_all_plans_in_worktree(tmp_path, "canon")
+        plans = find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon)
         assert len(plans) == 1
         assert isinstance(plans[0], Review)
         assert plans[0].review_sub_state == ReviewSubState.CRITIQUE
 
     def test_pr_review_included(self, tmp_path: Path) -> None:
         _make_review(tmp_path, "canon", ReviewSubState.PR, "002_plan_0e6baa9.md")
-        plans = find_all_plans_in_worktree(tmp_path, "canon")
+        plans = find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon)
         assert len(plans) == 1
         assert isinstance(plans[0], Review)
         assert plans[0].review_commit == "0e6baa9"
 
     def test_full_review_skipped(self, tmp_path: Path) -> None:
         _make_review(tmp_path, "canon", ReviewSubState.FULL, "2026-03-18T14-30-00Z_0e6baa9.md")
-        plans = find_all_plans_in_worktree(tmp_path, "canon")
+        plans = find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon)
         assert plans == []
 
     def test_malformed_filename_skipped(self, tmp_path: Path) -> None:
@@ -236,48 +236,48 @@ class TestFindAllPlansInRepo:
         d = tmp_path / "canon" / "docs" / "plans" / "planning"
         d.mkdir(parents=True)
         (d / "README.md").write_text("# readme\n")
-        assert find_all_plans_in_worktree(tmp_path, "canon") == []
+        assert find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon) == []
 
     def test_plan_is_not_review(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plans = find_all_plans_in_worktree(tmp_path, "canon")
+        plans = find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon)
         assert isinstance(plans[0], Plan)
         assert not isinstance(plans[0], Review)
 
     def test_review_is_also_plan(self, tmp_path: Path) -> None:
         _make_review(tmp_path, "canon", ReviewSubState.PR, "002_plan_0e6baa9.md")
-        plans = find_all_plans_in_worktree(tmp_path, "canon")
+        plans = find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon)
         assert isinstance(plans[0], Plan)
 
     def test_path_is_relative_to_project_dir(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "canon", PlanState.INTENT, "001_idea.md")
-        plans = find_all_plans_in_worktree(tmp_path, "canon")
+        plans = find_all_plans_in_worktree(make_layout(tmp_path), WorktreeName.canon)
         assert plans[0].path == Path("canon/docs/plans/intent/001_idea.md")
 
 
 class TestFindPlanFileInRepo:
     def test_found(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "005_foo.md")
-        result = find_plan_file_in_worktree(tmp_path, "canon", "005_foo.md")
+        result = find_plan_file_in_worktree(make_layout(tmp_path), WorktreeName.canon, "005_foo.md")
         assert result == tmp_path / "canon" / "docs" / "plans" / "implementing" / "005_foo.md"
 
     def test_absent(self, tmp_path: Path) -> None:
-        assert find_plan_file_in_worktree(tmp_path, "canon", "005_foo.md") is None
+        assert find_plan_file_in_worktree(make_layout(tmp_path), WorktreeName.canon, "005_foo.md") is None
 
     def test_duplicated_raises(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "005_foo.md")
         _make_plan(tmp_path, "canon", PlanState.CHECKING, "005_foo.md")
         with pytest.raises(PlanCollisionError):
-            find_plan_file_in_worktree(tmp_path, "canon", "005_foo.md")
+            find_plan_file_in_worktree(make_layout(tmp_path), WorktreeName.canon, "005_foo.md")
 
     def test_excludes_reviews(self, tmp_path: Path) -> None:
         _make_review(tmp_path, "canon", ReviewSubState.PR, "005_foo_0e6baa9.md")
-        assert find_plan_file_in_worktree(tmp_path, "canon", "005_foo_0e6baa9.md") is None
+        assert find_plan_file_in_worktree(make_layout(tmp_path), WorktreeName.canon, "005_foo_0e6baa9.md") is None
 
     def test_excludes_intents(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "canon", PlanState.INTENT, "005_foo.md")
         _make_plan(tmp_path, "canon", PlanState.CHECKING, "005_foo.md")
-        result = find_plan_file_in_worktree(tmp_path, "canon", "005_foo.md")
+        result = find_plan_file_in_worktree(make_layout(tmp_path), WorktreeName.canon, "005_foo.md")
         assert result == tmp_path / "canon" / "docs" / "plans" / "checking" / "005_foo.md"
 
 
@@ -289,20 +289,20 @@ class TestFindPlanFileInRepo:
 class TestFindAllPlans:
     def test_single_repo(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plans = find_all_plans(tmp_path)
+        plans = find_all_plans(make_layout(tmp_path))
         assert len(plans) == 1
         assert plans[0].slug == "pydantic_models"
 
     def test_missing_repos_skipped(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "canon", PlanState.INTENT, "001_idea.md")
         # planner, builder, reviewer dirs do not exist
-        plans = find_all_plans(tmp_path)
+        plans = find_all_plans(make_layout(tmp_path))
         assert len(plans) == 1
 
     def test_dedup_prefers_most_progressed_state(self, tmp_path: Path) -> None:
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_foo.md")
         _make_plan(tmp_path, "builder", PlanState.IMPLEMENTING, "002_foo.md")
-        plans = find_all_plans(tmp_path)
+        plans = find_all_plans(make_layout(tmp_path))
         assert len(plans) == 1
         assert plans[0].state == PlanState.IMPLEMENTING
 
@@ -310,14 +310,14 @@ class TestFindAllPlans:
         # Same plan at same state in two repos: first repo in _REPOS order wins silently
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_foo.md")
         _make_plan(tmp_path, "planner", PlanState.PLANNING, "002_foo.md")
-        plans = find_all_plans(tmp_path)
+        plans = find_all_plans(make_layout(tmp_path))
         assert len(plans) == 1
 
     def test_reviews_not_deduplicated(self, tmp_path: Path) -> None:
         # Different timestamps → different names → both included
         _make_review(tmp_path, "planner", ReviewSubState.CRITIQUE, "002_plan_2026-03-18T14-30-00Z.md")
         _make_review(tmp_path, "reviewer", ReviewSubState.CRITIQUE, "002_plan_2026-03-19T10-00-00Z.md")
-        plans = find_all_plans(tmp_path)
+        plans = find_all_plans(make_layout(tmp_path))
         assert len(plans) == 2
 
     def test_validate_planner_and_reviewer_different_states(self, tmp_path: Path) -> None:
@@ -326,7 +326,7 @@ class TestFindAllPlans:
         # resolve_plan would raise AmbiguousPlanError, but that's not implemented yet
         _make_plan(tmp_path, "planner", PlanState.CHECKING, "002_foo.md")
         _make_plan(tmp_path, "reviewer", PlanState.CHECKING, "002_foo.md")
-        plans = find_all_plans(tmp_path)
+        plans = find_all_plans(make_layout(tmp_path))
         assert len(plans) == 1
 
     def test_dedup_rejected_beats_all(self, tmp_path: Path) -> None:
@@ -334,7 +334,7 @@ class TestFindAllPlans:
         # even if that copy is at a later pipeline stage in another repo.
         _make_plan(tmp_path, "canon", PlanState.REJECTED, "002_foo.md")
         _make_plan(tmp_path, "builder", PlanState.IMPLEMENTING, "002_foo.md")
-        plans = find_all_plans(tmp_path)
+        plans = find_all_plans(make_layout(tmp_path))
         assert len(plans) == 1
         assert plans[0].state == PlanState.REJECTED
 
@@ -343,7 +343,7 @@ class TestFindAllPlans:
         _make_plan(tmp_path, "planner", PlanState.PLANNING, "002_foo.md")
         _make_plan(tmp_path, "builder", PlanState.IMPLEMENTING, "003_bar.md")
         _make_plan(tmp_path, "reviewer", PlanState.CHECKING, "004_baz.md")
-        plans = find_all_plans(tmp_path)
+        plans = find_all_plans(make_layout(tmp_path))
         assert len(plans) == 4
         assert {p.slug for p in plans} == {"idea", "foo", "bar", "baz"}
 
@@ -361,49 +361,49 @@ class TestResolvePlan:
     def test_seq_only(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("002", tmp_path, config=config)
+        plan = resolve_plan("002", config=config)
         assert plan.slug == "pydantic_models"
 
     def test_name_only(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("002_pydantic_models", tmp_path, config=config)
+        plan = resolve_plan("002_pydantic_models", config=config)
         assert plan.slug == "pydantic_models"
 
     def test_name_with_md_suffix(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("002_pydantic_models.md", tmp_path, config=config)
+        plan = resolve_plan("002_pydantic_models.md", config=config)
         assert plan.slug == "pydantic_models"
 
     def test_state_and_name(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("planning/002_pydantic_models", tmp_path, config=config)
+        plan = resolve_plan("planning/002_pydantic_models", config=config)
         assert plan.state == PlanState.PLANNING
 
     def test_state_and_seq(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "canon", PlanState.INTENT, "001_idea.md")
-        plan = resolve_plan("intent/001", tmp_path, config=config)
+        plan = resolve_plan("intent/001", config=config)
         assert plan.slug == "idea"
 
     def test_docs_plans_prefix(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("docs/plans/planning/002_pydantic_models", tmp_path, config=config)
+        plan = resolve_plan("docs/plans/planning/002_pydantic_models", config=config)
         assert plan.slug == "pydantic_models"
 
     def test_repo_prefix_in_path(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "planner", PlanState.PLANNING, "002_foo.md")
-        plan = resolve_plan("planner/docs/plans/planning/002_foo", tmp_path, config=config)
+        plan = resolve_plan("planner/docs/plans/planning/002_foo", config=config)
         assert plan.slug == "foo"
 
     def test_hierarchical_seq(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "canon", PlanState.TODO, "003.1_subtask.md")
-        plan = resolve_plan("003.1", tmp_path, config=config)
+        plan = resolve_plan("003.1", config=config)
         assert plan.slug == "subtask"
         assert plan.sequence_number == [3, 1]
 
@@ -416,7 +416,7 @@ class TestResolvePlan:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_foo.md")
         _make_plan(tmp_path, "builder", PlanState.CHECKING, "005_foo.md")
-        plan = resolve_plan("005", tmp_path, config=config, command_name="check")
+        plan = resolve_plan("005", config=config, command_name="check")
         assert plan.path.parts[0] == "builder"
         assert plan.state == PlanState.CHECKING
 
@@ -425,7 +425,7 @@ class TestResolvePlan:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_foo.md")
         with pytest.raises(WorkflowError, match="Sources disagree"):
-            resolve_plan("planner/005", tmp_path, config=config, command_name="check")
+            resolve_plan("planner/005", config=config, command_name="check")
 
     # --- disambiguation ---
 
@@ -433,7 +433,7 @@ class TestResolvePlan:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "canon", PlanState.INTENT, "001_foo.md")
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "001_foo.md")
-        plan = resolve_plan("001", tmp_path, config=config)
+        plan = resolve_plan("001", config=config)
         assert plan.state == PlanState.PLANNING
 
     def test_two_non_intent_same_seq_ambiguous(self, tmp_path: Path) -> None:
@@ -441,7 +441,7 @@ class TestResolvePlan:
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_foo.md")
         _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "002_foo.md")
         with pytest.raises(AmbiguousPlanError) as exc_info:
-            resolve_plan("002", tmp_path, config=config)
+            resolve_plan("002", config=config)
         assert len(exc_info.value.candidates) == 2
 
     # --- error cases ---
@@ -449,7 +449,7 @@ class TestResolvePlan:
     def test_not_found_raises(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         with pytest.raises(PlanNotFoundError) as exc_info:
-            resolve_plan("999", tmp_path, config=config)
+            resolve_plan("999", config=config)
         assert "999" in exc_info.value.fuzzy_path
 
     def test_collision_propagates(self, tmp_path: Path) -> None:
@@ -457,20 +457,20 @@ class TestResolvePlan:
         _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_foo.md")
         _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "002_bar.md")
         with pytest.raises(PlanCollisionError):
-            resolve_plan("002", tmp_path, config=config)
+            resolve_plan("002", config=config)
 
     def test_relative_review_path_not_supported(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         _make_review(tmp_path, "canon", ReviewSubState.PR, "002_plan_0e6baa9.md")
         with pytest.raises(PlanNotFoundError):
-            resolve_plan("reviews/pr/002_plan_0e6baa9", tmp_path, config=config)
+            resolve_plan("reviews/pr/002_plan_0e6baa9", config=config)
 
     # --- absolute path ---
 
     def test_absolute_path_regular_plan(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         f = _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan(str(f), tmp_path, config=config)
+        plan = resolve_plan(str(f), config=config)
         assert plan.slug == "pydantic_models"
         assert plan.state == PlanState.PLANNING
         assert plan.path == Path("canon/docs/plans/planning/002_pydantic_models.md")
@@ -478,7 +478,7 @@ class TestResolvePlan:
     def test_absolute_path_review(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         f = _make_review(tmp_path, "canon", ReviewSubState.PR, "002_plan_0e6baa9.md")
-        plan = resolve_plan(str(f), tmp_path, config=config)
+        plan = resolve_plan(str(f), config=config)
         assert isinstance(plan, Review)
         assert plan.review_commit == "0e6baa9"
 
@@ -487,19 +487,19 @@ class TestResolvePlan:
         outside = tmp_path.parent / "outside.md"
         outside.write_text("# outside\n")
         with pytest.raises(PlanNotFoundError):
-            resolve_plan(str(outside), tmp_path, config=config)
+            resolve_plan(str(outside), config=config)
 
     def test_absolute_path_nonexistent_raises(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         missing = tmp_path / "canon" / "docs" / "plans" / "planning" / "999_missing.md"
         with pytest.raises(PlanNotFoundError):
-            resolve_plan(str(missing), tmp_path, config=config)
+            resolve_plan(str(missing), config=config)
 
     def test_absolute_path_full_review_raises(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         f = _make_review(tmp_path, "canon", ReviewSubState.FULL, "2026-03-18T14-30-00Z_0e6baa9.md")
         with pytest.raises(PlanNotFoundError):
-            resolve_plan(str(f), tmp_path, config=config)
+            resolve_plan(str(f), config=config)
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +525,7 @@ class TestAuditSource:
                 input_plan="005_foo",
             ),
         )
-        plan = resolve_plan("005", tmp_path, config=config)
+        plan = resolve_plan("005", config=config)
         assert plan.path.parts[0] == "reviewer"
         assert plan.state == PlanState.CHECKING
 
@@ -541,7 +541,7 @@ class TestAuditSource:
                 input_plan="999_bar",
             ),
         )
-        plan = resolve_plan("005", tmp_path, config=config)
+        plan = resolve_plan("005", config=config)
         assert plan.path.parts[0] == "canon"
         assert plan.state == PlanState.PLANNING
 
@@ -565,7 +565,7 @@ class TestAuditSource:
                 input_plan="005_foo",
             ),
         )
-        plan = resolve_plan("005", tmp_path, config=config, command_name="check")
+        plan = resolve_plan("005", config=config, command_name="check")
         assert plan.path.parts[0] == "builder"
         assert plan.state == PlanState.CHECKING
 
@@ -578,7 +578,7 @@ class TestSubcommandSource:
         # planning-state plan in planner is still resolvable under 'ask'.
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "planner", PlanState.PLANNING, "004_cli.md")
-        plan = resolve_plan("004", tmp_path, config=config, command_name="ask")
+        plan = resolve_plan("004", config=config, command_name="ask")
         assert plan.state == PlanState.PLANNING
         assert plan.path.parts[0] == "planner"
 
@@ -589,7 +589,7 @@ class TestSubcommandSource:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "canon", PlanState.INTENT, "005_quux.md")
         _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_quux.md")
-        plan = resolve_plan("005", tmp_path, config=config, command_name="push")
+        plan = resolve_plan("005", config=config, command_name="push")
         assert plan.path.parts[0] == "canon"
         assert plan.state == PlanState.INTENT
 
@@ -597,7 +597,7 @@ class TestSubcommandSource:
         """Implement has also_valid_in_states=[planning], so a planning-state plan resolves."""
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "planner", PlanState.PLANNING, "007_feature.md")
-        plan = resolve_plan("007", tmp_path, config=config, command_name="implement")
+        plan = resolve_plan("007", config=config, command_name="implement")
         assert plan.state == PlanState.PLANNING
         assert plan.path.parts[0] == "planner"
 
@@ -623,7 +623,7 @@ class TestAuditCheckMapping:
             ),
         )
         # Previously failed: audit said (builder, checking) but accept expects reviewer.
-        plan = resolve_plan("005", tmp_path, config=config, command_name="accept")
+        plan = resolve_plan("005", config=config, command_name="accept")
         assert plan.path.parts[0] == "reviewer"
         assert plan.state == PlanState.CHECKING
 
@@ -636,37 +636,37 @@ class TestAuditCheckMapping:
 class TestParseGitLogOutput:
     def test_rename_line_returns_new_path_state(self) -> None:
         output = "abc123 1700000000\nR100\tdocs/plans/planning/005_foo.md\tdocs/plans/implementing/005_foo.md"
-        result = _parse_git_log_output(output)
+        result = _parse_git_log_output(output, PurePosixPath("docs", "plans"))
         assert result is not None
         assert result.timestamp == 1700000000
         assert result.state == PlanState.IMPLEMENTING
 
     def test_add_line_returns_state(self) -> None:
         output = "abc123 1700000001\nA\tdocs/plans/todo/005_foo.md"
-        result = _parse_git_log_output(output)
+        result = _parse_git_log_output(output, PurePosixPath("docs", "plans"))
         assert result is not None
         assert result.state == PlanState.TODO
 
     def test_modify_line_returns_state(self) -> None:
         output = "abc123 1700000002\nM\tdocs/plans/checking/005_foo.md"
-        result = _parse_git_log_output(output)
+        result = _parse_git_log_output(output, PurePosixPath("docs", "plans"))
         assert result is not None
         assert result.state == PlanState.CHECKING
 
     def test_delete_then_add_same_basename_returns_add_path(self) -> None:
         output = "abc123 1700000003\nD\tdocs/plans/planning/005_foo.md\nA\tdocs/plans/implementing/005_foo.md"
-        result = _parse_git_log_output(output)
+        result = _parse_git_log_output(output, PurePosixPath("docs", "plans"))
         assert result is not None
         assert result.state == PlanState.IMPLEMENTING
 
     def test_malformed_header_returns_none(self) -> None:
         output = "not-a-hash-no-timestamp\nA\tdocs/plans/todo/005_foo.md"
-        result = _parse_git_log_output(output)
+        result = _parse_git_log_output(output, PurePosixPath("docs", "plans"))
         assert result is None
 
     def test_empty_output_returns_none(self) -> None:
-        assert _parse_git_log_output("") is None
-        assert _parse_git_log_output("   \n  ") is None
+        assert _parse_git_log_output("", PurePosixPath("docs", "plans")) is None
+        assert _parse_git_log_output("   \n  ", PurePosixPath("docs", "plans")) is None
 
     @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
     def test_integration_real_git_repo(self, tmp_path: Path) -> None:
@@ -707,7 +707,7 @@ class TestParseGitLogOutput:
         # Create a minimal project around this repo
         create_project_marker(tmp_path)
         config = _make_config(tmp_path)
-        plan = resolve_plan("005", tmp_path, config=config)
+        plan = resolve_plan("005", config=config)
         assert plan.state == PlanState.IMPLEMENTING
 
 
@@ -800,7 +800,7 @@ class TestFastPathSkipsExpensiveSources:
             patch("workflow.plan_resolver._from_git_history", side_effect=_raise),
             patch("workflow.plan_resolver._from_tmux", side_effect=_raise),
         ):
-            plan = resolve_plan("planner/planning/005", tmp_path, config=config)
+            plan = resolve_plan("planner/planning/005", config=config)
         assert plan.state == PlanState.PLANNING
         assert plan.path.parts[0] == "planner"
 
@@ -816,7 +816,7 @@ class TestUnionReport:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_foo.md")
         with pytest.raises(SourcesDisagreeError) as exc_info:
-            resolve_plan("planner/005", tmp_path, config=config, command_name="check")
+            resolve_plan("planner/005", config=config, command_name="check")
         err = exc_info.value
         # SourcesDisagreeError is a WorkflowError subclass with a plain fallback message.
         assert isinstance(err, WorkflowError)
@@ -832,7 +832,7 @@ class TestUnionReport:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "planner", PlanState.PLANNING, "005_foo.md")
         with pytest.raises(SourcesDisagreeError) as exc_info:
-            resolve_plan("planner/005", tmp_path, config=config, command_name="check")
+            resolve_plan("planner/005", config=config, command_name="check")
         # Render to a buffer with colors enabled and capture ANSI escapes.
         buf = io.StringIO()
         Console(file=buf, force_terminal=True, color_system="truecolor", width=200).print(exc_info.value)
@@ -879,14 +879,14 @@ class TestGitProvidesRepoFlag:
     def test_default_returns_state_only(self, tmp_path: Path) -> None:
         _init_git_repo(tmp_path / "canon")
         _commit_plan(tmp_path / "canon", PlanState.IMPLEMENTING, "005_foo.md")
-        constraint = _from_git_history(tmp_path, [5], "foo")
+        constraint = _from_git_history(make_layout(tmp_path), [5], "foo")
         assert constraint.repos is None
         assert constraint.states == frozenset({PlanState.IMPLEMENTING})
 
     def test_provides_repo_true_returns_repo_and_state(self, tmp_path: Path) -> None:
         _init_git_repo(tmp_path / "canon")
         _commit_plan(tmp_path / "canon", PlanState.IMPLEMENTING, "005_foo.md")
-        constraint = _from_git_history(tmp_path, [5], "foo", provides_repo=True)
+        constraint = _from_git_history(make_layout(tmp_path), [5], "foo", provides_repo=True)
         assert constraint.repos == frozenset({WorktreeName.canon})
         assert constraint.states == frozenset({PlanState.IMPLEMENTING})
 
@@ -910,7 +910,7 @@ class TestGitProvidesRepoFlag:
                 capture_output=True,
                 env=env,
             )
-        constraint = _from_git_history(tmp_path, [5], "foo")
+        constraint = _from_git_history(make_layout(tmp_path), [5], "foo")
         assert constraint.states == frozenset({PlanState.CHECKING})
 
 
@@ -921,14 +921,14 @@ class TestResolvePlanForwardsGitProvidesRepo:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "canon", PlanState.TODO, "005_foo.md")
         with patch("workflow.plan_resolver._from_git_history", wraps=_from_git_history) as mock:
-            resolve_plan("005", tmp_path, config=config)
+            resolve_plan("005", config=config)
         assert mock.call_args.kwargs["provides_repo"] is False
 
     def test_true_when_requested(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         _make_plan(tmp_path, "canon", PlanState.TODO, "005_foo.md")
         with patch("workflow.plan_resolver._from_git_history", wraps=_from_git_history) as mock:
-            resolve_plan("005", tmp_path, config=config, git_provides_worktree=True)
+            resolve_plan("005", config=config, git_provides_worktree=True)
         assert mock.call_args.kwargs["provides_repo"] is True
 
 

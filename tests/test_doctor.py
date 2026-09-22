@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from tests.conftest import create_project_marker
+from tests.conftest import create_project_marker, make_layout
 from workflow.cli import main
 from workflow.commands.doctor import (
     _active_branches,
@@ -191,7 +191,7 @@ def test_active_branches_only_includes_planning_implementing_and_checking(tmp_pa
     _init_repo(tmp_path / "planner")
     _make_plan(tmp_path / "planner", "planning", "007_baz.md")
 
-    branches = _active_branches(tmp_path)
+    branches = _active_branches(make_layout(tmp_path))
 
     assert branches == {"feat/005_foo", "feat/006_bar", "plan/007_baz"}
 
@@ -201,7 +201,7 @@ def test_duplicate_plan_anomalies_flags_same_plan_in_two_state_dirs(tmp_path: Pa
     _make_plan(tmp_path / "canon", "todo", "005_foo.md")
     _make_plan(tmp_path / "canon", "implementing", "005_foo.md")
 
-    anomalies = _duplicate_plan_anomalies(tmp_path)
+    anomalies = _duplicate_plan_anomalies(make_layout(tmp_path))
 
     assert len(anomalies) == 1
     assert "foo" in anomalies[0]
@@ -213,7 +213,7 @@ def test_duplicate_plan_anomalies_clean_when_one_copy_per_repo(tmp_path: Path) -
     _init_repo(tmp_path / "canon")
     _make_plan(tmp_path / "canon", "todo", "005_foo.md")
 
-    assert _duplicate_plan_anomalies(tmp_path) == []
+    assert _duplicate_plan_anomalies(make_layout(tmp_path)) == []
 
 
 def test_duplicate_plan_anomalies_ignores_intent_and_review_siblings(tmp_path: Path) -> None:
@@ -224,7 +224,7 @@ def test_duplicate_plan_anomalies_ignores_intent_and_review_siblings(tmp_path: P
     review_dir.mkdir(parents=True, exist_ok=True)
     (review_dir / "005_foo_abcd.md").write_text("# review\n", encoding="utf-8")
 
-    assert _duplicate_plan_anomalies(tmp_path) == []
+    assert _duplicate_plan_anomalies(make_layout(tmp_path)) == []
 
 
 def _make_doctor_config(tmp_path: Path) -> Path:
@@ -282,7 +282,7 @@ def test_stack_anomalies_clean_for_a_live_stack(tmp_path: Path) -> None:
     _make_plan(canon, "implementing", "006_bar.md", onto="005_foo", branch="feat/005_foo")
     _git(["checkout", "-b", "feat/005_foo"], cwd=builder)
 
-    assert _stack_anomalies(tmp_path, _config_for(tmp_path)) == []
+    assert _stack_anomalies(make_layout(tmp_path), _config_for(tmp_path)) == []
 
 
 def test_stack_anomalies_flags_unresolvable_onto(tmp_path: Path) -> None:
@@ -291,7 +291,7 @@ def test_stack_anomalies_flags_unresolvable_onto(tmp_path: Path) -> None:
     _make_plan(canon, "implementing", "006_bar.md", onto="999_missing", branch="feat/005_foo")
     _git(["checkout", "-b", "feat/005_foo"], cwd=builder)
 
-    anomalies = _stack_anomalies(tmp_path, _config_for(tmp_path))
+    anomalies = _stack_anomalies(make_layout(tmp_path), _config_for(tmp_path))
 
     assert anomalies == ["006_bar: onto='999_missing' does not resolve to a plan"]
 
@@ -302,7 +302,7 @@ def test_stack_anomalies_flags_missing_branch_for_an_in_flight_plan(tmp_path: Pa
     _make_plan(canon, "implementing", "005_foo.md")
     _make_plan(canon, "checking", "006_bar.md", onto="005_foo", branch="feat/005_foo")
 
-    anomalies = _stack_anomalies(tmp_path, _config_for(tmp_path))
+    anomalies = _stack_anomalies(make_layout(tmp_path), _config_for(tmp_path))
 
     assert anomalies == ["006_bar: recorded branch 'feat/005_foo' exists nowhere"]
 
@@ -314,7 +314,7 @@ def test_stack_anomalies_ignores_a_deleted_branch_recorded_by_a_done_plan(tmp_pa
     _make_plan(canon, "done", "005_foo.md")
     _make_plan(canon, "done", "006_bar.md", onto="005_foo", branch="feat/005_foo")
 
-    assert _stack_anomalies(tmp_path, _config_for(tmp_path)) == []
+    assert _stack_anomalies(make_layout(tmp_path), _config_for(tmp_path)) == []
 
 
 def test_stack_anomalies_flags_a_branch_whose_plans_are_all_finished(tmp_path: Path) -> None:
@@ -323,6 +323,6 @@ def test_stack_anomalies_flags_a_branch_whose_plans_are_all_finished(tmp_path: P
     _make_plan(canon, "done", "005_foo.md")
     _git(["checkout", "-b", "feat/005_foo"], cwd=builder)
 
-    anomalies = _stack_anomalies(tmp_path, _config_for(tmp_path))
+    anomalies = _stack_anomalies(make_layout(tmp_path), _config_for(tmp_path))
 
     assert anomalies == ["feat/005_foo: exists but every plan on it is done/rejected"]

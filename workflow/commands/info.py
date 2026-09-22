@@ -59,7 +59,6 @@ def _plan_matches_substring(entry: AuditLogEntry, needle: str) -> bool:
 
 def _resolve_plan_filter(
     plan_filter: str,
-    project_dir: Path,
     config: WorkflowConfig,
 ) -> tuple[str | None, str | None, bool]:
     """Resolve *plan_filter* to (plan_name, plan_seq_str, use_substring).
@@ -69,7 +68,7 @@ def _resolve_plan_filter(
     to trigger a case-insensitive substring match instead.
     """
     try:
-        resolved = resolve_plan(plan_filter, project_dir, config=config, command_name=None)
+        resolved = resolve_plan(plan_filter, config=config, command_name=None)
     except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError, WorkflowError):
         error_console.print("[yellow]Plan filter not uniquely resolved; falling back to substring match.[/yellow]")
         return None, None, True
@@ -130,9 +129,10 @@ def status(ctx: click.Context, show_all: bool) -> None:  # noqa: FBT001
         ctx.exit(1)
         return
     project_dir: Path = config.project_dir
+    layout = config.layout()
 
     terminal_states = {PlanState.DONE, PlanState.REJECTED}
-    plans = find_all_plans(project_dir)
+    plans = find_all_plans(layout)
     visible = [p for p in plans if p.state != PlanState.REVIEW and (show_all or p.state not in terminal_states)]
     visible.sort(key=lambda p: p.sequence_number)
     entries = read_audit_log(project_dir)
@@ -155,7 +155,7 @@ def status(ctx: click.Context, show_all: bool) -> None:  # noqa: FBT001
                 next_step = find_next_step(config, source_state, last_entry.command)
                 if next_step is not None:
                     next_step_renderable = next_step.render()
-        fm = read_plan_frontmatter(project_dir, plan)
+        fm = read_plan_frontmatter(layout, plan)
         stack_cell = fm.onto if fm is not None and fm.onto is not None else ""
         table.add_row(
             plan.sequence_number_str,
@@ -167,12 +167,12 @@ def status(ctx: click.Context, show_all: bool) -> None:  # noqa: FBT001
         )
 
     console.print(table)
-    next_number = next_intent_number(project_dir)
+    next_number = next_intent_number(layout)
     console.print(f"Next free number: [bold]{next_number:03d}[/bold]")
 
-    for repo in WorktreeName:
-        console.print(f"Git status for repo {repo}")
-        git_status(project_dir / repo)
+    for worktree in WorktreeName:
+        console.print(f"Git status for worktree {worktree}")
+        git_status(layout.worktree_root(worktree))
     ctx.exit(0)
 
 
@@ -221,7 +221,7 @@ def log(  # noqa: PLR0913
     plan_seq_str: str | None = None
     use_substring = False
     if plan_filter is not None:
-        plan_name, plan_seq_str, use_substring = _resolve_plan_filter(plan_filter, project_dir, config)
+        plan_name, plan_seq_str, use_substring = _resolve_plan_filter(plan_filter, config)
 
     entries = read_audit_log(project_dir)
     filtered = [

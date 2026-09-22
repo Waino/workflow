@@ -64,7 +64,8 @@ class TestHookRoot:
     def test_matches_git_repo_root(self, tmp_path: Path) -> None:
         layout = _oob(tmp_path)
         assert layout.hook_root(WorktreeName.canon, "mypackage") == layout.git_repo_root(
-            WorktreeName.canon, "mypackage",
+            WorktreeName.canon,
+            "mypackage",
         )
 
 

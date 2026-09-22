@@ -4,9 +4,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import make_layout
 from workflow import state
 from workflow.exceptions import WorkflowError
 from workflow.models import Plan, PlanState
+from workflow.names import WorktreeName
 
 
 def _plan(*, repo: str = "planner", state_value: PlanState = PlanState.PLANNING) -> Plan:
@@ -36,7 +38,7 @@ def test_transition_plan_uses_current_repo_when_not_overridden(
 
     monkeypatch.setattr(state, "git_mv", fake_git_mv)
 
-    new_plan = state.transition_plan(_plan(), PlanState.TODO, tmp_path, dry_run=True)
+    new_plan = state.transition_plan(_plan(), PlanState.TODO, make_layout(tmp_path), dry_run=True)
 
     assert captured == {
         "repo_path": tmp_path / "planner",
@@ -59,7 +61,13 @@ def test_transition_plan_rewrites_source_repo_when_overridden(
 
     monkeypatch.setattr(state, "git_mv", fake_git_mv)
 
-    new_plan = state.transition_plan(_plan(), PlanState.TODO, tmp_path, worktree_override="canon", dry_run=True)
+    new_plan = state.transition_plan(
+        _plan(),
+        PlanState.TODO,
+        make_layout(tmp_path),
+        worktree_override=WorktreeName.canon,
+        dry_run=True,
+    )
 
     assert captured == {
         "repo_path": tmp_path / "canon",
@@ -91,7 +99,13 @@ def test_transition_plan_locates_source_by_name_not_by_plan_state(
     # plan.path claims 'checking' (as resolved on the feature branch), but canon's main
     # only has the file under 'implementing'.
     plan = _plan(repo="reviewer", state_value=PlanState.CHECKING)
-    new_plan = state.transition_plan(plan, PlanState.REJECTED, tmp_path, worktree_override="canon", dry_run=True)
+    new_plan = state.transition_plan(
+        plan,
+        PlanState.REJECTED,
+        make_layout(tmp_path),
+        worktree_override=WorktreeName.canon,
+        dry_run=True,
+    )
 
     assert captured["source"] == tmp_path / "canon/docs/plans/implementing/005_foo.md"
     assert captured["target"] == tmp_path / "canon/docs/plans/rejected/005_foo.md"
@@ -102,7 +116,13 @@ def test_transition_plan_raises_clear_error_when_source_missing(tmp_path: Path) 
     plan = _plan(repo="canon", state_value=PlanState.IMPLEMENTING)
 
     with pytest.raises(WorkflowError, match="not found in canon"):
-        state.transition_plan(plan, PlanState.CHECKING, tmp_path, worktree_override="canon", dry_run=False)
+        state.transition_plan(
+            plan,
+            PlanState.CHECKING,
+            make_layout(tmp_path),
+            worktree_override=WorktreeName.canon,
+            dry_run=False,
+        )
 
 
 def test_transition_plan_dry_run_guesses_source_when_not_yet_landed(
@@ -118,7 +138,13 @@ def test_transition_plan_dry_run_guesses_source_when_not_yet_landed(
     monkeypatch.setattr(state, "git_mv", fake_git_mv)
     plan = _plan(repo="canon", state_value=PlanState.IMPLEMENTING)
 
-    new_plan = state.transition_plan(plan, PlanState.CHECKING, tmp_path, worktree_override="canon", dry_run=True)
+    new_plan = state.transition_plan(
+        plan,
+        PlanState.CHECKING,
+        make_layout(tmp_path),
+        worktree_override=WorktreeName.canon,
+        dry_run=True,
+    )
 
     assert captured["source"] == tmp_path / "canon/docs/plans/implementing/005_foo.md"
     assert captured["target"] == tmp_path / "canon/docs/plans/checking/005_foo.md"
@@ -133,7 +159,13 @@ def test_transition_plan_reframes_an_unrelated_sequence_collision(tmp_path: Path
     plan = _plan(repo="canon", state_value=PlanState.IMPLEMENTING)
 
     with pytest.raises(WorkflowError, match=r"cannot transition 005_foo\.md while sequence number '007' collides"):
-        state.transition_plan(plan, PlanState.CHECKING, tmp_path, worktree_override="canon", dry_run=True)
+        state.transition_plan(
+            plan,
+            PlanState.CHECKING,
+            make_layout(tmp_path),
+            worktree_override=WorktreeName.canon,
+            dry_run=True,
+        )
 
 
 def test_transition_plan_raises_on_duplicate_source(tmp_path: Path) -> None:
@@ -142,4 +174,10 @@ def test_transition_plan_raises_on_duplicate_source(tmp_path: Path) -> None:
     plan = _plan(repo="canon", state_value=PlanState.CHECKING)
 
     with pytest.raises(WorkflowError, match=r"cannot transition 005_foo\.md while sequence number '005' collides"):
-        state.transition_plan(plan, PlanState.DONE, tmp_path, worktree_override="canon", dry_run=True)
+        state.transition_plan(
+            plan,
+            PlanState.DONE,
+            make_layout(tmp_path),
+            worktree_override=WorktreeName.canon,
+            dry_run=True,
+        )
