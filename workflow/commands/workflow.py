@@ -15,7 +15,11 @@ import click
 import jinja2
 
 from workflow.audit import write_audit_log
-from workflow.commands.agents_md import generate_and_write_agents_md, prepare_agents_md_update
+from workflow.commands.agents_md import (
+    BODY_OF_AGENTS_FILENAME,
+    generate_and_write_agents_md,
+    prepare_agents_md_update,
+)
 from workflow.config import AgentConfig, WorkflowConfig
 from workflow.config import ScriptCommand as _ScriptCommand
 from workflow.exceptions import (
@@ -49,6 +53,7 @@ from workflow.git_helpers import (
     git_push,
     git_ref_exists_remote,
     git_remote_url,
+    git_rev_parse,
     git_status,
     git_status_porcelain,
     park_on_main,
@@ -56,7 +61,14 @@ from workflow.git_helpers import (
     transfer_branch_to_main,
 )
 from workflow.layout import Layout
-from workflow.metadata import METADATA_FILENAME, ProjectMetadata, read_metadata, write_metadata
+from workflow.metadata import (
+    METADATA_FILENAME,
+    CodeRepoMeta,
+    ProjectMetadata,
+    ProjectMode,
+    read_metadata,
+    write_metadata,
+)
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import DOCS_REPO, AgentName, WorktreeName
 from workflow.next_step import find_command, find_next_step, find_reminder_name, format_next_step_invocation
@@ -89,6 +101,9 @@ from workflow.validate import validate as run_validate
 # Hard state constraints for script commands
 # Each command also accepts its own transition's *target* state, so a plan already
 # moved by a prior (partially-failed) run of the same command can be resumed.
+BOOTSTRAP_VENV_FILENAME = "bootstrap_venv.sh"
+"""Executable venv-bootstrap script, version controlled in the docs repo (oob mode only)."""
+
 _EXPECTED_STATES_FOR: dict[str, set[PlanState]] = {
     "todo": {PlanState.PLANNING, PlanState.TODO},
     "implement": {PlanState.PLANNING, PlanState.TODO, PlanState.IMPLEMENTING},
@@ -263,13 +278,28 @@ def _ensure_pre_commit_hook(repo_path: Path, *, dry_run: bool) -> None:
     run_command(["ln", "-s", "../../.git-pre-commit-hook", ".git/hooks/pre-commit"], cwd=repo_path, dry_run=dry_run)
 
 
-def _agent_push_config_ok(repo_path: Path) -> bool:
-    """Return whether push config and the pre-commit hook are already set up in *repo_path*."""
+def _ensure_push_config(repo_path: Path, *, dry_run: bool) -> None:
+    """Set push.autoSetupRemote/push.default in *repo_path*, only touching settings that need it."""
+    if git_config_get(repo_path, "push.autoSetupRemote") != "true":
+        run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=repo_path, dry_run=dry_run)
+    if git_config_get(repo_path, "push.default") != "current":
+        run_command(["git", "config", "push.default", "current"], cwd=repo_path, dry_run=dry_run)
+
+
+def _push_config_ok(repo_path: Path) -> bool:
     return (
         git_config_get(repo_path, "push.autoSetupRemote") == "true"
         and git_config_get(repo_path, "push.default") == "current"
-        and _hook_symlink_ok(repo_path)
     )
+
+
+def _agent_push_config_ok(repo_path: Path) -> bool:
+    """Return whether push config and the pre-commit hook are already set up in *repo_path*.
+
+    In-band only: the single canon/agent repo always carries ``.git-pre-commit-hook``
+    (enforced at init preconditions), so the symlink is mandatory here.
+    """
+    return _push_config_ok(repo_path) and _hook_symlink_ok(repo_path)
 
 
 def _ensure_agent_push_config(repo_path: Path, *, dry_run: bool) -> None:
@@ -282,12 +312,28 @@ def _ensure_agent_push_config(repo_path: Path, *, dry_run: bool) -> None:
     if dry_run and not repo_path.exists():
         error_console.print(f"[yellow]_ensure_agent_push_config: repo {repo_path} does not exist (yet)[/yellow]")
         return
-
-    if git_config_get(repo_path, "push.autoSetupRemote") != "true":
-        run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=repo_path, dry_run=dry_run)
-    if git_config_get(repo_path, "push.default") != "current":
-        run_command(["git", "config", "push.default", "current"], cwd=repo_path, dry_run=dry_run)
+    _ensure_push_config(repo_path, dry_run=dry_run)
     _ensure_pre_commit_hook(repo_path, dry_run=dry_run)
+
+
+def _agent_repo_configure_ok(repo_path: Path) -> bool:
+    """Like :func:`_agent_push_config_ok`, but the hook symlink is optional (third-party repos).
+
+    Used for every repo in oob mode (docs included): unlike in-band's single combined
+    repo, none of them are guaranteed to ship ``.git-pre-commit-hook``.
+    """
+    hook_ok = not (repo_path / ".git-pre-commit-hook").is_file() or _hook_symlink_ok(repo_path)
+    return _push_config_ok(repo_path) and hook_ok
+
+
+def _ensure_agent_repo_configure(repo_path: Path, *, dry_run: bool) -> None:
+    """Like :func:`_ensure_agent_push_config`, but only install the hook symlink if present."""
+    if dry_run and not repo_path.exists():
+        error_console.print(f"[yellow]_ensure_agent_repo_configure: repo {repo_path} does not exist (yet)[/yellow]")
+        return
+    _ensure_push_config(repo_path, dry_run=dry_run)
+    if (repo_path / ".git-pre-commit-hook").is_file():
+        _ensure_pre_commit_hook(repo_path, dry_run=dry_run)
 
 
 def _wire_canon_to_bare(canon_repo: Path, bare_path: Path, *, dry_run: bool) -> None:
@@ -302,18 +348,67 @@ def _wire_canon_to_bare(canon_repo: Path, bare_path: Path, *, dry_run: bool) -> 
 
 
 # Step-name constants: the join key between _classify_init_steps and _run_init_steps.
+# In-band only ever has one repo (docs), so its steps keep their original, repo-less names;
+# oob has 2+ repos and every step name embeds the repo (and, where relevant, the agent).
 _STEP_AGENTS_MD = "AGENTS.md committed"
 _STEP_BARE_CLONE = "bare clone"
 _STEP_WIRE_CANON = "wire canon to bare"
 _STEP_MARKER = "project metadata"
 
 
-def _classify_agents_md_step(resume: ResumePlan, config: WorkflowConfig, project_dir: Path) -> None:
-    update = prepare_agents_md_update(config.model_copy(update={"project_dir": project_dir}))
+def _is_oob(layout: Layout) -> bool:
+    return layout.metadata.mode == ProjectMode.oob
+
+
+def _bare_clone_step_name(layout: Layout, repo: str) -> str:
+    return f"bare clone {repo}" if _is_oob(layout) else _STEP_BARE_CLONE
+
+
+def _wire_canon_step_name(layout: Layout, repo: str) -> str:
+    return f"wire canon/{repo} to bare" if _is_oob(layout) else _STEP_WIRE_CANON
+
+
+def _clone_step_name(layout: Layout, agent_name: str, repo: str) -> str:
+    return f"clone {agent_name}/{repo}" if _is_oob(layout) else f"clone {agent_name}"
+
+
+def _configure_step_name(layout: Layout, agent_name: str, repo: str) -> str:
+    return f"configure {agent_name}/{repo}" if _is_oob(layout) else f"configure {agent_name}"
+
+
+def _classify_agents_md_step(resume: ResumePlan, config: WorkflowConfig, layout: Layout) -> None:
+    update = prepare_agents_md_update(
+        config.model_copy(update={"project_dir": layout.project_dir, "metadata": layout.metadata}),
+    )
     if update.agents_md_unchanged:
         resume.satisfied(_STEP_AGENTS_MD, "already up to date")
     else:
         resume.will_run(_STEP_AGENTS_MD)
+
+
+def _run_agents_md_step(
+    resume: ResumePlan,
+    config: WorkflowConfig,
+    layout: Layout,
+    canon_repo: Path,
+    *,
+    dry_run: bool,
+) -> None:
+    if not resume.should_run(_STEP_AGENTS_MD) or dry_run:
+        return
+    try:
+        generate_and_write_agents_md(
+            config.model_copy(update={"project_dir": layout.project_dir, "metadata": layout.metadata}),
+        )
+        if not _is_oob(layout):
+            git_add(canon_repo, Path("AGENTS.md"), dry_run=False)
+            # no_verify: at init time the pre-commit hook would run pytest before the
+            # workflow package is even installed in canon; bypassing is required here.
+            git_commit_if_changed(canon_repo, "chore: generate initial AGENTS.md", dry_run=False, no_verify=True)
+        # Oob: nothing to commit here (AGENTS.md is unversioned in every worktree);
+        # the hand-written body is committed by the planner like any other docs change.
+    except AgentsMdGenerationError as exc:
+        raise WorkflowError(str(exc)) from exc
 
 
 def _dir_needs_clone(path: Path) -> bool:
@@ -325,45 +420,137 @@ def _dir_needs_clone(path: Path) -> bool:
     return not path.exists() or not any(path.iterdir())
 
 
-def _classify_bare_clone_step(resume: ResumePlan, bare_path: Path) -> None:
-    if _dir_needs_clone(bare_path):
-        resume.will_run(_STEP_BARE_CLONE)
+def _relative_to_project(layout: Layout, path: Path) -> str:
+    """Render *path* relative to the project root, for ``git clone`` argv readability."""
+    return str(path.relative_to(layout.project_dir))
+
+
+def _classify_bare_clone_for_repo(resume: ResumePlan, layout: Layout, repo: str, step: str) -> None:
+    if _dir_needs_clone(layout.bare_repo(repo)):
+        resume.will_run(step)
     else:
-        resume.satisfied(_STEP_BARE_CLONE, "bare is a valid clone of canon")
+        resume.satisfied(step, "bare is a valid clone of canon")
 
 
-def _classify_agent_clone_steps(resume: ResumePlan, config: WorkflowConfig, layout: Layout, bare_path: Path) -> None:
+def _classify_bare_clone_steps(resume: ResumePlan, layout: Layout) -> None:
+    for repo in layout.repos():
+        _classify_bare_clone_for_repo(resume, layout, repo, _bare_clone_step_name(layout, repo))
+
+
+def _run_bare_clone_for_repo(layout: Layout, repo: str, *, dry_run: bool) -> None:
+    bare_path = layout.bare_repo(repo)
+    if not dry_run:
+        bare_path.parent.mkdir(parents=True, exist_ok=True)
+    source = _relative_to_project(layout, layout.git_repo_root(WorktreeName.canon, repo))
+    target = _relative_to_project(layout, bare_path)
+    run_command(["git", "clone", "--bare", source, target], cwd=layout.project_dir, dry_run=dry_run)
+
+
+def _classify_agent_clone_for_repo(resume: ResumePlan, layout: Layout, agent_name: str, repo: str, step: str) -> None:
+    agent_repo = layout.git_repo_root(WorktreeName(agent_name), repo)
+    bare_path = layout.bare_repo(repo)
+    if _dir_needs_clone(agent_repo):
+        resume.will_run(step)
+    elif git_is_valid_repo(agent_repo) and git_remote_url(agent_repo, BARE_REMOTE) == str(bare_path):
+        resume.needs_continue(step, "clone exists; pass --continue to keep it as-is")
+    else:
+        msg = f"{agent_repo} exists but is not a valid clone of bare; remove it or fix it."
+        raise WorkflowError(msg)
+
+
+def _classify_agent_clone_steps(resume: ResumePlan, config: WorkflowConfig, layout: Layout) -> None:
     for agent in config.agents:
-        agent_repo = layout.git_repo_root(WorktreeName(agent.name))
-        step = f"clone {agent.name}"
-        if _dir_needs_clone(agent_repo):
-            resume.will_run(step)
-        elif git_is_valid_repo(agent_repo) and git_remote_url(agent_repo, BARE_REMOTE) == str(bare_path):
-            resume.needs_continue(step, "clone exists; pass --continue to keep it as-is")
-        else:
-            msg = f"{agent_repo} exists but is not a valid clone of bare; remove it or fix it."
-            raise WorkflowError(msg)
+        for repo in layout.repos():
+            _classify_agent_clone_for_repo(resume, layout, agent.name, repo, _clone_step_name(layout, agent.name, repo))
+
+
+def _run_agent_clone_for_repo(layout: Layout, agent_name: str, repo: str, *, dry_run: bool) -> None:
+    agent_repo = layout.git_repo_root(WorktreeName(agent_name), repo)
+    if not _dir_needs_clone(agent_repo):
+        return
+    if not dry_run:
+        agent_repo.parent.mkdir(parents=True, exist_ok=True)
+    run_command(
+        [
+            "git",
+            "clone",
+            "-o",
+            BARE_REMOTE,
+            _relative_to_project(layout, layout.bare_repo(repo)),
+            _relative_to_project(layout, agent_repo),
+        ],
+        cwd=layout.project_dir,
+        dry_run=dry_run,
+    )
+
+
+def _classify_agent_configure_for_repo(  # noqa: PLR0913
+    resume: ResumePlan,
+    layout: Layout,
+    agent_name: str,
+    repo: str,
+    step: str,
+    *,
+    hook_optional: bool,
+) -> None:
+    agent_repo = layout.git_repo_root(WorktreeName(agent_name), repo)
+    configure_ok = _agent_repo_configure_ok if hook_optional else _agent_push_config_ok
+    if agent_repo.exists() and configure_ok(agent_repo):
+        resume.satisfied(step, "push config and pre-commit hook already set up")
+    else:
+        resume.will_run(step)
 
 
 def _classify_agent_configure_steps(resume: ResumePlan, config: WorkflowConfig, layout: Layout) -> None:
+    oob = _is_oob(layout)
     for agent in config.agents:
-        agent_repo = layout.git_repo_root(WorktreeName(agent.name))
-        step = f"configure {agent.name}"
-        if agent_repo.exists() and _agent_push_config_ok(agent_repo):
-            resume.satisfied(step, "push config and pre-commit hook already set up")
-        else:
-            resume.will_run(step)
+        for repo in layout.repos():
+            _classify_agent_configure_for_repo(
+                resume,
+                layout,
+                agent.name,
+                repo,
+                _configure_step_name(layout, agent.name, repo),
+                hook_optional=oob,
+            )
 
 
-def _classify_wire_canon_step(resume: ResumePlan, canon_repo: Path, bare_path: Path) -> None:
+def _run_agent_configure_for_repo(
+    layout: Layout,
+    agent_name: str,
+    repo: str,
+    *,
+    hook_optional: bool,
+    dry_run: bool,
+) -> None:
+    agent_repo = layout.git_repo_root(WorktreeName(agent_name), repo)
+    if hook_optional:
+        _ensure_agent_repo_configure(agent_repo, dry_run=dry_run)
+    else:
+        _ensure_agent_push_config(agent_repo, dry_run=dry_run)
+
+
+def _classify_wire_canon_for_repo(resume: ResumePlan, layout: Layout, repo: str, step: str) -> None:
+    canon_repo = layout.git_repo_root(WorktreeName.canon, repo)
+    bare_path = layout.bare_repo(repo)
     bare_url = git_remote_url(canon_repo, BARE_REMOTE)
     if bare_url is not None and Path(bare_url).resolve() != bare_path.resolve():
-        msg = f"canon '{BARE_REMOTE}' remote points at {bare_url!r}, expected {bare_path}; fix or remove it."
+        msg = f"{canon_repo} '{BARE_REMOTE}' remote points at {bare_url!r}, expected {bare_path}; fix or remove it."
         raise WorkflowError(msg)
     if bare_url is not None:
-        resume.satisfied(_STEP_WIRE_CANON, f"{BARE_REMOTE} already points at bare")
+        resume.satisfied(step, f"{BARE_REMOTE} already points at bare")
     else:
-        resume.will_run(_STEP_WIRE_CANON)
+        resume.will_run(step)
+
+
+def _classify_wire_canon_steps(resume: ResumePlan, layout: Layout) -> None:
+    for repo in layout.repos():
+        _classify_wire_canon_for_repo(resume, layout, repo, _wire_canon_step_name(layout, repo))
+
+
+def _run_wire_canon_for_repo(layout: Layout, repo: str, *, dry_run: bool) -> None:
+    canon_repo = layout.git_repo_root(WorktreeName.canon, repo)
+    _wire_canon_to_bare(canon_repo, layout.bare_repo(repo), dry_run=dry_run)
 
 
 def _classify_marker_step(resume: ResumePlan, project_dir: Path) -> None:
@@ -390,26 +577,66 @@ def _classify_venv_steps(resume: ResumePlan, config: WorkflowConfig, layout: Lay
             resume.will_run(step)
 
 
-def _classify_init_steps(
-    resume: ResumePlan,
-    config: WorkflowConfig,
-    layout: Layout,
-    canon_repo: Path,
-    bare_path: Path,
-) -> None:
+def _classify_init_steps(resume: ResumePlan, config: WorkflowConfig, layout: Layout) -> None:
     """Populate *resume* with a classification for every init step (read-only)."""
-    _classify_agents_md_step(resume, config, layout.project_dir)
-    _classify_bare_clone_step(resume, bare_path)
-    _classify_agent_clone_steps(resume, config, layout, bare_path)
+    _classify_agents_md_step(resume, config, layout)
+    _classify_bare_clone_steps(resume, layout)
+    _classify_agent_clone_steps(resume, config, layout)
     _classify_agent_configure_steps(resume, config, layout)
-    _classify_wire_canon_step(resume, canon_repo, bare_path)
+    _classify_wire_canon_steps(resume, layout)
     _classify_marker_step(resume, layout.project_dir)
     _classify_venv_steps(resume, config, layout)
 
 
-def _check_init_preconditions(layout: Layout, bare_path: Path) -> None:
-    """Fail fast on cheaply-detectable causes of a broken ``init`` run."""
-    project_dir = layout.project_dir
+def _detect_code_repos(canon_root: Path, *, skip_hooks: set[str]) -> list[CodeRepoMeta]:
+    """Scan *canon_root* for code repos: any subdirectory with ``.git``, excluding ``docs``.
+
+    Decision 1 ("store, not discover"): this scan only ever runs once, when no
+    ``.workflow.json`` exists yet; every subsequent run trusts the persisted list.
+    """
+    if not canon_root.is_dir():
+        return []
+    repos = []
+    for child in sorted(canon_root.iterdir()):
+        if not child.is_dir() or child.name == DOCS_REPO:
+            continue
+        if (child / ".git").exists():
+            repos.append(CodeRepoMeta(name=child.name, run_hook=child.name not in skip_hooks))
+    return repos
+
+
+def _resolve_init_metadata(
+    project_dir: Path,
+    requested_mode: ProjectMode,
+    canon_root: Path,
+    *,
+    skip_hooks: set[str],
+) -> ProjectMetadata:
+    """Return the metadata to use for this ``init`` run.
+
+    Enforces mode immutability against any already-persisted ``.workflow.json``. When
+    none exists yet and the requested mode is oob, detects code repos once; a later
+    ``init --continue`` rerun reuses the already-persisted list instead of rescanning
+    (rescanning would silently drop a previously passed ``--skip-hook``).
+    """
+    if (project_dir / METADATA_FILENAME).exists():
+        existing = read_metadata(project_dir)
+        if existing.mode != requested_mode:
+            msg = f"project was initialised in {existing.mode.value} mode; --oob cannot be changed after init."
+            raise WorkflowError(msg)
+        return existing
+    if requested_mode == ProjectMode.oob:
+        code_repos = _detect_code_repos(canon_root, skip_hooks=skip_hooks)
+        require(
+            bool(code_repos),
+            f"no code repos found under {canon_root}; docs-only oob projects are out of scope.",
+        )
+        console.print(f"Detected code repos: {', '.join(repo.name for repo in code_repos)}")
+        return ProjectMetadata(mode=ProjectMode.oob, code_repos=code_repos)
+    return ProjectMetadata()
+
+
+def _check_in_band_init_preconditions(layout: Layout) -> None:
     canon_repo = layout.git_repo_root(WorktreeName.canon)
     if not (canon_repo / ".git").is_dir():
         msg = f"{canon_repo} is not a git repository (no .git/ found)."
@@ -417,15 +644,43 @@ def _check_init_preconditions(layout: Layout, bare_path: Path) -> None:
     if not (canon_repo / ".git-pre-commit-hook").is_file():
         msg = f"{canon_repo / '.git-pre-commit-hook'} must exist."
         raise WorkflowError(msg)
+    require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
+
+
+def _check_oob_init_preconditions(layout: Layout) -> None:
+    docs_repo = layout.git_repo_root(WorktreeName.canon, DOCS_REPO)
+    require((docs_repo / ".git").is_dir(), f"{docs_repo} is not a git repository (no .git/ found).")
+    require(git_rev_parse(docs_repo, "HEAD") is not None, f"{docs_repo} must have at least one commit.")
+    require(not git_index_lock_present(docs_repo), f"leftover git lock in {docs_repo}; remove it first.")
+    for repo in layout.code_repos():
+        code_repo_path = layout.git_repo_root(WorktreeName.canon, repo)
+        require((code_repo_path / ".git").is_dir(), f"{code_repo_path} is not a git repository (no .git/ found).")
+        require(git_rev_parse(code_repo_path, "HEAD") is not None, f"{code_repo_path} must have at least one commit.")
+        require(not git_index_lock_present(code_repo_path), f"leftover git lock in {code_repo_path}; remove it first.")
+    body_path = docs_repo / BODY_OF_AGENTS_FILENAME
+    require(body_path.is_file(), f"{body_path} must exist.")
+    bootstrap_path = docs_repo / BOOTSTRAP_VENV_FILENAME
+    require(bootstrap_path.is_file(), f"{bootstrap_path} must exist.")
+    require(os.access(bootstrap_path, os.X_OK), f"{bootstrap_path} must be executable.")
+
+
+def _check_init_preconditions(layout: Layout) -> None:
+    """Fail fast on cheaply-detectable causes of a broken ``init`` run."""
+    project_dir = layout.project_dir
     if not (project_dir / "env.list").is_file():
         msg = f"{project_dir / 'env.list'} must exist."
         raise WorkflowError(msg)
-    require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
-    if bare_path.exists():
-        require(
-            git_is_valid_repo(bare_path, bare=True),
-            f"{bare_path} exists but is not a valid bare clone; remove it or fix it.",
-        )
+    if _is_oob(layout):
+        _check_oob_init_preconditions(layout)
+    else:
+        _check_in_band_init_preconditions(layout)
+    for repo in layout.repos():
+        bare_path = layout.bare_repo(repo)
+        if bare_path.exists():
+            require(
+                git_is_valid_repo(bare_path, bare=True),
+                f"{bare_path} exists but is not a valid bare clone; remove it or fix it.",
+            )
 
 
 def _create_and_commit_gitkeep_files(layout: Layout, canon_repo: Path, *, dry_run: bool) -> None:
@@ -438,49 +693,58 @@ def _create_and_commit_gitkeep_files(layout: Layout, canon_repo: Path, *, dry_ru
     git_commit_if_changed(canon_repo, "chore: .gitkeep files for state dirs", dry_run=dry_run, no_verify=True)
 
 
-def _run_init_steps(  # noqa: PLR0913
+def _run_clone_and_configure_steps(
     resume: ResumePlan,
     config: WorkflowConfig,
     layout: Layout,
-    canon_repo: Path,
-    bare_path: Path,
     *,
     dry_run: bool,
 ) -> None:
-    """Perform the (already-classified) init steps, gated on resume.should_run."""
-    project_dir = layout.project_dir
-    # Generate AGENTS.md into canon before the bare clone so all agent clones inherit it.
-    if resume.should_run(_STEP_AGENTS_MD) and not dry_run:
-        try:
-            generate_and_write_agents_md(config.model_copy(update={"project_dir": project_dir}))
-            git_add(canon_repo, Path("AGENTS.md"), dry_run=False)
-            # no_verify: at init time the pre-commit hook would run pytest before the
-            # workflow package is even installed in canon; bypassing is required here.
-            git_commit_if_changed(canon_repo, "chore: generate initial AGENTS.md", dry_run=False, no_verify=True)
-        except AgentsMdGenerationError as exc:
-            raise WorkflowError(str(exc)) from exc
+    """Run the bare-clone, agent-clone, configure, and wire-canon steps for every repo."""
+    oob = _is_oob(layout)
+    for repo in layout.repos():
+        if resume.should_run(_bare_clone_step_name(layout, repo)):
+            _run_bare_clone_for_repo(layout, repo, dry_run=dry_run)
 
-    _create_and_commit_gitkeep_files(layout, canon_repo=canon_repo, dry_run=dry_run)
-
-    if resume.should_run(_STEP_BARE_CLONE):
-        run_command(["git", "clone", "--bare", WorktreeName.canon, "bare"], cwd=project_dir, dry_run=dry_run)
-
-    # Clone/configure/venv steps below keep their own _dir_needs_clone-style guards (shared
+    # Clone/configure steps below keep their own _dir_needs_clone-style guards (shared
     # verbatim with _classify_*) rather than gating on should_run: a `needs_continue` clone
     # step means "leave the existing clone as-is" (would fail if re-cloned), not "run it".
     for agent in config.agents:
-        agent_repo = layout.git_repo_root(WorktreeName(agent.name))
-        if _dir_needs_clone(agent_repo):
-            run_command(["git", "clone", "-o", BARE_REMOTE, "bare", agent.name], cwd=project_dir, dry_run=dry_run)
+        for repo in layout.repos():
+            _run_agent_clone_for_repo(layout, agent.name, repo, dry_run=dry_run)
 
     for agent in config.agents:
-        _ensure_agent_push_config(layout.git_repo_root(WorktreeName(agent.name)), dry_run=dry_run)
+        for repo in layout.repos():
+            _run_agent_configure_for_repo(layout, agent.name, repo, hook_optional=oob, dry_run=dry_run)
 
-    if resume.should_run(_STEP_WIRE_CANON):
-        _wire_canon_to_bare(canon_repo, bare_path, dry_run=dry_run)
+    for repo in layout.repos():
+        if resume.should_run(_wire_canon_step_name(layout, repo)):
+            _run_wire_canon_for_repo(layout, repo, dry_run=dry_run)
+
+
+def _run_init_steps(resume: ResumePlan, config: WorkflowConfig, layout: Layout, *, dry_run: bool) -> None:
+    """Perform the (already-classified) init steps, gated on resume.should_run."""
+    project_dir = layout.project_dir
+    oob = _is_oob(layout)
+    # canon_repo is the docs repo's root in canon: identical to canon itself in-band,
+    # canon/docs in oob (git_repo_root defaults to the docs repo in both modes).
+    canon_repo = layout.git_repo_root(WorktreeName.canon)
+
+    # In-band: generate AGENTS.md into canon before the bare clone so all agent clones
+    # inherit it via git. Oob: AGENTS.md is not committed/propagated by git at all, so it
+    # is generated after every worktree exists (see the oob call further down).
+    if not oob:
+        _run_agents_md_step(resume, config, layout, canon_repo, dry_run=dry_run)
+
+    _create_and_commit_gitkeep_files(layout, canon_repo=canon_repo, dry_run=dry_run)
+
+    _run_clone_and_configure_steps(resume, config, layout, dry_run=dry_run)
 
     if resume.should_run(_STEP_MARKER) and not dry_run:
-        write_metadata(project_dir, ProjectMetadata())
+        write_metadata(project_dir, layout.metadata)
+
+    if oob:
+        _run_agents_md_step(resume, config, layout, canon_repo, dry_run=dry_run)
 
     # Create venvs (always via --reset: cheap on first creation, destructive-but-
     # confirmed via --continue when a venv already exists; see _classify_init_steps).
@@ -500,32 +764,136 @@ def _run_init_steps(  # noqa: PLR0913
 
 
 @register_script("init")
+@click.option("--oob", is_flag=True, help="Initialise an out-of-band project (separate docs and code repos).")
+@click.option(
+    "--skip-hook",
+    "skip_hooks",
+    multiple=True,
+    metavar="NAME",
+    help="Code repo not to install the pre-commit hook symlink for. Only valid with --oob; repeatable.",
+)
 @click.option("--continue", "cont", is_flag=True, help="Proceed past rough (unverifiable) partial state.")
 @click.pass_context
-def init(ctx: click.Context, *, cont: bool) -> None:
+def init(ctx: click.Context, *, oob: bool, skip_hooks: tuple[str, ...], cont: bool) -> None:
     """Initialise the project directory: create bare and agent git clones."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
     project_dir = (config.project_dir or Path.cwd()).resolve()
-    # No .workflow.json yet at this point (init creates it) -- in-band is init's only
-    # supported mode so far (--oob lands in 023.4), so a fresh default metadata suffices
-    # for path math here.
-    layout = Layout(project_dir=project_dir, metadata=ProjectMetadata())
-    canon_repo = layout.git_repo_root(WorktreeName.canon)
-    bare_path = layout.bare_repo()
+    canon_root = project_dir / WorktreeName.canon.value
 
     try:
-        _check_init_preconditions(layout, bare_path)
+        require(oob or not skip_hooks, "--skip-hook is only valid with --oob.")
+        requested_mode = ProjectMode.oob if oob else ProjectMode.in_band
+        metadata = _resolve_init_metadata(project_dir, requested_mode, canon_root, skip_hooks=set(skip_hooks))
+        layout = Layout(project_dir=project_dir, metadata=metadata)
+        _check_init_preconditions(layout)
 
         resume = ResumePlan(title="init")
-        _classify_init_steps(resume, config, layout, canon_repo, bare_path)
+        _classify_init_steps(resume, config, layout)
         resume.render()
         if resume.abort_unless_continue(cont=cont):
             ctx.exit(1)
             return
 
-        _run_init_steps(resume, config, layout, canon_repo, bare_path, dry_run=dry_run)
+        _run_init_steps(resume, config, layout, dry_run=dry_run)
         _write_script_audit_log(config.model_copy(update={"project_dir": project_dir}), "init", dry_run=dry_run)
+    except (subprocess.CalledProcessError, WorkflowError) as exc:
+        print_workflow_error(exc)
+        ctx.exit(1)
+        return
+    ctx.exit(0)
+
+
+def _check_add_repo_preconditions(metadata: ProjectMetadata, layout: Layout, name: str) -> None:
+    require(metadata.mode == ProjectMode.oob, "add-repo is only valid for out-of-band projects.")
+    require(name != DOCS_REPO, f"{DOCS_REPO!r} is reserved for the docs repo.")
+    require(
+        name not in {repo.name for repo in metadata.code_repos},
+        f"{name!r} is already registered as a code repo.",
+    )
+    canon_repo = layout.git_repo_root(WorktreeName.canon, name)
+    require((canon_repo / ".git").is_dir(), f"{canon_repo} is not a git repository (no .git/ found).")
+    require(git_rev_parse(canon_repo, "HEAD") is not None, f"{canon_repo} must have at least one commit.")
+    require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
+    bare_path = layout.bare_repo(name)
+    if bare_path.exists():
+        require(
+            git_is_valid_repo(bare_path, bare=True),
+            f"{bare_path} exists but is not a valid bare clone; remove it or fix it.",
+        )
+
+
+def _classify_add_repo_steps(resume: ResumePlan, config: WorkflowConfig, layout: Layout, name: str) -> None:
+    _classify_bare_clone_for_repo(resume, layout, name, f"bare clone {name}")
+    for agent in config.agents:
+        _classify_agent_clone_for_repo(resume, layout, agent.name, name, f"clone {agent.name}/{name}")
+    for agent in config.agents:
+        _classify_agent_configure_for_repo(
+            resume,
+            layout,
+            agent.name,
+            name,
+            f"configure {agent.name}/{name}",
+            hook_optional=True,
+        )
+    _classify_wire_canon_for_repo(resume, layout, name, f"wire canon/{name} to bare")
+
+
+def _run_add_repo_steps(
+    resume: ResumePlan,
+    config: WorkflowConfig,
+    layout: Layout,
+    name: str,
+    *,
+    dry_run: bool,
+) -> None:
+    if resume.should_run(f"bare clone {name}"):
+        _run_bare_clone_for_repo(layout, name, dry_run=dry_run)
+    for agent in config.agents:
+        _run_agent_clone_for_repo(layout, agent.name, name, dry_run=dry_run)
+    for agent in config.agents:
+        _run_agent_configure_for_repo(layout, agent.name, name, hook_optional=True, dry_run=dry_run)
+    if resume.should_run(f"wire canon/{name} to bare"):
+        _run_wire_canon_for_repo(layout, name, dry_run=dry_run)
+
+
+@register_script("add-repo")
+@click.argument("name")
+@click.option("--skip-hook", is_flag=True, help="Do not install the pre-commit hook symlink for this repo.")
+@click.option("--continue", "cont", is_flag=True, help="Proceed past rough (unverifiable) partial state.")
+@click.pass_context
+def add_repo(ctx: click.Context, name: str, *, skip_hook: bool, cont: bool) -> None:
+    """Register an additional code repo in an out-of-band project."""
+    config: WorkflowConfig = ctx.obj["config"]
+    dry_run: bool = ctx.obj["dry_run"]
+
+    try:
+        project_dir = _require_project_dir(config)
+        metadata = config.metadata
+        require(metadata is not None, "Error: not inside a workflow project directory.")
+        assert metadata is not None  # narrowed by require() above, for mypy
+
+        layout = Layout(project_dir=project_dir, metadata=metadata)
+        _check_add_repo_preconditions(metadata, layout, name)
+
+        new_metadata = metadata.model_copy(
+            update={"code_repos": [*metadata.code_repos, CodeRepoMeta(name=name, run_hook=not skip_hook)]},
+        )
+        new_layout = Layout(project_dir=project_dir, metadata=new_metadata)
+
+        resume = ResumePlan(title="add-repo")
+        _classify_add_repo_steps(resume, config, new_layout, name)
+        resume.render()
+        if resume.abort_unless_continue(cont=cont):
+            ctx.exit(1)
+            return
+
+        _run_add_repo_steps(resume, config, new_layout, name, dry_run=dry_run)
+        if not dry_run:
+            write_metadata(project_dir, new_metadata)
+
+        _write_script_audit_log(config, "add-repo", dry_run=dry_run)
+        console.print(f"Registered code repo [bold]{name}[/bold].")
     except (subprocess.CalledProcessError, WorkflowError) as exc:
         print_workflow_error(exc)
         ctx.exit(1)
