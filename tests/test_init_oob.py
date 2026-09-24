@@ -21,9 +21,20 @@ _GIT = shutil.which("git") or "git"
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 
 
-def _unwrapped(text: str) -> str:
-    """Undo rich's line-wrapping (which can split mid-word) for substring checks."""
-    return text.replace("\n", "")
+def _contains(text: str, phrase: str) -> bool:
+    """Whitespace-agnostic substring check.
+
+    Rich wraps long lines at the console width, sometimes at a space (which the
+    newline then replaces) and sometimes mid-word (an overlong, unbreakable token,
+    where no character is consumed). Stripping all whitespace from both sides makes
+    the check correct either way, at the cost of also ignoring genuine spaces in
+    *phrase* -- fine for the short, unambiguous phrases these tests look for.
+    """
+
+    def strip(s: str) -> str:
+        return "".join(s.split())
+
+    return strip(phrase) in strip(text)
 
 
 def _git(args: list[str], *, cwd: Path, check: bool = True, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
@@ -192,22 +203,22 @@ class TestInitOob:
         _make_oob_project(tmp_path, [])
         result = _run_init(tmp_path, monkeypatch)
         assert result.exit_code == 1
-        assert "no code repos found under" in _unwrapped(result.output)
-        assert "out of scope" in _unwrapped(result.output)
+        assert _contains(result.output, "no code repos found under")
+        assert _contains(result.output, "out of scope")
 
     def test_missing_body_of_agents_fails_precondition(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_oob_project(tmp_path, ["mypackage"])
         (tmp_path / "canon" / DOCS_REPO / "body_of_agents.md").unlink()
         result = _run_init(tmp_path, monkeypatch)
         assert result.exit_code == 1
-        assert "body_of_agents.md" in _unwrapped(result.output)
+        assert _contains(result.output, "body_of_agents.md")
 
     def test_missing_bootstrap_script_fails_precondition(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_oob_project(tmp_path, ["mypackage"])
         (tmp_path / "canon" / DOCS_REPO / "bootstrap_venv.sh").unlink()
         result = _run_init(tmp_path, monkeypatch)
         assert result.exit_code == 1
-        assert "bootstrap_venv.sh" in _unwrapped(result.output)
+        assert _contains(result.output, "bootstrap_venv.sh")
 
     def test_non_executable_bootstrap_script_fails_precondition(
         self,
@@ -218,7 +229,7 @@ class TestInitOob:
         (tmp_path / "canon" / DOCS_REPO / "bootstrap_venv.sh").chmod(0o644)
         result = _run_init(tmp_path, monkeypatch)
         assert result.exit_code == 1
-        assert "must be executable" in _unwrapped(result.output)
+        assert _contains(result.output, "must be executable")
 
     def test_oob_on_in_band_project_fails_with_immutability_message(
         self,
@@ -231,7 +242,7 @@ class TestInitOob:
 
         result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "init", "--oob"])
         assert result.exit_code == 1
-        assert "initialised in in_band mode" in _unwrapped(result.output)
+        assert _contains(result.output, "initialised in in_band mode")
 
     def test_in_band_on_oob_project_fails_with_immutability_message(
         self,
@@ -244,7 +255,7 @@ class TestInitOob:
 
         result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "init"])
         assert result.exit_code == 1
-        assert "initialised in oob mode" in _unwrapped(result.output)
+        assert _contains(result.output, "initialised in oob mode")
 
     def test_skip_hook_without_oob_is_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         (tmp_path / "env.list").touch()
@@ -252,7 +263,7 @@ class TestInitOob:
         monkeypatch.chdir(tmp_path)
         result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "init", "--skip-hook", "x"])
         assert result.exit_code == 1
-        assert "--skip-hook is only valid with --oob" in _unwrapped(result.output)
+        assert _contains(result.output, "--skip-hook is only valid with --oob")
 
 
 class TestAddRepo:
@@ -284,7 +295,7 @@ class TestAddRepo:
 
         result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", "dep2"])
         assert result.exit_code == 1
-        assert "only valid for out-of-band projects" in _unwrapped(result.output)
+        assert _contains(result.output, "only valid for out-of-band projects")
 
     def test_rejected_for_duplicate_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_oob_project(tmp_path, ["mypackage"])
@@ -293,7 +304,7 @@ class TestAddRepo:
 
         result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", "mypackage"])
         assert result.exit_code == 1
-        assert "already registered" in _unwrapped(result.output)
+        assert _contains(result.output, "already registered")
 
     def test_rejected_for_docs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_oob_project(tmp_path, ["mypackage"])
@@ -302,7 +313,7 @@ class TestAddRepo:
 
         result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", "docs"])
         assert result.exit_code == 1
-        assert "reserved for the docs repo" in _unwrapped(result.output)
+        assert _contains(result.output, "reserved for the docs repo")
 
     def test_rejected_when_canon_repo_missing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_oob_project(tmp_path, ["mypackage"])
@@ -311,7 +322,7 @@ class TestAddRepo:
 
         result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", "dep2"])
         assert result.exit_code == 1
-        assert "not a git repository" in _unwrapped(result.output)
+        assert _contains(result.output, "not a git repository")
 
     def test_metadata_file_is_valid_metadata_json(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Regression: METADATA_FILENAME round-trips through read_metadata after add-repo."""
