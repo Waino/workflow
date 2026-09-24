@@ -218,7 +218,7 @@ class TestInitOob:
         (tmp_path / "canon" / DOCS_REPO / "bootstrap_venv.sh").chmod(0o644)
         result = _run_init(tmp_path, monkeypatch)
         assert result.exit_code == 1
-        assert "must be executable" in result.output
+        assert "must be executable" in _unwrapped(result.output)
 
     def test_oob_on_in_band_project_fails_with_immutability_message(
         self,
@@ -244,7 +244,7 @@ class TestInitOob:
 
         result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "init"])
         assert result.exit_code == 1
-        assert "initialised in oob mode" in result.output
+        assert "initialised in oob mode" in _unwrapped(result.output)
 
     def test_skip_hook_without_oob_is_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         (tmp_path / "env.list").touch()
@@ -252,7 +252,7 @@ class TestInitOob:
         monkeypatch.chdir(tmp_path)
         result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "init", "--skip-hook", "x"])
         assert result.exit_code == 1
-        assert "--skip-hook is only valid with --oob" in result.output
+        assert "--skip-hook is only valid with --oob" in _unwrapped(result.output)
 
 
 class TestAddRepo:
@@ -293,7 +293,7 @@ class TestAddRepo:
 
         result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", "mypackage"])
         assert result.exit_code == 1
-        assert "already registered" in result.output
+        assert "already registered" in _unwrapped(result.output)
 
     def test_rejected_for_docs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_oob_project(tmp_path, ["mypackage"])
@@ -302,7 +302,7 @@ class TestAddRepo:
 
         result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", "docs"])
         assert result.exit_code == 1
-        assert "reserved for the docs repo" in result.output
+        assert "reserved for the docs repo" in _unwrapped(result.output)
 
     def test_rejected_when_canon_repo_missing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_oob_project(tmp_path, ["mypackage"])
@@ -311,7 +311,7 @@ class TestAddRepo:
 
         result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", "dep2"])
         assert result.exit_code == 1
-        assert "not a git repository" in result.output
+        assert "not a git repository" in _unwrapped(result.output)
 
     def test_metadata_file_is_valid_metadata_json(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Regression: METADATA_FILENAME round-trips through read_metadata after add-repo."""
