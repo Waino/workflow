@@ -129,9 +129,8 @@ class TestInitOob:
             for worktree in ("canon", "planner", "builder", "reviewer"):
                 repo_path = tmp_path / worktree / repo
                 assert (repo_path / ".git").exists(), f"{repo_path} missing"
-                if worktree != "canon":
-                    remote_url = _git(["remote", "get-url", "bare"], cwd=repo_path).stdout.decode().strip()
-                    assert remote_url == str(bare_repo)
+                remote_url = _git(["remote", "get-url", "bare"], cwd=repo_path).stdout.decode().strip()
+                assert remote_url == str(bare_repo)
 
         metadata = read_metadata(tmp_path)
         assert metadata.mode == ProjectMode.oob
@@ -153,10 +152,14 @@ class TestInitOob:
         _make_oob_project(tmp_path, ["mypackage"])
         first = _run_init(tmp_path, monkeypatch)
         assert first.exit_code == 0, first.output
+        docs_head_before = _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon" / DOCS_REPO).stdout
+        agents_md_before = (tmp_path / "builder" / "AGENTS.md").read_text(encoding="utf-8")
 
         second = _run_init(tmp_path, monkeypatch, "--continue")
         assert second.exit_code == 0, second.output
         assert "[skip]" in second.output
+        assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon" / DOCS_REPO).stdout == docs_head_before
+        assert (tmp_path / "builder" / "AGENTS.md").read_text(encoding="utf-8") == agents_md_before
 
     def test_skip_hook_is_recorded_and_no_symlink_installed(
         self,
