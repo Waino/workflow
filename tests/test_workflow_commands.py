@@ -516,6 +516,25 @@ def test_check_resume_skips_precommit_and_validate_when_already_checking(
     fake_validate.assert_not_called()
 
 
+def test_hook_command_appends_repo_flag_when_given() -> None:
+    command = wc._hook_command("run_agent_in_docker.sh", "proj", Path("/x"), "builder", repo="mypackage")
+    assert command == [
+        "run_agent_in_docker.sh",
+        "hook",
+        "proj",
+        "builder",
+        "--project-dir",
+        "/x",
+        "--repo",
+        "mypackage",
+    ]
+
+
+def test_hook_command_omits_repo_flag_by_default() -> None:
+    command = wc._hook_command("run_agent_in_docker.sh", "proj", Path("/x"), "builder")
+    assert "--repo" not in command
+
+
 def test_canon_pre_commit_runs_hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path)
     monkeypatch.chdir(tmp_path)

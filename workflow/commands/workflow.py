@@ -231,11 +231,16 @@ def _open_in_editor(path: Path) -> None:
     subprocess.run([editor, str(path)], check=True)  # noqa: S603
 
 
-def _run_pre_commit_hook(config: WorkflowConfig, repo_name: str, *, dry_run: bool) -> None:
+def _run_pre_commit_hook(config: WorkflowConfig, repo_name: str, *, dry_run: bool, repo: str | None = None) -> None:
+    """Run the pre-commit hook in *repo_name*'s worktree.
+
+    *repo* selects a code repo within an oob wrapper (``--repo`` on the docker script);
+    unused so far (every call site is single-repo in-band), wired up in 023.5.
+    """
     project_dir = _require_project_dir(config)
     project_name = config.project_name or project_dir.name
     script = _find_docker_script(project_dir)
-    run_command(_hook_command(script, project_name, project_dir, repo_name), dry_run=dry_run)
+    run_command(_hook_command(script, project_name, project_dir, repo_name, repo=repo), dry_run=dry_run)
 
 
 def _transition_commit_message(plan: Plan, target_state: PlanState) -> str:
@@ -936,9 +941,23 @@ def _create_venv_command(script: str, project_name: str, project_dir: Path, repo
     return [script, "venv", project_name, repo_name, "--project-dir", str(project_dir), "--reset"]
 
 
-def _hook_command(script: str, project_name: str, project_dir: Path, repo_name: str) -> list[str]:
-    """Build the command for running the pre-commit hook in a throwaway container."""
-    return [script, "hook", project_name, repo_name, "--project-dir", str(project_dir)]
+def _hook_command(
+    script: str,
+    project_name: str,
+    project_dir: Path,
+    repo_name: str,
+    *,
+    repo: str | None = None,
+) -> list[str]:
+    """Build the command for running the pre-commit hook in a throwaway container.
+
+    *repo* is the code repo to run the hook inside, for an oob wrapper (``--repo`` on
+    the docker script); omitted for in-band or when the hook targets the wrapper root.
+    """
+    command = [script, "hook", project_name, repo_name, "--project-dir", str(project_dir)]
+    if repo is not None:
+        command.extend(["--repo", repo])
+    return command
 
 
 def _build_start_windows(
