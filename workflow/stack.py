@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from workflow.exceptions import WorkflowError
 from workflow.frontmatter import PlanFrontmatter, parse_frontmatter
+from workflow.git_helpers import BARE_REMOTE
 from workflow.models import Plan, PlanState, Review
 from workflow.names import DOCS_REPO, WorktreeName
 from workflow.plan_resolver import find_all_plans_in_worktree
@@ -40,7 +41,7 @@ class StackEntry(BaseModel):
     """As resolved, worktree-prefixed, matching the existing ``{{ plan.path }}`` convention."""
 
     commit_range: str
-    """E.g. 'origin/main..7f3a91c' for the root, '7f3a91c..HEAD' for the tip."""
+    """E.g. 'bare/main..7f3a91c' for the root, '7f3a91c..HEAD' for the tip."""
 
 
 _FRONTMATTER_CACHE: dict[Path, tuple[int, int, PlanFrontmatter | None]] = {}
@@ -215,7 +216,7 @@ def stack_entries(layout: Layout, plan: Plan) -> list[StackEntry]:
 
     Empty for an unstacked plan. ``commit_range`` is assembled from the frontmatter
     anchors only (no git calls): member *i* spans ``base(i)..base(i+1)``, the root
-    starts at ``origin/main``, the tip ends at ``HEAD``.
+    starts at ``bare/main``, the tip ends at ``HEAD``.
     """
     chain = resolve_stack(layout, plan)
     if len(chain) == 1:
@@ -228,7 +229,7 @@ def stack_entries(layout: Layout, plan: Plan) -> list[StackEntry]:
             msg = f"{member.name} is stacked but has no recorded branch base"
             raise WorkflowError(msg)
         bases.append(repo_branch.base)
-    boundaries = ["origin/main", *bases, "HEAD"]
+    boundaries = [f"{BARE_REMOTE}/main", *bases, "HEAD"]
     return [
         StackEntry(name=member.name, path=member.path, commit_range=f"{boundaries[i]}..{boundaries[i + 1]}")
         for i, member in enumerate(chain)

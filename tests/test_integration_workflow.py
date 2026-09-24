@@ -142,7 +142,7 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr(wc, "git_commit_if_changed", _git_commit_if_changed_without_noverify)
 
-    # Step 2: workflow init (also wires origin remote and push config in all repos)
+    # Step 2: workflow init (also wires the bare remote and push config in all repos)
     result = CliRunner().invoke(main, ["--config", str(config_path), "init"])
     assert result.exit_code == 0, result.output
 
@@ -157,7 +157,7 @@ def test_happy_path_init_through_accept(tmp_path: Path, monkeypatch: pytest.Monk
     assert bare_blob_type.strip() == b"blob"
 
     # Set git user identity in each cloned repo (needed for commits made by the test).
-    # push.autoSetupRemote, push.default=current, and the origin remote are set up by init.
+    # push.autoSetupRemote, push.default=current, and the bare remote are set up by init.
     for repo_name in ("planner", "builder", "reviewer"):
         repo = tmp_path / repo_name
         _git(["config", "user.email", "test@example.com"], cwd=repo)
@@ -310,11 +310,11 @@ def test_init_rerun_with_continue_does_not_redo_satisfied_steps(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A resumed init must not regenerate AGENTS.md or re-push canon's already-wired origin.
+    """A resumed init must not regenerate AGENTS.md or re-push canon's already-wired bare remote.
 
     Regression test for Fix 2 (020.1): _run_init_steps used to re-derive postconditions
     instead of consulting the classify pass, so a fully-satisfied resume still rewrote
-    AGENTS.md and re-ran `git push -u origin HEAD` every time.
+    AGENTS.md and re-ran `git push -u bare HEAD` every time.
     """
     _init_canon_repo(tmp_path)
     config_path = _make_integration_config(tmp_path)
@@ -348,7 +348,7 @@ def test_init_rerun_with_continue_does_not_redo_satisfied_steps(
 
     assert second.exit_code == 0, second.output
     fake_generate.assert_not_called()
-    assert ["git", "push", "-u", "origin", "HEAD"] not in run_command_calls
+    assert ["git", "push", "-u", "bare", "HEAD"] not in run_command_calls
     assert (tmp_path / "canon" / "AGENTS.md").stat().st_mtime_ns == agents_md_mtime_before
     assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout == canon_head_before
     assert _git(["rev-parse", "HEAD"], cwd=tmp_path / "bare").stdout == bare_head_before
@@ -779,7 +779,7 @@ def test_accept_deletes_feature_branch_locally_and_on_bare(tmp_path: Path, monke
         check=False,
     )
     remote_check = _git(
-        ["ls-remote", "--exit-code", "--heads", "origin", "feat/005_foo"],
+        ["ls-remote", "--exit-code", "--heads", "bare", "feat/005_foo"],
         cwd=tmp_path / "canon",
         check=False,
     )
@@ -992,7 +992,7 @@ def test_implement_needs_continue_for_leftover_branch(tmp_path: Path, monkeypatc
     # Builder is parked on main, so the transition cannot be merged into the branch here;
     # the run must hand that over explicitly instead of reporting a clean skip.
     assert "builder is not on feat/005_foo" in result.output
-    assert "merge origin/main" in result.output
+    assert "merge bare/main" in result.output
     assert not git_path_exists_at_ref(builder, "feat/005_foo", "docs/plans/implementing/005_foo.md")
 
 
@@ -1120,7 +1120,7 @@ def test_stacked_plans_created_and_todoed_before_either_is_implemented(
     """Regression for the merge-classified-too-early bug (both plans `todo`ed before A is implemented).
 
     `test_stacked_plans_full_loop` creates and `todo`s B only after A's branch already exists, which
-    advances `main` and makes the `origin/main` merge run "by accident". Here both plans reach `todo`
+    advances `main` and makes the `bare/main` merge run "by accident". Here both plans reach `todo`
     before `implement 005_foo` runs, so `main` has not moved since the branch was cut and the merge
     must run unconditionally to land B's file on the branch at all.
     """
@@ -1137,7 +1137,7 @@ def test_stacked_plans_created_and_todoed_before_either_is_implemented(
 
     result = _run(config_path, "implement", "006_bar", "--onto", "005_foo")
     assert result.exit_code == 0, result.output
-    assert "[skip] merge origin/main into stack branch" not in result.output
+    assert "[skip] merge bare/main into stack branch" not in result.output
 
     assert (canon / "docs" / "plans" / "implementing" / "006_bar.md").exists()
     assert (builder / "docs" / "plans" / "implementing" / "006_bar.md").exists()
@@ -1164,8 +1164,8 @@ def test_implement_continue_on_pre_existing_branch_merges_main_too(
 
     # Leave the plan in 'todo' but pre-create its feature branch in builder, as if a prior
     # `implement` run had gotten that far and stopped.
-    _git(["fetch", "origin"], cwd=builder)
-    _git(["checkout", "-b", "feat/005_foo", "origin/main"], cwd=builder)
+    _git(["fetch", "bare"], cwd=builder)
+    _git(["checkout", "-b", "feat/005_foo", "bare/main"], cwd=builder)
 
     result = _run(config_path, "implement", "005_foo", "--continue")
     assert result.exit_code == 0, result.output

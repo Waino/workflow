@@ -287,7 +287,7 @@ def _dispatch_prompt(
     repo_path = config.layout().git_repo_root(worktree_name)
     try:
         git_pull(repo_path, dry_run=dry_run, skip_if_no_upstream=True)
-        # An agent asked to rebase (the 'rebase' prompt) needs a current origin/main;
+        # An agent asked to rebase (the 'rebase' prompt) needs a current bare/main;
         # the plain pull above only advances the checked-out branch.
         refresh_main(repo_path, dry_run=dry_run)
     except subprocess.CalledProcessError as exc:

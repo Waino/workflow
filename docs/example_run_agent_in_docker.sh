@@ -169,7 +169,7 @@ if [[ "$THROWAWAY" != true ]]; then
                     --detach \
                     "${IMAGE}"
                 # NOTE: 'bare' is mounted at its host path so it matches the absolute
-                # 'origin' URL recorded at clone time. Read-only by design: it makes
+                # 'bare' remote URL recorded at clone time. Read-only by design: it makes
                 # 'git fetch'/'git rebase' work (needed for the 'rebase' prompt) while
                 # 'git push' fails by construction -- agents have no write access.
             fi

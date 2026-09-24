@@ -27,6 +27,7 @@ from workflow.exceptions import (
 )
 from workflow.frontmatter import PlanFrontmatter, RepoBranch, write_frontmatter
 from workflow.git_helpers import (
+    BARE_REMOTE,
     TransferResult,
     branch_needs_rebase,
     delete_merged_branch,
@@ -290,14 +291,14 @@ def _ensure_agent_push_config(repo_path: Path, *, dry_run: bool) -> None:
 
 
 def _wire_canon_to_bare(canon_repo: Path, bare_path: Path, *, dry_run: bool) -> None:
-    """Add/configure the ``origin`` remote in canon (pointing at bare) and push HEAD."""
-    if git_remote_url(canon_repo, "origin") is None:
-        run_command(["git", "remote", "add", "origin", str(bare_path)], cwd=canon_repo, dry_run=dry_run)
+    """Add/configure the ``bare`` remote in canon (pointing at bare) and push HEAD."""
+    if git_remote_url(canon_repo, BARE_REMOTE) is None:
+        run_command(["git", "remote", "add", BARE_REMOTE, str(bare_path)], cwd=canon_repo, dry_run=dry_run)
     if git_config_get(canon_repo, "push.autoSetupRemote") != "true":
         run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=canon_repo, dry_run=dry_run)
     if git_config_get(canon_repo, "push.default") != "current":
         run_command(["git", "config", "push.default", "current"], cwd=canon_repo, dry_run=dry_run)
-    run_command(["git", "push", "-u", "origin", "HEAD"], cwd=canon_repo, dry_run=dry_run)
+    run_command(["git", "push", "-u", BARE_REMOTE, "HEAD"], cwd=canon_repo, dry_run=dry_run)
 
 
 # Step-name constants: the join key between _classify_init_steps and _run_init_steps.
@@ -337,7 +338,7 @@ def _classify_agent_clone_steps(resume: ResumePlan, config: WorkflowConfig, layo
         step = f"clone {agent.name}"
         if _dir_needs_clone(agent_repo):
             resume.will_run(step)
-        elif git_is_valid_repo(agent_repo) and git_remote_url(agent_repo, "origin") == str(bare_path):
+        elif git_is_valid_repo(agent_repo) and git_remote_url(agent_repo, BARE_REMOTE) == str(bare_path):
             resume.needs_continue(step, "clone exists; pass --continue to keep it as-is")
         else:
             msg = f"{agent_repo} exists but is not a valid clone of bare; remove it or fix it."
@@ -355,12 +356,12 @@ def _classify_agent_configure_steps(resume: ResumePlan, config: WorkflowConfig, 
 
 
 def _classify_wire_canon_step(resume: ResumePlan, canon_repo: Path, bare_path: Path) -> None:
-    origin_url = git_remote_url(canon_repo, "origin")
-    if origin_url is not None and Path(origin_url).resolve() != bare_path.resolve():
-        msg = f"canon 'origin' remote points at {origin_url!r}, expected {bare_path}; fix or remove it."
+    bare_url = git_remote_url(canon_repo, BARE_REMOTE)
+    if bare_url is not None and Path(bare_url).resolve() != bare_path.resolve():
+        msg = f"canon '{BARE_REMOTE}' remote points at {bare_url!r}, expected {bare_path}; fix or remove it."
         raise WorkflowError(msg)
-    if origin_url is not None:
-        resume.satisfied(_STEP_WIRE_CANON, "origin already points at bare")
+    if bare_url is not None:
+        resume.satisfied(_STEP_WIRE_CANON, f"{BARE_REMOTE} already points at bare")
     else:
         resume.will_run(_STEP_WIRE_CANON)
 
@@ -470,7 +471,7 @@ def _run_init_steps(  # noqa: PLR0913
     for agent in config.agents:
         agent_repo = layout.git_repo_root(WorktreeName(agent.name))
         if _dir_needs_clone(agent_repo):
-            run_command(["git", "clone", "bare", agent.name], cwd=project_dir, dry_run=dry_run)
+            run_command(["git", "clone", "-o", BARE_REMOTE, "bare", agent.name], cwd=project_dir, dry_run=dry_run)
 
     for agent in config.agents:
         _ensure_agent_push_config(layout.git_repo_root(WorktreeName(agent.name)), dry_run=dry_run)
@@ -896,19 +897,19 @@ _STEP_IMPLEMENT_FETCH_BUILDER = "fetch builder"
 _STEP_IMPLEMENT_CHECKOUT_MAIN_BUILDER = "checkout main in builder"
 _STEP_IMPLEMENT_ONTO_CHECKOUT = "checkout stack branch in builder"
 _STEP_IMPLEMENT_ONTO_FRONTMATTER = "write onto frontmatter"
-_STEP_IMPLEMENT_ONTO_MERGE_MAIN = "merge origin/main into stack branch"
-_STEP_IMPLEMENT_MERGE_MAIN = "merge origin/main into existing feature branch"
+_STEP_IMPLEMENT_ONTO_MERGE_MAIN = "merge bare/main into stack branch"
+_STEP_IMPLEMENT_MERGE_MAIN = "merge bare/main into existing feature branch"
 
 
-def _merge_origin_main_into(builder_repo: Path, *, dry_run: bool) -> None:
-    """Fetch and merge origin/main into builder's current branch; a no-op when already merged.
+def _merge_bare_main_into(builder_repo: Path, *, dry_run: bool) -> None:
+    """Fetch and merge bare/main into builder's current branch; a no-op when already merged.
 
     Fetches even though the callers just ran :func:`_sync_repos_best_effort`: that sync only
-    warns on failure, and merging a stale origin/main would silently drop the very commit
+    warns on failure, and merging a stale bare/main would silently drop the very commit
     this merge exists to deliver.
     """
     git_fetch(builder_repo, dry_run=dry_run)
-    git_merge(builder_repo, "origin/main", ff_only=False, dry_run=dry_run)
+    git_merge(builder_repo, f"{BARE_REMOTE}/main", ff_only=False, dry_run=dry_run)
 
 
 def _plan_file_on_branch(
@@ -918,7 +919,7 @@ def _plan_file_on_branch(
     filename: str,
     plans_prefix: PurePosixPath,
 ) -> bool:
-    """Whether *filename* sits under *state*'s directory on *branch*, per builder's ref or origin's.
+    """Whether *filename* sits under *state*'s directory on *branch*, per builder's ref or bare's.
 
     Both refs are consulted because which one carries the latest transition depends on the
     flags of the previous command: the default ``check`` commits in builder, while
@@ -926,12 +927,12 @@ def _plan_file_on_branch(
     local ref behind.
     """
     rel_path = f"{plans_prefix}/{state.value}/{filename}"
-    return any(git_path_exists_at_ref(builder_repo, ref, rel_path) for ref in (branch, f"origin/{branch}"))
+    return any(git_path_exists_at_ref(builder_repo, ref, rel_path) for ref in (branch, f"{BARE_REMOTE}/{branch}"))
 
 
 def _manual_merge_hint(builder_repo: Path, feature_branch: str) -> str:
-    """The commands that land origin/main on *feature_branch* by hand, for when this run cannot."""
-    return f"git -C {builder_repo} checkout {feature_branch} && git -C {builder_repo} merge origin/main"
+    """The commands that land bare/main on *feature_branch* by hand, for when this run cannot."""
+    return f"git -C {builder_repo} checkout {feature_branch} && git -C {builder_repo} merge {BARE_REMOTE}/main"
 
 
 def _classify_transfer_and_todo_steps(resume: ResumePlan, plan: Plan, layout: Layout) -> None:
@@ -1092,10 +1093,10 @@ def _run_implement_steps(  # noqa: PLR0913
         git_checkout(builder_repo, feature_branch, create=True, dry_run=dry_run)
     if resume.should_run(_STEP_IMPLEMENT_MERGE_MAIN):
         if git_current_branch(builder_repo) == feature_branch:
-            _merge_origin_main_into(builder_repo, dry_run=dry_run)
+            _merge_bare_main_into(builder_repo, dry_run=dry_run)
         else:
             error_console.print(
-                f"[yellow]\\[!] builder is not on {feature_branch}; origin/main was not merged into it. "
+                f"[yellow]\\[!] builder is not on {feature_branch}; {BARE_REMOTE}/main was not merged into it. "
                 f"Run: {_manual_merge_hint(builder_repo, feature_branch)}[/yellow]",
             )
 
@@ -1196,7 +1197,7 @@ def _check_onto_preconditions(
         require(
             _plan_file_on_branch(builder_repo, base_branch, PlanState.IMPLEMENTING, filename, layout.plans_prefix),
             f"{base_plan.name}'s plan file is on branch {base_branch!r} under neither "
-            f"docs/plans/implementing/ nor docs/plans/checking/; merge origin/main into that branch first.",
+            f"docs/plans/implementing/ nor docs/plans/checking/; merge {BARE_REMOTE}/main into that branch first.",
         )
     fm = read_plan_frontmatter(layout, plan)
     if fm is not None and fm.onto not in (None, base_plan.name):
@@ -1214,12 +1215,12 @@ def _classify_implement_onto_steps(
 ) -> None:
     _classify_transfer_and_todo_steps(resume, plan, layout)
 
-    # No fetch: _check_onto_preconditions just fetched builder, so origin/* is current.
+    # No fetch: _check_onto_preconditions just fetched builder, so bare/* is current.
     on_branch = git_current_branch(builder_repo) == feature_branch
     # A base still in 'implementing' may never have been pushed (only `check` publishes
     # a branch); with no upstream there is nothing to be behind on.
     has_upstream = git_ref_exists_remote(builder_repo, feature_branch)
-    up_to_date = not has_upstream or git_is_ancestor(builder_repo, f"origin/{feature_branch}", feature_branch)
+    up_to_date = not has_upstream or git_is_ancestor(builder_repo, f"{BARE_REMOTE}/{feature_branch}", feature_branch)
     if on_branch and up_to_date:
         resume.satisfied(_STEP_IMPLEMENT_ONTO_CHECKOUT, "builder already on the branch and up to date")
     else:
@@ -1234,8 +1235,8 @@ def _classify_implement_onto_steps(
     _classify_transition_implementing_step(resume, plan, layout)
     resume.will_run("push canon")
 
-    # Unconditional: the push above (same run) is what advances origin/main with the
-    # very commit this merge exists to deliver, so no pre-push predicate on origin/main
+    # Unconditional: the push above (same run) is what advances bare/main with the
+    # very commit this merge exists to deliver, so no pre-push predicate on bare/main
     # can be trusted here. git_merge is already a no-op when there is nothing pending.
     resume.will_run(_STEP_IMPLEMENT_ONTO_MERGE_MAIN)
 
@@ -1300,7 +1301,7 @@ def _run_implement_onto_steps(  # noqa: PLR0913
     _sync_repos_best_effort(layout, park=WorktreeName.planner if transfer_ran else None, dry_run=dry_run)
 
     # Unconditional (see _classify_implement_onto_steps): not gated on resume.should_run.
-    _merge_origin_main_into(builder_repo, dry_run=dry_run)
+    _merge_bare_main_into(builder_repo, dry_run=dry_run)
 
     return new_plan
 
@@ -1698,16 +1699,16 @@ def _classify_accept_steps(resume: ResumePlan, stack: list[Plan], layout: Layout
     # single step so classify- and run-granularity stay aligned (see plan 020.1 Fix 3
     # granularity note). A branch already deleted from bare (by a prior accept's
     # cleanup) has nothing left to transfer, regardless of what a now-meaningless
-    # ancestry check against a dangling origin/<branch> ref would say.
+    # ancestry check against a dangling bare/<branch> ref would say.
     transfer_will_run = git_ref_exists_remote(canon_repo, branch) and not git_is_ancestor(
         canon_repo,
-        f"origin/{branch}",
+        f"{BARE_REMOTE}/{branch}",
         "main",
     )
     if transfer_will_run:
         resume.will_run(_STEP_ACCEPT_TRANSFER)
     else:
-        resume.satisfied(_STEP_ACCEPT_TRANSFER, "origin/<branch> already merged into main")
+        resume.satisfied(_STEP_ACCEPT_TRANSFER, "bare/<branch> already merged into main")
     _classify_rebase_step(
         resume,
         _STEP_ACCEPT_REBASE,

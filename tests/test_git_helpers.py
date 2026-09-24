@@ -1,5 +1,6 @@
 """Tests for workflow.git_helpers."""
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -48,6 +49,19 @@ def _init_repo(path: Path) -> Path:
     return path
 
 
+def test_no_origin_literal_in_workflow_package() -> None:
+    """023.3: the bare remote is named BARE_REMOTE everywhere; 'origin' means canon/upstream now."""
+    package_root = Path(__file__).parents[1] / "workflow"
+    pattern = re.compile(r"""['"]origin['"]""")
+    offending = [
+        str(path.relative_to(package_root))
+        for path in package_root.rglob("*.py")
+        # doctor.py must recognise the pre-migration 'origin' shape to flag it as an anomaly.
+        if path.name != "doctor.py" and pattern.search(path.read_text(encoding="utf-8"))
+    ]
+    assert offending == []
+
+
 def test_transfer_branch_to_main_rejects_canon_not_on_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(git_helpers, "git_current_branch", lambda _repo: "feat/other")
 
@@ -62,25 +76,25 @@ def test_transfer_branch_to_main_rejects_canon_not_on_main(monkeypatch: pytest.M
 
 def _setup_transfer_scenario(tmp_path: Path, branch: str) -> tuple[Path, Path, Path]:
     """Return (bare, source, canon): source has *branch* pushed, canon is a fresh clone on main."""
-    origin = _init_repo(tmp_path / "origin")
+    seed = _init_repo(tmp_path / "seed")
     bare = tmp_path / "bare"
-    _git(["clone", "--bare", str(origin), str(bare)], cwd=tmp_path)
+    _git(["clone", "--bare", str(seed), str(bare)], cwd=tmp_path)
     source = tmp_path / "source"
-    _git(["clone", str(bare), str(source)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(source)], cwd=tmp_path)
     _git(["checkout", "-b", branch], cwd=source)
     (source / "feature.txt").write_text("feature\n", encoding="utf-8")
     _git(["add", "."], cwd=source)
     _git(["commit", "-m", "feature work"], cwd=source)
-    _git(["push", "-u", "origin", branch], cwd=source)
+    _git(["push", "-u", "bare", branch], cwd=source)
     canon = tmp_path / "canon"
-    _git(["clone", str(bare), str(canon)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(canon)], cwd=tmp_path)
     return bare, source, canon
 
 
 def _advance_main_unrelated(bare: Path, tmp_path: Path, *, name: str = "pusher") -> None:
     """Push an unrelated commit to bare's main, diverging any branch cut before it."""
     pusher = tmp_path / name
-    _git(["clone", str(bare), str(pusher)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(pusher)], cwd=tmp_path)
     (pusher / "unrelated.txt").write_text("unrelated\n", encoding="utf-8")
     _git(["add", "."], cwd=pusher)
     _git(["commit", "-m", "unrelated main commit"], cwd=pusher)
@@ -131,7 +145,7 @@ def test_transfer_branch_to_main_rebase_conflict_aborts_and_raises(tmp_path: Pat
     bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
     # Conflicting edit to the same file on main.
     pusher = tmp_path / "pusher"
-    _git(["clone", str(bare), str(pusher)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(pusher)], cwd=tmp_path)
     (pusher / "feature.txt").write_text("main version\n", encoding="utf-8")
     _git(["add", "."], cwd=pusher)
     _git(["commit", "-m", "conflicting main commit"], cwd=pusher)
@@ -180,7 +194,7 @@ def test_transfer_branch_to_main_rebase_refuses_checked_out_elsewhere(tmp_path: 
     _advance_main_unrelated(bare, tmp_path)
     _git(["checkout", "feat/x"], cwd=source)
     other_worktree = tmp_path / "other"
-    _git(["clone", str(bare), str(other_worktree)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(other_worktree)], cwd=tmp_path)
     _git(["checkout", "feat/x"], cwd=other_worktree)
 
     with pytest.raises(WorkflowError, match=str(other_worktree)):
@@ -234,8 +248,8 @@ def _rebase_locally_without_pushing(tmp_path: Path, branch: str = "feat/x") -> t
     bare, source, canon = _setup_transfer_scenario(tmp_path, branch)
     _advance_main_unrelated(bare, tmp_path)
     _git(["checkout", branch], cwd=source)
-    _git(["fetch", "origin"], cwd=source)
-    _git(["rebase", "origin/main"], cwd=source)
+    _git(["fetch", "bare"], cwd=source)
+    _git(["rebase", "bare/main"], cwd=source)
     assert git_status_porcelain(source) == ""
     return bare, source, canon
 
@@ -245,7 +259,7 @@ def test_transfer_branch_to_main_falls_back_to_force_push_after_local_rebase(tmp
     """Resume scenario: rebased locally in a prior run, but that run's force-push failed."""
     _bare, source, canon = _rebase_locally_without_pushing(tmp_path)
 
-    # branch_needs_rebase is now satisfied (local branch already sits on origin/main), so this
+    # branch_needs_rebase is now satisfied (local branch already sits on bare/main), so this
     # must succeed via the fast-forward path's force-push fallback, with allow_rebase left False.
     result = transfer_branch_to_main(source, canon, branch="feat/x", force_push=True)
 
@@ -272,7 +286,7 @@ def test_transfer_branch_to_main_force_push_refused_when_remote_has_own_commits(
     bare, source, canon = _rebase_locally_without_pushing(tmp_path)
     # A second clone adds a commit to the remote branch that `source` has never seen.
     other = tmp_path / "other"
-    _git(["clone", str(bare), str(other)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(other)], cwd=tmp_path)
     _git(["checkout", "feat/x"], cwd=other)
     (other / "other_work.txt").write_text("other\n", encoding="utf-8")
     _git(["add", "."], cwd=other)
@@ -315,7 +329,7 @@ def test_transfer_branch_to_main_rebase_refused_when_remote_has_own_commits(tmp_
     _advance_main_unrelated(bare, tmp_path)
     _git(["checkout", "feat/x"], cwd=source)
     other = tmp_path / "other"
-    _git(["clone", str(bare), str(other)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(other)], cwd=tmp_path)
     _git(["checkout", "feat/x"], cwd=other)
     (other / "other_work.txt").write_text("other\n", encoding="utf-8")
     _git(["add", "."], cwd=other)
@@ -435,7 +449,7 @@ def test_git_ref_exists_remote(tmp_path: Path) -> None:
     bare = tmp_path / "bare"
     _git(["clone", "--bare", str(source), str(bare)], cwd=tmp_path)
     clone = tmp_path / "clone"
-    _git(["clone", str(bare), str(clone)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(clone)], cwd=tmp_path)
 
     assert git_ref_exists_remote(clone, "main") is True
     assert git_ref_exists_remote(clone, "does-not-exist") is False
@@ -460,14 +474,14 @@ def test_git_remote_url_returns_configured_url(tmp_path: Path) -> None:
     bare = tmp_path / "bare"
     _git(["clone", "--bare", str(source), str(bare)], cwd=tmp_path)
     clone = tmp_path / "clone"
-    _git(["clone", str(bare), str(clone)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(clone)], cwd=tmp_path)
 
-    assert git_remote_url(clone, "origin") == str(bare)
+    assert git_remote_url(clone, "bare") == str(bare)
 
 
 def test_git_remote_url_returns_none_when_unset(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path / "repo")
-    assert git_remote_url(repo, "origin") is None
+    assert git_remote_url(repo, "bare") is None
 
 
 def test_git_index_lock_present_false_by_default(tmp_path: Path) -> None:
@@ -500,14 +514,14 @@ def _make_bare_and_clone(tmp_path: Path) -> tuple[Path, Path]:
     bare = tmp_path / "bare"
     _git(["clone", "--bare", str(source), str(bare)], cwd=tmp_path)
     clone = tmp_path / "clone"
-    _git(["clone", str(bare), str(clone)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(clone)], cwd=tmp_path)
     return bare, clone
 
 
 def _advance_bare_main(bare: Path, tmp_path: Path) -> str:
     """Push a new commit to bare's main from a second, throwaway clone. Returns the new SHA."""
     pusher = tmp_path / "pusher"
-    _git(["clone", str(bare), str(pusher)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(pusher)], cwd=tmp_path)
     (pusher / "more.txt").write_text("more\n", encoding="utf-8")
     _git(["add", "."], cwd=pusher)
     _git(["commit", "-m", "advance main"], cwd=pusher)
@@ -538,7 +552,7 @@ def test_refresh_main_fetches_without_touching_tree_when_not_on_main(tmp_path: P
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-def test_refresh_main_opportunistically_updates_origin_main_tracking_ref(tmp_path: Path) -> None:
+def test_refresh_main_opportunistically_updates_bare_main_tracking_ref(tmp_path: Path) -> None:
     """The rebase path (git_helpers's fetch during resume classification) relies on this."""
     bare, clone = _make_bare_and_clone(tmp_path)
     _git(["checkout", "-b", "feat/x"], cwd=clone)
@@ -546,10 +560,10 @@ def test_refresh_main_opportunistically_updates_origin_main_tracking_ref(tmp_pat
 
     refresh_main(clone)
 
-    assert _git(["rev-parse", "refs/remotes/origin/main"], cwd=clone).stdout.decode().strip() == new_sha
+    assert _git(["rev-parse", "refs/remotes/bare/main"], cwd=clone).stdout.decode().strip() == new_sha
 
 
-def test_refresh_main_warns_and_returns_when_no_origin_remote(
+def test_refresh_main_warns_and_returns_when_no_bare_remote(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -633,7 +647,7 @@ def test_delete_merged_branch_removes_locally_and_on_bare(tmp_path: Path) -> Non
     bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
     transfer_branch_to_main(source, canon, branch="feat/x")
     builder = tmp_path / "builder"
-    _git(["clone", str(bare), str(builder)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(builder)], cwd=tmp_path)
     _git(["checkout", "feat/x"], cwd=builder)
     # Real callers park reviewer/builder on 'main' before cleanup (git branch -d refuses to
     # delete the branch a worktree currently has checked out).
@@ -651,7 +665,7 @@ def test_delete_merged_branch_removes_locally_and_on_bare(tmp_path: Path) -> Non
 def test_delete_merged_branch_warns_without_raising_when_not_merged(tmp_path: Path) -> None:
     bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
     other = tmp_path / "other"
-    _git(["clone", str(bare), str(other)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(other)], cwd=tmp_path)
     del bare
 
     delete_merged_branch(canon, source, other, "feat/x")  # must not raise
@@ -665,7 +679,7 @@ def test_delete_merged_branch_is_a_noop_when_already_deleted(tmp_path: Path) -> 
     bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
     transfer_branch_to_main(source, canon, branch="feat/x")
     other = tmp_path / "other"
-    _git(["clone", str(bare), str(other)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(other)], cwd=tmp_path)
     _git(["checkout", "main"], cwd=source)
     delete_merged_branch(canon, source, other, "feat/x")
     del bare
@@ -679,7 +693,7 @@ def test_git_commits_ahead_of_remote_counts_unpushed_commits(tmp_path: Path) -> 
     bare = tmp_path / "bare"
     _git(["clone", "--bare", str(source), str(bare)], cwd=tmp_path)
     clone = tmp_path / "clone"
-    _git(["clone", str(bare), str(clone)], cwd=tmp_path)
+    _git(["clone", "-o", "bare", str(bare), str(clone)], cwd=tmp_path)
     _git(["config", "user.email", "test@example.com"], cwd=clone)
     _git(["config", "user.name", "Test"], cwd=clone)
 

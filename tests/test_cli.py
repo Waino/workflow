@@ -514,5 +514,5 @@ def test_pr_on_the_stack_tip_lists_every_member(tmp_path: Path, monkeypatch: pyt
         print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
     assert "004_cli_framework (reviewer/docs/plans/checking/004_cli_framework.md" in prompts[0]
-    assert "origin/main..abc1234" in prompts[0]
+    assert "bare/main..abc1234" in prompts[0]
     assert "abc1234..HEAD" in prompts[0]

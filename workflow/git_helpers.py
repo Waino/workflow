@@ -1,14 +1,14 @@
 """Git helper functions for the workflow CLI.
 
 Provides thin wrappers around git commands that respect dry-run mode.
-All helpers that run git operations use cwd=repo_path and the remote named 'origin'.
+All helpers that run git operations use cwd=repo_path and the remote named BARE_REMOTE.
 
 Read-only guard queries (status/existence/ancestry checks used as preconditions or
 resume postconditions) always run for real, even in dry-run mode, so resume previews
 stay accurate. Only helpers that perform mutations honor dry_run.
 
 One deliberate exception: deciding whether `transfer_branch_to_main` will fast-forward
-or need a rebase requires a `git fetch origin` in the source repo. That fetch mutates
+or need a rebase requires a `git fetch bare` in the source repo. That fetch mutates
 only remote-tracking refs (never the working tree or local branches), so it also runs
 for real during resume classification (see each command's `_classify_*_steps`) -- an
 accurate preview is impossible without it.
@@ -30,6 +30,9 @@ from workflow.shell import console, error_console, run_command, run_condition_co
 from workflow.steps import require
 
 GIT_REVPARSE_NO_UPSTREAM = 128
+
+BARE_REMOTE = "bare"
+"""Name of the remote pointing at the workflow's own bare clone, in both in-band and oob modes."""
 
 
 class CommitResult(enum.Enum):
@@ -82,17 +85,17 @@ def git_commit_hash(repo_path: Path, *, short: bool = True) -> str:
 
 
 def git_push(repo_path: Path, *, dry_run: bool = False) -> None:
-    """Run ``git push origin`` in *repo_path*."""
-    run_command(["git", "push", "origin"], cwd=repo_path, dry_run=dry_run)
+    """Run ``git push bare`` in *repo_path*."""
+    run_command(["git", "push", BARE_REMOTE], cwd=repo_path, dry_run=dry_run)
 
 
 def git_fetch(repo_path: Path, *, dry_run: bool = False) -> None:
-    """Run ``git fetch origin`` in *repo_path*."""
-    run_command(["git", "fetch", "origin"], cwd=repo_path, dry_run=dry_run)
+    """Run ``git fetch bare`` in *repo_path*."""
+    run_command(["git", "fetch", BARE_REMOTE], cwd=repo_path, dry_run=dry_run)
 
 
 def git_push_branch(repo_path: Path, branch: str, *, force: bool = False, dry_run: bool = False) -> None:
-    """Push *branch* to ``origin`` by explicit refspec, optionally with ``--force-with-lease``.
+    """Push *branch* to ``bare`` by explicit refspec, optionally with ``--force-with-lease``.
 
     ``-u`` keeps the upstream tracking that ``push.autoSetupRemote`` sets when pushing
     without a refspec (prompt dispatch's ``git_pull`` skips repos with no upstream).
@@ -100,7 +103,7 @@ def git_push_branch(repo_path: Path, branch: str, *, force: bool = False, dry_ru
     args = ["git", "push", "-u"]
     if force:
         args.append("--force-with-lease")
-    args += ["origin", branch]
+    args += [BARE_REMOTE, branch]
     run_command(args, cwd=repo_path, dry_run=dry_run)
 
 
@@ -138,14 +141,14 @@ def git_branch_exists(repo_path: Path, branch: str) -> bool:
 
 
 def git_ref_exists_remote(repo_path: Path, ref: str) -> bool:
-    """Return whether ``origin`` has a branch named *ref* in *repo_path*.
+    """Return whether ``bare`` has a branch named *ref* in *repo_path*.
 
     Queries the remote directly (``git ls-remote --heads``) rather than relying on
     local remote-tracking refs, since a prior ``fetch`` cannot be assumed. Read-only
     guard query: always runs for real, even in dry-run.
     """
     result = subprocess.run(  # noqa: S603
-        ["git", "ls-remote", "--exit-code", "--heads", "origin", ref],  # noqa: S607
+        ["git", "ls-remote", "--exit-code", "--heads", BARE_REMOTE, ref],  # noqa: S607
         cwd=repo_path,
         capture_output=True,
         check=False,
@@ -225,7 +228,7 @@ def git_merge(repo_path: Path, branch: str, *, ff_only: bool = True, dry_run: bo
     """Merge *branch* into the current branch in *repo_path*.
 
     ``ff_only=False`` allows a real merge commit -- needed when the current branch has
-    its own commits *branch* doesn't (e.g. bringing `origin/main` into a stacked plan's
+    its own commits *branch* doesn't (e.g. bringing `bare/main` into a stacked plan's
     already-diverged feature branch), where a fast-forward is structurally impossible.
     """
     args = ["git", "merge", *(["--ff-only"] if ff_only else ["--no-edit"]), "--", branch]
@@ -233,15 +236,15 @@ def git_merge(repo_path: Path, branch: str, *, ff_only: bool = True, dry_run: bo
 
 
 def git_commits_ahead_of_remote(repo_path: Path, branch: str) -> int:
-    """Return how many commits *branch* is ahead of ``origin/<branch>`` in *repo_path*.
+    """Return how many commits *branch* is ahead of ``bare/<branch>`` in *repo_path*.
 
     Assumes the caller has already fetched. Read-only guard query: always runs for
     real, even in dry-run. Fails loudly rather than reporting 0 when the comparison
-    cannot be made (e.g. no ``origin/<branch>``) -- callers use this to decide whether
+    cannot be made (e.g. no ``bare/<branch>``) -- callers use this to decide whether
     someone else's commits would be silently dropped.
     """
     result = subprocess.run(  # noqa: S603
-        ["git", "rev-list", "--count", f"origin/{branch}..{branch}"],  # noqa: S607
+        ["git", "rev-list", "--count", f"{BARE_REMOTE}/{branch}..{branch}"],  # noqa: S607
         cwd=repo_path,
         capture_output=True,
         check=False,
@@ -249,7 +252,7 @@ def git_commits_ahead_of_remote(repo_path: Path, branch: str) -> int:
     stdout = result.stdout.decode().strip()
     if result.returncode != 0 or not stdout.isdigit():
         detail = result.stderr.decode().strip() or stdout or f"exit {result.returncode}"
-        msg = f"cannot compare {branch!r} with origin/{branch} in {repo_path}: {detail}"
+        msg = f"cannot compare {branch!r} with {BARE_REMOTE}/{branch} in {repo_path}: {detail}"
         raise WorkflowError(msg)
     return int(stdout)
 
@@ -282,8 +285,8 @@ def git_branch_delete(repo_path: Path, branch: str, *, dry_run: bool = False) ->
 
 
 def git_delete_remote_branch(repo_path: Path, branch: str, *, dry_run: bool = False) -> None:
-    """Delete *branch* on ``origin`` via ``git push origin --delete``."""
-    run_command(["git", "push", "origin", "--delete", branch], cwd=repo_path, dry_run=dry_run)
+    """Delete *branch* on ``bare`` via ``git push bare --delete``."""
+    run_command(["git", "push", BARE_REMOTE, "--delete", branch], cwd=repo_path, dry_run=dry_run)
 
 
 def git_rev_parse(repo_path: Path, ref: str) -> str | None:
@@ -377,13 +380,13 @@ def git_mv(repo_path: Path, source: Path, target: Path, *, dry_run: bool = False
 
 
 def git_diff_branch(repo_path: Path, *extra_args: str) -> str:
-    """Return ``git diff origin/main...HEAD`` output as a decoded string.
+    """Return ``git diff bare/main...HEAD`` output as a decoded string.
 
     Optionally passes *extra_args* to git (e.g. ``"--name-only"``).
     Raises :class:`subprocess.CalledProcessError` on non-zero exit.
     """
     result = run_command(
-        ["git", "diff", "origin/main...HEAD", *extra_args],
+        ["git", "diff", f"{BARE_REMOTE}/main...HEAD", *extra_args],
         cwd=repo_path,
         capture_output=True,
     )
@@ -392,25 +395,25 @@ def git_diff_branch(repo_path: Path, *extra_args: str) -> str:
 
 
 def refresh_main(repo_path: Path, *, dry_run: bool = False) -> None:
-    """Bring *repo_path*'s local ``main`` (and ``origin/main``) up to date, without touching HEAD.
+    """Bring *repo_path*'s local ``main`` (and ``bare/main``) up to date, without touching HEAD.
 
     If ``main`` is checked out, runs ``git pull --ff-only`` (the only case that touches the
-    working tree, and only by fast-forwarding it). Otherwise runs ``git fetch origin
+    working tree, and only by fast-forwarding it). Otherwise runs ``git fetch bare
     main:main``, which updates ``refs/heads/main`` via the explicit refspec without touching
     HEAD or the working tree -- and, as a side effect of the fetch, opportunistically updates
-    ``refs/remotes/origin/main`` too (the rebase path in :func:`transfer_branch_to_main`
+    ``refs/remotes/bare/main`` too (the rebase path in :func:`transfer_branch_to_main`
     relies on that).
 
-    No-ops with a warning if *repo_path* has no ``origin`` remote configured (some test
+    No-ops with a warning if *repo_path* has no ``bare`` remote configured (some test
     fixtures construct bare-bones repos without one).
     """
-    if git_remote_url(repo_path, "origin") is None:
-        error_console.print(f"[yellow]\\[!] {repo_path} has no 'origin' remote; skipping refresh_main.[/yellow]")
+    if git_remote_url(repo_path, BARE_REMOTE) is None:
+        error_console.print(f"[yellow]\\[!] {repo_path} has no '{BARE_REMOTE}' remote; skipping refresh_main.[/yellow]")
         return
     if git_current_branch(repo_path) == "main":
         run_command(["git", "pull", "--ff-only"], cwd=repo_path, dry_run=dry_run)
     else:
-        run_command(["git", "fetch", "origin", "main:main"], cwd=repo_path, dry_run=dry_run)
+        run_command(["git", "fetch", BARE_REMOTE, "main:main"], cwd=repo_path, dry_run=dry_run)
 
 
 def park_on_main(repo_path: Path, *, dry_run: bool = False) -> None:
@@ -443,7 +446,7 @@ def delete_merged_branch(
     downgraded to a warning rather than raised -- the accept itself must not be undone
     by a cosmetic cleanup problem. No-ops (with a warning) if *branch* is not (yet)
     known to be merged; a no-op, silently, if it was already cleaned up by a prior run
-    (its absence from ``origin`` is itself the postcondition this function establishes).
+    (its absence from ``bare`` is itself the postcondition this function establishes).
     """
     if dry_run:
         # A dry run never landed the merge, so the merged-into-main probe below would
@@ -452,7 +455,7 @@ def delete_merged_branch(
         return
     if not git_ref_exists_remote(canon_repo, branch):
         return
-    if not git_is_ancestor(canon_repo, f"origin/{branch}", "main"):
+    if not git_is_ancestor(canon_repo, f"{BARE_REMOTE}/{branch}", "main"):
         error_console.print(
             f"[yellow]\\[!] {branch} is not (yet) known to be merged into main; skipping branch cleanup.[/yellow]",
         )
@@ -478,7 +481,7 @@ class TransferResult(enum.Enum):
 
 
 def branch_needs_rebase(source_repo: Path, branch: str, *, fetch: bool = True) -> bool:
-    """Return whether *branch* is **not** based on ``origin/main``, fetching first by default.
+    """Return whether *branch* is **not** based on ``bare/main``, fetching first by default.
 
     Used both by :func:`transfer_branch_to_main` itself and by each command's resume
     classification, so a `--dry-run` preview can announce the rebase before it happens
@@ -487,24 +490,24 @@ def branch_needs_rebase(source_repo: Path, branch: str, *, fetch: bool = True) -
     """
     if fetch:
         git_fetch(source_repo)
-    head = branch if git_branch_exists(source_repo, branch) else f"origin/{branch}"
-    return not git_is_ancestor(source_repo, "origin/main", head)
+    head = branch if git_branch_exists(source_repo, branch) else f"{BARE_REMOTE}/{branch}"
+    return not git_is_ancestor(source_repo, f"{BARE_REMOTE}/main", head)
 
 
 def remote_branch_has_unique_commits(repo_path: Path, branch: str) -> bool:
-    """Return whether ``origin/{branch}`` holds commits with no patch-equivalent on *branch*.
+    """Return whether ``bare/{branch}`` holds commits with no patch-equivalent on *branch*.
 
     The precondition for force-pushing *branch*: when this is ``False``, everything the
     remote branch holds also exists locally (identically, or as a rewritten commit with
     the same patch id), so overwriting it loses nothing. ``git cherry`` marks such
-    commits ``+``. ``False`` when ``origin/{branch}`` is unknown (nothing to lose);
+    commits ``+``. ``False`` when ``bare/{branch}`` is unknown (nothing to lose);
     ``True`` when the query itself fails, so an unanswerable question never authorises a
     force-push. Read-only guard query: always runs for real, even in dry-run.
     """
-    if git_rev_parse(repo_path, f"refs/remotes/origin/{branch}") is None:
+    if git_rev_parse(repo_path, f"refs/remotes/{BARE_REMOTE}/{branch}") is None:
         return False
     result = subprocess.run(  # noqa: S603
-        ["git", "cherry", branch, f"origin/{branch}"],  # noqa: S607
+        ["git", "cherry", branch, f"{BARE_REMOTE}/{branch}"],  # noqa: S607
         cwd=repo_path,
         capture_output=True,
         check=False,
@@ -544,7 +547,7 @@ def _rebase_onto_main(  # noqa: PLR0913
     plan_name = branch.split("/", 1)[-1]
     require(
         allow_rebase,
-        f"{branch} is not fast-forwardable onto origin/main; rerun with the rebase step "
+        f"{branch} is not fast-forwardable onto {BARE_REMOTE}/main; rerun with the rebase step "
         f"enabled (`workflow rebase {plan_name}`) once it has been rebased.",
     )
     require(
@@ -564,21 +567,21 @@ def _rebase_onto_main(  # noqa: PLR0913
     # patch ids, which would make this refuse a perfectly good rebase.
     require(
         not remote_branch_has_unique_commits(source_repo, branch),
-        f"origin/{branch} has commits that are not in {source_repo}'s {branch}; rebasing would "
+        f"{BARE_REMOTE}/{branch} has commits that are not in {source_repo}'s {branch}; rebasing would "
         f"force-push over them. Pull them into {branch} first.",
     )
 
     if dry_run:
-        console.print(f"[dim]would rebase {branch} onto origin/main in {source_repo}[/dim]")
+        console.print(f"[dim]would rebase {branch} onto {BARE_REMOTE}/main in {source_repo}[/dim]")
         return TransferResult.REBASED
 
     try:
-        run_command(["git", "rebase", "origin/main"], cwd=source_repo)
+        run_command(["git", "rebase", f"{BARE_REMOTE}/main"], cwd=source_repo)
     except subprocess.CalledProcessError as exc:
         # REBASE_HEAD, not HEAD: mid-rebase, HEAD is detached at the 'onto' commit
-        # (origin/main) itself, which would make merge-tree report no conflicts at all.
-        conflict_result = subprocess.run(
-            ["git", "merge-tree", "--write-tree", "origin/main", "REBASE_HEAD"],  # noqa: S607
+        # (bare/main) itself, which would make merge-tree report no conflicts at all.
+        conflict_result = subprocess.run(  # noqa: S603
+            ["git", "merge-tree", "--write-tree", f"{BARE_REMOTE}/main", "REBASE_HEAD"],  # noqa: S607
             cwd=source_repo,
             capture_output=True,
             check=False,
@@ -595,7 +598,7 @@ def _rebase_onto_main(  # noqa: PLR0913
                 f"[yellow]\\[!] git rebase --abort failed in {source_repo}: {abort.stderr.decode()}[/yellow]",
             )
         conflict_note = f" Conflicting paths: {', '.join(conflicts)}." if conflicts else ""
-        msg = f"rebase of {branch} onto origin/main failed.{conflict_note} Recovery: workflow rebase {plan_name}"
+        msg = f"rebase of {branch} onto {BARE_REMOTE}/main failed.{conflict_note} Recovery: workflow rebase {plan_name}"
         raise WorkflowError(msg) from exc
 
     if post_rebase_verify is not None:
@@ -604,7 +607,7 @@ def _rebase_onto_main(  # noqa: PLR0913
     git_push_branch(source_repo, branch, force=True)
     git_fetch(canon_repo, dry_run=dry_run)
     git_pull(canon_repo, dry_run=dry_run)
-    git_merge(canon_repo, f"origin/{branch}", dry_run=dry_run)
+    git_merge(canon_repo, f"{BARE_REMOTE}/{branch}", dry_run=dry_run)
     git_push(canon_repo, dry_run=dry_run)
     return TransferResult.REBASED
 
@@ -620,7 +623,7 @@ def _publish_source_branch(
     """Publish *branch* from *source_repo* on the fast-forward path of a transfer.
 
     Nothing to publish when *branch* does not exist locally (canon merges
-    ``origin/{branch}``, which is then the only copy). A rejected push means the remote
+    ``bare/{branch}``, which is then the only copy). A rejected push means the remote
     still holds the pre-rebase commits of an earlier run whose force-push failed -- the
     only non-fast-forward this path can legitimately see -- so it retries with
     ``--force-with-lease``, but only when no remote commit would be lost, the operator
@@ -634,12 +637,12 @@ def _publish_source_branch(
     except subprocess.CalledProcessError:
         require(
             not remote_branch_has_unique_commits(source_repo, branch),
-            f"pushing {branch} was rejected, and origin/{branch} has commits that are not in "
+            f"pushing {branch} was rejected, and {BARE_REMOTE}/{branch} has commits that are not in "
             f"{source_repo}'s {branch}; force-pushing would lose them. Reconcile the branch by hand.",
         )
         require(
             force_push,
-            f"pushing {branch} was rejected; origin/{branch} still holds the pre-rebase commits of an "
+            f"pushing {branch} was rejected; {BARE_REMOTE}/{branch} still holds the pre-rebase commits of an "
             f"earlier run. Rerun with --force-push to replace them with the rebased branch.",
         )
         if post_rebase_verify is not None:
@@ -676,10 +679,10 @@ def transfer_branch_to_main(  # noqa: PLR0913
     :func:`_publish_source_branch`).
 
     On the rebase path -- refused unless *allow_rebase* is ``True``, since a rebase must
-    never be a surprise -- *source_repo* is rebased onto ``origin/main``, force-pushed
+    never be a surprise -- *source_repo* is rebased onto ``bare/main``, force-pushed
     with ``--force-with-lease``, then merged into *canon_repo* the same way. Guarded by:
     *source_repo*'s tree must be clean; *source_repo* must be checked out to *branch*;
-    *branch* must not be checked out in any of *other_worktrees*; ``origin/{branch}`` must
+    *branch* must not be checked out in any of *other_worktrees*; ``bare/{branch}`` must
     hold no commits of its own. Never mutates anything in ``--dry-run``. On a rebase
     conflict, aborts the rebase (best effort) and raises with the conflicting paths and
     the recovery (``workflow rebase <plan>``).
@@ -720,7 +723,7 @@ def transfer_branch_to_main(  # noqa: PLR0913
         )
         git_pull(canon_repo, dry_run=dry_run)
         # Merge via the remote-tracking ref so the branch need not exist locally.
-        git_merge(canon_repo, f"origin/{branch}", dry_run=dry_run)
+        git_merge(canon_repo, f"{BARE_REMOTE}/{branch}", dry_run=dry_run)
         git_push(canon_repo, dry_run=dry_run)
         return TransferResult.FAST_FORWARD
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
@@ -17,11 +18,13 @@ from rich.table import Table
 
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.git_helpers import (
+    BARE_REMOTE,
     git_branch_exists,
     git_current_branch,
     git_index_lock_present,
     git_is_ancestor,
     git_is_valid_repo,
+    git_remote_url,
     git_rev_parse,
     git_status_porcelain,
 )
@@ -34,8 +37,6 @@ from workflow.shell import console, error_console
 from workflow.stack import BRANCH_PREFIX, branch_for_plan, read_plan_frontmatter
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from workflow.config import WorkflowConfig
     from workflow.layout import Layout
     from workflow.models import Plan
@@ -110,6 +111,21 @@ def _check_staleness(check: WorktreeCheck, repo_path: Path, bare_path: Path, act
         check.notes.append("not based on bare main; accept will rebase")
 
 
+def _check_bare_remote(check: WorktreeCheck, repo_path: Path, bare_path: Path) -> None:
+    """Flag the pre-migration remote shape.
+
+    Anomalies: a missing ``bare`` remote, or a leftover ``origin`` pointing at the
+    project's bare path (the 023.3 migration renames it to ``bare``).
+    """
+    if git_remote_url(repo_path, BARE_REMOTE) is not None:
+        return
+    origin_url = git_remote_url(repo_path, "origin")
+    if origin_url is not None and Path(origin_url).resolve() == bare_path.resolve():
+        check.anomalies.append("'origin' remote points at bare; run scripts/migrate_023.py")
+    else:
+        check.anomalies.append(f"no {BARE_REMOTE!r} remote configured")
+
+
 def _check_worktree(
     repo_name: WorktreeName,
     repo_path: Path,
@@ -130,6 +146,8 @@ def _check_worktree(
     check.index_lock = git_index_lock_present(repo_path)
     if check.index_lock:
         check.anomalies.append("stale .git/index.lock")
+
+    _check_bare_remote(check, repo_path, bare_path)
 
     check.branch = git_current_branch(repo_path)
     check.dirty = bool(git_status_porcelain(repo_path))

@@ -129,7 +129,7 @@ states:
         prompt: |
           The branch {{ branch }} can no longer be fast-forward merged into `main`,
           and the automatic rebase hit conflicts.
-          Fetch from origin and rebase {{ branch }} onto `origin/main`.
+          Fetch from bare and rebase {{ branch }} onto `bare/main`.
           Resolve the conflicts, preserving the intent of both sides; do not drop changes from `main`.
           Run the pre-commit hook and make sure it passes.
           Do not push: you have no write access to the shared repository.
@@ -237,7 +237,7 @@ states:
         prompt: |
           The branch {{ branch }} can no longer be fast-forward merged into `main`,
           and the automatic rebase hit conflicts.
-          Fetch from origin and rebase {{ branch }} onto `origin/main`.
+          Fetch from bare and rebase {{ branch }} onto `bare/main`.
           Resolve the conflicts, preserving the intent of both sides; do not drop changes from `main`.
           Run the pre-commit hook and make sure it passes.
           Do not push: you have no write access to the shared repository.

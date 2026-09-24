@@ -92,9 +92,9 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
     run_command_calls = [c.args[0] for c in manager.run_command.call_args_list]
     assert run_command_calls == [
         ["git", "clone", "--bare", "canon", "bare"],
-        ["git", "clone", "bare", "planner"],
-        ["git", "clone", "bare", "builder"],
-        ["git", "clone", "bare", "reviewer"],
+        ["git", "clone", "-o", "bare", "bare", "planner"],
+        ["git", "clone", "-o", "bare", "bare", "builder"],
+        ["git", "clone", "-o", "bare", "bare", "reviewer"],
         ["git", "config", "push.autoSetupRemote", "true"],  # planner
         ["git", "config", "push.default", "current"],  # planner
         [
@@ -119,10 +119,10 @@ def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch
             "../../.git-pre-commit-hook",
             ".git/hooks/pre-commit",
         ],  # reviewer
-        ["git", "remote", "add", "origin", str(project_dir / "bare")],
+        ["git", "remote", "add", "bare", str(project_dir / "bare")],
         ["git", "config", "push.autoSetupRemote", "true"],  # canon
         ["git", "config", "push.default", "current"],  # canon
-        ["git", "push", "-u", "origin", "HEAD"],
+        ["git", "push", "-u", "bare", "HEAD"],
         [
             "run_agent_in_docker.sh",
             "venv",

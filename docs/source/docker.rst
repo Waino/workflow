@@ -60,7 +60,7 @@ script commands that run the pre-commit hook) invoke ``hook``. The script must:
 * Mount ``{project-dir}/bare`` **read-only**, at that same host path, into the
   persistent agent container. Agents have no write access to the shared repo, but
   they do need to ``git fetch`` it -- most importantly for the ``rebase`` prompt,
-  which asks an agent to rebase its branch onto current ``origin/main`` after an
+  which asks an agent to rebase its branch onto current ``bare/main`` after an
   automatic rebase hit conflicts. Mounting it read-write would let an agent push
   directly to bare, bypassing the human-operated CLI that performs every other
   push; mounting it read-only makes that fail by construction rather than by

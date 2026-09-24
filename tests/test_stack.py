@@ -390,7 +390,7 @@ def test_stack_entries_commit_ranges_for_three_plan_stack(tmp_path: Path) -> Non
     entries = stack_entries(make_layout(tmp_path), tip)
 
     assert [(e.name, e.commit_range) for e in entries] == [
-        ("001_base", "origin/main..b1"),
+        ("001_base", "bare/main..b1"),
         ("002_middle", "b1..c1"),
         ("003_tip", "c1..HEAD"),
     ]

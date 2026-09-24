@@ -152,7 +152,7 @@ Landing a branch on main
 
 ``todo``, ``implement`` and ``accept`` land a branch on ``main`` with a
 fast-forward merge. When ``main`` has moved on since the branch was cut — routine
-under parallel work — the branch is first rebased onto ``origin/main``, the
+under parallel work — the branch is first rebased onto ``bare/main``, the
 pre-commit hook is re-run against the rebased tree, and the result is force-pushed
 with ``--force-with-lease``. The command says so loudly: a rebase rewrites history,
 which is your cue to check the outcome. A rebase is refused when the source clone is
@@ -200,7 +200,7 @@ state. All accept ``--edit`` to review/modify the prompt before sending.
 
 ``rebase [PLAN_PATH]``
     Ask the agent owning the plan's branch (planner in ``planning``, reviewer in
-    ``checking``) to rebase that branch onto current ``origin/main`` and resolve the
+    ``checking``) to rebase that branch onto current ``bare/main`` and resolve the
     conflicts the automatic rebase could not.
 
 ``full-review``
