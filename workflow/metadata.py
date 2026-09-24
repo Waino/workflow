@@ -12,7 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, model_validator
 
 from workflow.exceptions import WorkflowError
 
@@ -40,6 +40,22 @@ class ProjectMetadata(BaseModel):
     version: Literal[1] = 1
     mode: ProjectMode = ProjectMode.in_band
     code_repos: list[CodeRepoMeta] = []
+
+    @model_validator(mode="after")
+    def validate_code_repos_matches_mode(self) -> ProjectMetadata:
+        """Enforce that ``code_repos`` is non-empty iff the project is oob.
+
+        In-band projects have no separate code repos (the single canon repo holds
+        everything); oob projects always have at least one (a docs-only project is
+        out of scope).
+        """
+        if self.mode == ProjectMode.in_band and self.code_repos:
+            msg = "in-band projects must not have code_repos."
+            raise ValueError(msg)
+        if self.mode == ProjectMode.oob and not self.code_repos:
+            msg = "oob projects must have at least one code repo."
+            raise ValueError(msg)
+        return self
 
 
 def read_metadata(project_dir: Path) -> ProjectMetadata:

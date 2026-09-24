@@ -70,6 +70,22 @@ class TestReadMetadataErrors:
             read_metadata(tmp_path)
 
 
+class TestCodeReposMatchesMode:
+    def test_oob_without_code_repos_raises(self) -> None:
+        with pytest.raises(ValueError, match="oob projects must have at least one code repo"):
+            ProjectMetadata(mode=ProjectMode.oob)
+
+    def test_in_band_with_code_repos_raises(self) -> None:
+        with pytest.raises(ValueError, match="in-band projects must not have code_repos"):
+            ProjectMetadata(mode=ProjectMode.in_band, code_repos=[CodeRepoMeta(name="myrepo")])
+
+    def test_oob_with_code_repos_is_valid(self) -> None:
+        ProjectMetadata(mode=ProjectMode.oob, code_repos=[CodeRepoMeta(name="myrepo")])
+
+    def test_in_band_without_code_repos_is_valid(self) -> None:
+        ProjectMetadata(mode=ProjectMode.in_band)
+
+
 class TestWriteMetadataAtomicity:
     def test_no_tmp_residue_on_success(self, tmp_path: Path) -> None:
         write_metadata(tmp_path, ProjectMetadata())
@@ -83,7 +99,10 @@ class TestWriteMetadataAtomicity:
             patch("workflow.metadata.json.dump", side_effect=RuntimeError("boom")),
             pytest.raises(RuntimeError, match="boom"),
         ):
-            write_metadata(tmp_path, ProjectMetadata(mode=ProjectMode.oob))
+            write_metadata(
+                tmp_path,
+                ProjectMetadata(mode=ProjectMode.oob, code_repos=[CodeRepoMeta(name="myrepo")]),
+            )
 
         assert (tmp_path / METADATA_FILENAME).read_text() == original_content
         assert list(tmp_path.iterdir()) == [tmp_path / METADATA_FILENAME]
