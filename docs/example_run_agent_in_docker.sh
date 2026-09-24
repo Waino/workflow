@@ -2,7 +2,7 @@
 # Example run_agent_in_docker.sh
 # Copy this file to the project root (or anywhere on PATH) and customise it.
 #
-# Usage: run_agent_in_docker.sh SUBCOMMAND PROJECT REPO --project-dir DIR [--model MODEL] [--reset]
+# Usage: run_agent_in_docker.sh SUBCOMMAND PROJECT REPO --project-dir DIR [--model MODEL] [--reset] [--repo NAME]
 #
 # SUBCOMMAND    - agent: run the agent CLI in a persistent sandbox container
 #                 venv:  (re)create the repo's virtual env
@@ -14,6 +14,8 @@
 # --project-dir - absolute path to the project root directory (passed by `workflow start`)
 # --model       - model id forwarded to the agent CLI (agent only)
 # --reset       - remove the existing container before starting a fresh one (agent/venv only)
+# --repo        - out-of-band code repo name to run the hook inside (hook only); default: the
+#                 mount root itself (in-band, or an oob docs-repo hook)
 
 set -euo pipefail
 
@@ -28,7 +30,7 @@ BUILDER_PORTS=""
 # Argument parsing
 # ---------------------------------------------------------------------------
 usage() {
-    echo "Usage: $(basename "$0") SUBCOMMAND PROJECT REPO --project-dir DIR [--model MODEL] [--reset]" >&2
+    echo "Usage: $(basename "$0") SUBCOMMAND PROJECT REPO --project-dir DIR [--model MODEL] [--reset] [--repo NAME]" >&2
     echo "       SUBCOMMAND is one of: agent, venv, shell, hook" >&2
     exit 1
 }
@@ -51,6 +53,7 @@ esac
 PROJECT_DIR=""
 MODEL=""
 RESET=false
+CODE_REPO=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -67,6 +70,11 @@ while [[ $# -gt 0 ]]; do
         --reset)
             RESET=true
             shift
+            ;;
+        --repo)
+            [[ $# -ge 2 ]] || { echo "Error: --repo requires an argument" >&2; exit 1; }
+            CODE_REPO="$2"
+            shift 2
             ;;
         *)
             echo "Error: unknown option: $1" >&2
@@ -91,6 +99,10 @@ if [[ "$RESET" == true && "$SUBCOMMAND" != agent && "$SUBCOMMAND" != venv ]]; th
     echo "Error: --reset is only valid for the 'agent' and 'venv' subcommands" >&2
     exit 1
 fi
+if [[ -n "$CODE_REPO" && "$SUBCOMMAND" != hook ]]; then
+    echo "Error: --repo is only valid for the 'hook' subcommand" >&2
+    exit 1
+fi
 
 ENV_LIST="${PROJECT_DIR}/env.list"
 if [[ ! -f "$ENV_LIST" ]]; then
@@ -104,6 +116,11 @@ fi
 # ---------------------------------------------------------------------------
 CONTAINER="pi-${PROJECT}-${REPO}"
 REPO_PATH="/home/auggie/projects/${PROJECT}/${REPO}"
+# In-band, REPO_PATH is the repo itself. Out-of-band, it is a wrapper directory holding
+# one subdirectory per repo (docs plus every code repo); --repo selects which one the
+# 'hook' subcommand runs in.
+HOOK_WORKDIR="$REPO_PATH"
+[[ -n "$CODE_REPO" ]] && HOOK_WORKDIR="${REPO_PATH}/${CODE_REPO}"
 
 # Throwaway-container subcommands need no persistent container bring-up at all.
 THROWAWAY=false
@@ -190,8 +207,17 @@ case "$SUBCOMMAND" in
         ;;
     venv)
         [[ -d "${PROJECT_DIR}/${REPO}/.venv" ]] && rm -rf "${PROJECT_DIR}/${REPO}/.venv"
-        VENV_CMD="source ~/.bashrc && uv venv --seed && source .venv/bin/activate && uv sync --group dev"
-        # VENV_CMD="source ~/.bashrc && uv venv --seed && source .venv/bin/activate && uv pip install -e ."
+        # Out-of-band: a bootstrap script version controlled in the docs repo (see
+        # docs/example_bootstrap_venv.sh) knows how to install every code repo; fall back to
+        # plain uv when it is absent (in-band, or an oob project with a single pyproject.toml
+        # at the mount root).
+        BOOTSTRAP_REL="docs/bootstrap_venv.sh"
+        if [[ -f "${PROJECT_DIR}/${REPO}/${BOOTSTRAP_REL}" ]]; then
+            VENV_CMD="source ~/.bashrc && ./${BOOTSTRAP_REL}"
+        else
+            VENV_CMD="source ~/.bashrc && uv venv --seed && source .venv/bin/activate && uv sync --group dev"
+            # VENV_CMD="source ~/.bashrc && uv venv --seed && source .venv/bin/activate && uv pip install -e ."
+        fi
         if [[ "$REPO" == canon ]]; then
             # Throwaway container: canon has no persistent sandbox.
             # NOTE: --env-file intentionally omitted; venv creation needs no secrets.
@@ -208,14 +234,19 @@ case "$SUBCOMMAND" in
         fi
         ;;
     hook)
+        # Fall back to .git/hooks/pre-commit when there's no version-controlled
+        # .git-pre-commit-hook (e.g. a third-party oob code repo); fail loudly if neither exists.
+        HOOK_CMD='if [[ -x ./.git-pre-commit-hook ]]; then ./.git-pre-commit-hook; \
+            elif [[ -x .git/hooks/pre-commit ]]; then .git/hooks/pre-commit; \
+            else echo "Error: no pre-commit hook found in $(pwd)" >&2; exit 1; fi'
         # Throwaway container; warm .venv comes from the mounted repo dir.
         # NOTE: --env-file intentionally omitted; the hook needs no secrets.
         exec docker run -t --rm --user auggie \
-            -v "${PROJECT_DIR}/${REPO}:${REPO_PATH}" --workdir "$REPO_PATH" \
+            -v "${PROJECT_DIR}/${REPO}:${REPO_PATH}" --workdir "$HOOK_WORKDIR" \
             -v /home/auggie/dot_cache:/home/auggie/.cache \
             -v /home/auggie/dot_local/share/uv/python:/home/auggie/.local/share/uv/python \
             --env PROJECT="$PROJECT" --env AGENT="$REPO" \
-            "${IMAGE}" bash -lc "./.git-pre-commit-hook"
+            "${IMAGE}" bash -lc "$HOOK_CMD"
         ;;
     agent)
         EXEC_CMD=(docker exec -it --user auggie --workdir "$REPO_PATH" "$CONTAINER" \

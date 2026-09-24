@@ -46,9 +46,18 @@ Setup and session management
 -----------------------------
 
 ``init``
-    Initialise the project directory: clone the canon repo into a bare repository
+    Initialise the project directory: clone the canon repo(s) into a bare repository
     and one working clone per agent. Supports ``--continue`` to resume after a
-    partially completed run.
+    partially completed run. ``--oob`` initialises an out-of-band project instead
+    (see :ref:`Out-of-band mode`); ``--skip-hook NAME`` (repeatable, oob only) skips
+    installing the pre-commit hook symlink for a given code repo. The mode is fixed
+    at the first successful ``init`` and cannot be changed by a later run.
+
+``add-repo NAME``
+    Out-of-band only: register one more code repo after ``init`` (clone into ``bare``
+    and every agent worktree, record it in ``.workflow.json``). ``--skip-hook`` skips
+    installing the pre-commit hook symlink for this repo. There is no command to
+    remove a registered repo.
 
 ``start``
     Create the tmux session (or attach to it if it already exists), one window per

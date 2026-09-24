@@ -51,6 +51,35 @@ Only the ``main`` branch is long-lived; every other branch is short-lived and de
 merge. Plans move through the pipeline as commits on these branches, and the CLI
 performs the push/pull/merge steps needed at each handoff.
 
+.. _Out-of-band mode:
+
+Out-of-band mode
+~~~~~~~~~~~~~~~~~
+
+A project is either **in-band** (the default: plans live alongside the package
+source in one repo) or **out-of-band** ("oob": plans live in a separate ``docs``
+repo, alongside one or more independent code repos). The mode is fixed for good at
+``workflow init`` (plain ``init``, or ``init --oob``) and cannot be changed afterwards.
+
+In oob mode, ``canon``/``bare``/``planner``/``builder``/``reviewer`` become wrapper
+directories, each holding one subdirectory per repo:
+
+.. code-block::
+
+    canon/
+    +-- docs/          (plans; also holds body_of_agents.md and bootstrap_venv.sh)
+    +-- mypackage/
+    +-- dep1/
+
+``workflow add-repo NAME`` registers one more code repo after ``init`` (it clones
+``canon/NAME`` into ``bare`` and every agent worktree, and records it in
+``.workflow.json``); there is no command to remove one. ``AGENTS.md`` is generated
+from a hand-written ``docs/body_of_agents.md`` into every worktree root as an
+unversioned build artifact (in-band, the hand-written body and the generated file
+are the same, version-controlled ``AGENTS.md``). A single ``.venv`` at each wrapper
+root covers every code repo, bootstrapped by the docs repo's own
+``bootstrap_venv.sh`` — see :ref:`Docker`.
+
 Plans and the state machine
 ----------------------------
 
@@ -170,5 +199,5 @@ confused:
 * ``config.yaml`` — hand-authored configuration. Edited freely by the operator;
   resolved from a CLI flag, the project directory, or ``~/.config/workflow/``.
 * ``.workflow.json`` — tool-owned state. Written only by ``workflow`` commands
-  (currently just ``init``); never hand-edited. Its presence marks the project
-  root, the way ``.workflow_root`` used to.
+  (``init`` and, in oob mode, ``add-repo``); never hand-edited. Its presence marks
+  the project root, the way ``.workflow_root`` used to.

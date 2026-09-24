@@ -15,7 +15,7 @@ Usage
 
 ::
 
-    run_agent_in_docker.sh SUBCOMMAND PROJECT REPO --project-dir DIR [--model MODEL] [--reset]
+    run_agent_in_docker.sh SUBCOMMAND PROJECT REPO --project-dir DIR [--model MODEL] [--reset] [--repo NAME]
 
 ``SUBCOMMAND``
     One of:
@@ -46,6 +46,13 @@ Usage
     Remove the existing container before starting a fresh one. Only valid with
     ``agent`` and ``venv``.
 
+``--repo NAME``
+    Out-of-band only: the code repo to run the hook inside, e.g. ``mypackage``. The
+    mounted directory is a wrapper holding one subdirectory per repo (``docs`` plus
+    every code repo), so ``hook`` needs to know which one to ``cd`` into. Only valid
+    with ``hook``; omit it for in-band projects, where the mount root is the repo
+    itself.
+
 What ``workflow`` expects from the script
 -------------------------------------------
 
@@ -67,6 +74,14 @@ script commands that run the pre-commit hook) invoke ``hook``. The script must:
   policy.
 * Read secrets (API keys, etc.) from an ``env.list`` file in the project directory
   rather than embedding them in the script.
+* Run ``.git-pre-commit-hook`` when present, falling back to ``.git/hooks/pre-commit``
+  otherwise, and fail loudly if neither exists (out-of-band code repos are not
+  guaranteed to ship the shared hook script).
+* For ``venv``, run a version-controlled ``docs/bootstrap_venv.sh`` from the mount
+  root when it exists (out-of-band projects with more than one code repo have no
+  single ``pyproject.toml`` for plain ``uv sync`` to act on), falling back to
+  ``uv venv --seed && uv sync`` otherwise. A template lives at
+  ``docs/example_bootstrap_venv.sh``.
 
 Customization points
 ----------------------
