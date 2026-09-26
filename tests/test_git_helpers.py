@@ -53,11 +53,12 @@ def test_no_origin_literal_in_workflow_package() -> None:
     """023.3: the bare remote is named BARE_REMOTE everywhere; 'origin' means canon/upstream now."""
     package_root = Path(__file__).parents[1] / "workflow"
     pattern = re.compile(r"""['"]origin['"]""")
+    # The single sanctioned spelling, used only to detect/migrate the pre-023 shape.
+    legacy_definition = 'LEGACY_BARE_REMOTE = "origin"'
     offending = [
         str(path.relative_to(package_root))
         for path in package_root.rglob("*.py")
-        # doctor.py must recognise the pre-migration 'origin' shape to flag it as an anomaly.
-        if path.name != "doctor.py" and pattern.search(path.read_text(encoding="utf-8"))
+        if pattern.search(path.read_text(encoding="utf-8").replace(legacy_definition, ""))
     ]
     assert offending == []
 

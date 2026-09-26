@@ -71,6 +71,22 @@ directories, each holding one subdirectory per repo:
     +-- mypackage/
     +-- dep1/
 
+Before ``workflow init --oob``, prepare the project directory by hand:
+
+* ``env.list`` exists in the project directory.
+* ``canon/docs`` is a git repo with at least one commit and ``main`` checked out.
+* ``canon/docs`` contains ``body_of_agents.md`` (the hand-written part of ``AGENTS.md``)
+  and ``bootstrap_venv.sh``, committed as executable (``git add --chmod=+x``): agents
+  clone the committed version.
+* Every code repo is cloned into ``canon/NAME`` with at least one commit. Code repo
+  names are single directory names (letters, digits, ``.``, ``_``, ``-``; not ``docs``).
+  ``init --oob`` registers every git repo it finds under ``canon/`` besides ``docs``
+  and prints the list; preview it first with ``workflow --dry-run init --oob``.
+
+Code repos in ``canon`` keep their own upstream: ``init`` adds a ``bare`` remote and
+pushes the checked-out branch to it, but leaves the branch's upstream and push settings
+alone.
+
 ``workflow add-repo NAME`` registers one more code repo after ``init`` (it clones
 ``canon/NAME`` into ``bare`` and every agent worktree, and records it in
 ``.workflow.json``); there is no command to remove one. ``AGENTS.md`` is generated

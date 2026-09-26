@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 
 import click
 import jinja2
+from pydantic import ValidationError
 
 from workflow.audit import write_audit_log
 from workflow.commands.agents_md import (
@@ -44,6 +45,7 @@ from workflow.git_helpers import (
     git_config_get,
     git_current_branch,
     git_fetch,
+    git_file_mode_at_ref,
     git_index_lock_present,
     git_is_ancestor,
     git_is_valid_repo,
@@ -103,6 +105,7 @@ from workflow.validate import validate as run_validate
 # moved by a prior (partially-failed) run of the same command can be resumed.
 BOOTSTRAP_VENV_FILENAME = "bootstrap_venv.sh"
 """Executable venv-bootstrap script, version controlled in the docs repo (oob mode only)."""
+_GIT_EXECUTABLE_MODE = "100755"
 
 _EXPECTED_STATES_FOR: dict[str, set[PlanState]] = {
     "todo": {PlanState.PLANNING, PlanState.TODO},
@@ -122,13 +125,6 @@ def _enforce_expected_state(plan: Plan, command_name: str) -> None:
     raise WorkflowError(msg)
 
 
-def _require_project_dir(config: WorkflowConfig) -> Path:
-    if config.project_dir is None:
-        msg = "Error: not inside a workflow project directory."
-        raise WorkflowError(msg)
-    return config.project_dir
-
-
 def _write_script_audit_log(  # noqa: PLR0913
     config: WorkflowConfig,
     command: str,
@@ -140,7 +136,7 @@ def _write_script_audit_log(  # noqa: PLR0913
 ) -> None:
     if dry_run:
         return
-    project_dir = _require_project_dir(config)
+    project_dir = config.require_project_dir()
     write_audit_log(
         project_dir,
         AuditLogEntry(
@@ -187,7 +183,7 @@ def _transition_stack_members(  # noqa: PLR0913
     """
     new_members: list[Plan] = []
     for member in stack:
-        target_rel = Path(worktree_override.value) / "docs" / "plans" / target_state.value / member.path.name
+        target_rel = _plan_path_in_state(layout, worktree_override, target_state, member)
         if (layout.project_dir / target_rel).exists():
             new_members.append(member.model_copy(update={"state": target_state, "path": target_rel}))
         else:
@@ -231,16 +227,21 @@ def _open_in_editor(path: Path) -> None:
     subprocess.run([editor, str(path)], check=True)  # noqa: S603
 
 
-def _run_pre_commit_hook(config: WorkflowConfig, repo_name: str, *, dry_run: bool, repo: str | None = None) -> None:
-    """Run the pre-commit hook in *repo_name*'s worktree.
+def _run_pre_commit_hook(config: WorkflowConfig, worktree: str, *, dry_run: bool, repo: str | None = None) -> None:
+    """Run the pre-commit hook in *worktree*.
 
     *repo* selects a code repo within an oob wrapper (``--repo`` on the docker script);
     unused so far (every call site is single-repo in-band), wired up in 023.5.
     """
-    project_dir = _require_project_dir(config)
+    project_dir = config.require_project_dir()
     project_name = config.project_name or project_dir.name
     script = _find_docker_script(project_dir)
-    run_command(_hook_command(script, project_name, project_dir, repo_name, repo=repo), dry_run=dry_run)
+    run_command(_hook_command(script, project_name, project_dir, worktree, repo=repo), dry_run=dry_run)
+
+
+def _plan_path_in_state(layout: Layout, worktree: WorktreeName, state: PlanState, plan: Plan) -> Path:
+    """Return where *plan* lives in *state* inside *worktree*, relative to the project dir."""
+    return (layout.plans_root(worktree) / state.value / plan.path.name).relative_to(layout.project_dir)
 
 
 def _transition_commit_message(plan: Plan, target_state: PlanState) -> str:
@@ -321,41 +322,51 @@ def _ensure_agent_push_config(repo_path: Path, *, dry_run: bool) -> None:
     _ensure_pre_commit_hook(repo_path, dry_run=dry_run)
 
 
-def _agent_repo_configure_ok(repo_path: Path) -> bool:
+def _wants_hook_symlink(repo_path: Path, *, run_hook: bool) -> bool:
+    return run_hook and (repo_path / ".git-pre-commit-hook").is_file()
+
+
+def _agent_repo_configure_ok(repo_path: Path, *, run_hook: bool) -> bool:
     """Like :func:`_agent_push_config_ok`, but the hook symlink is optional (third-party repos).
 
     Used for every repo in oob mode (docs included): unlike in-band's single combined
-    repo, none of them are guaranteed to ship ``.git-pre-commit-hook``.
+    repo, none of them are guaranteed to ship ``.git-pre-commit-hook``, and ``--skip-hook``
+    (``run_hook=False``) opts a repo out of the symlink.
     """
-    hook_ok = not (repo_path / ".git-pre-commit-hook").is_file() or _hook_symlink_ok(repo_path)
+    hook_ok = not _wants_hook_symlink(repo_path, run_hook=run_hook) or _hook_symlink_ok(repo_path)
     return _push_config_ok(repo_path) and hook_ok
 
 
-def _ensure_agent_repo_configure(repo_path: Path, *, dry_run: bool) -> None:
-    """Like :func:`_ensure_agent_push_config`, but only install the hook symlink if present."""
+def _ensure_agent_repo_configure(repo_path: Path, *, run_hook: bool, dry_run: bool) -> None:
+    """Like :func:`_ensure_agent_push_config`, but only install the hook symlink if wanted and present."""
     if dry_run and not repo_path.exists():
         error_console.print(f"[yellow]_ensure_agent_repo_configure: repo {repo_path} does not exist (yet)[/yellow]")
         return
     _ensure_push_config(repo_path, dry_run=dry_run)
-    if (repo_path / ".git-pre-commit-hook").is_file():
+    if _wants_hook_symlink(repo_path, run_hook=run_hook):
         _ensure_pre_commit_hook(repo_path, dry_run=dry_run)
 
 
-def _wire_canon_to_bare(canon_repo: Path, bare_path: Path, *, dry_run: bool) -> None:
-    """Add/configure the ``bare`` remote in canon (pointing at bare) and push HEAD."""
+def _wire_canon_to_bare(canon_repo: Path, bare_path: Path, *, track: bool, dry_run: bool) -> None:
+    """Add the ``bare`` remote in canon (pointing at bare) and push HEAD.
+
+    *track* also makes ``bare`` canon's upstream and push default: right for the docs repo,
+    wrong for an oob code repo, which keeps tracking the operator's own upstream.
+    """
     if git_remote_url(canon_repo, BARE_REMOTE) is None:
         run_command(["git", "remote", "add", BARE_REMOTE, str(bare_path)], cwd=canon_repo, dry_run=dry_run)
-    if git_config_get(canon_repo, "push.autoSetupRemote") != "true":
-        run_command(["git", "config", "push.autoSetupRemote", "true"], cwd=canon_repo, dry_run=dry_run)
-    if git_config_get(canon_repo, "push.default") != "current":
-        run_command(["git", "config", "push.default", "current"], cwd=canon_repo, dry_run=dry_run)
-    run_command(["git", "push", "-u", BARE_REMOTE, "HEAD"], cwd=canon_repo, dry_run=dry_run)
+    if track:
+        _ensure_push_config(canon_repo, dry_run=dry_run)
+        run_command(["git", "push", "-u", BARE_REMOTE, "HEAD"], cwd=canon_repo, dry_run=dry_run)
+    else:
+        run_command(["git", "push", BARE_REMOTE, "HEAD"], cwd=canon_repo, dry_run=dry_run)
 
 
 # Step-name constants: the join key between _classify_init_steps and _run_init_steps.
 # In-band only ever has one repo (docs), so its steps keep their original, repo-less names;
 # oob has 2+ repos and every step name embeds the repo (and, where relevant, the agent).
 _STEP_AGENTS_MD = "AGENTS.md committed"
+_STEP_AGENTS_MD_OOB = "AGENTS.md generated"
 _STEP_BARE_CLONE = "bare clone"
 _STEP_WIRE_CANON = "wire canon to bare"
 _STEP_MARKER = "project metadata"
@@ -363,6 +374,10 @@ _STEP_MARKER = "project metadata"
 
 def _is_oob(layout: Layout) -> bool:
     return layout.metadata.mode == ProjectMode.oob
+
+
+def _agents_md_step_name(layout: Layout) -> str:
+    return _STEP_AGENTS_MD_OOB if _is_oob(layout) else _STEP_AGENTS_MD
 
 
 def _bare_clone_step_name(layout: Layout, repo: str) -> str:
@@ -386,9 +401,9 @@ def _classify_agents_md_step(resume: ResumePlan, config: WorkflowConfig, layout:
         config.model_copy(update={"project_dir": layout.project_dir, "metadata": layout.metadata}),
     )
     if update.agents_md_unchanged:
-        resume.satisfied(_STEP_AGENTS_MD, "already up to date")
+        resume.satisfied(_agents_md_step_name(layout), "already up to date")
     else:
-        resume.will_run(_STEP_AGENTS_MD)
+        resume.will_run(_agents_md_step_name(layout))
 
 
 def _run_agents_md_step(
@@ -399,7 +414,7 @@ def _run_agents_md_step(
     *,
     dry_run: bool,
 ) -> None:
-    if not resume.should_run(_STEP_AGENTS_MD) or dry_run:
+    if not resume.should_run(_agents_md_step_name(layout)) or dry_run:
         return
     try:
         generate_and_write_agents_md(
@@ -456,11 +471,16 @@ def _classify_agent_clone_for_repo(resume: ResumePlan, layout: Layout, agent_nam
     bare_path = layout.bare_repo(repo)
     if _dir_needs_clone(agent_repo):
         resume.will_run(step)
-    elif git_is_valid_repo(agent_repo) and git_remote_url(agent_repo, BARE_REMOTE) == str(bare_path):
+    elif git_is_valid_repo(agent_repo) and _remote_points_at(agent_repo, bare_path):
         resume.needs_continue(step, "clone exists; pass --continue to keep it as-is")
     else:
         msg = f"{agent_repo} exists but is not a valid clone of bare; remove it or fix it."
         raise WorkflowError(msg)
+
+
+def _remote_points_at(repo_path: Path, bare_path: Path) -> bool:
+    url = git_remote_url(repo_path, BARE_REMOTE)
+    return url is not None and Path(url).resolve() == bare_path.resolve()
 
 
 def _classify_agent_clone_steps(resume: ResumePlan, config: WorkflowConfig, layout: Layout) -> None:
@@ -499,8 +519,13 @@ def _classify_agent_configure_for_repo(  # noqa: PLR0913
     hook_optional: bool,
 ) -> None:
     agent_repo = layout.git_repo_root(WorktreeName(agent_name), repo)
-    configure_ok = _agent_repo_configure_ok if hook_optional else _agent_push_config_ok
-    if agent_repo.exists() and configure_ok(agent_repo):
+    if not agent_repo.exists():
+        configure_ok = False
+    elif hook_optional:
+        configure_ok = _agent_repo_configure_ok(agent_repo, run_hook=layout.metadata.runs_hook(repo))
+    else:
+        configure_ok = _agent_push_config_ok(agent_repo)
+    if configure_ok:
         resume.satisfied(step, "push config and pre-commit hook already set up")
     else:
         resume.will_run(step)
@@ -530,7 +555,7 @@ def _run_agent_configure_for_repo(
 ) -> None:
     agent_repo = layout.git_repo_root(WorktreeName(agent_name), repo)
     if hook_optional:
-        _ensure_agent_repo_configure(agent_repo, dry_run=dry_run)
+        _ensure_agent_repo_configure(agent_repo, run_hook=layout.metadata.runs_hook(repo), dry_run=dry_run)
     else:
         _ensure_agent_push_config(agent_repo, dry_run=dry_run)
 
@@ -555,27 +580,22 @@ def _classify_wire_canon_steps(resume: ResumePlan, layout: Layout) -> None:
 
 def _run_wire_canon_for_repo(layout: Layout, repo: str, *, dry_run: bool) -> None:
     canon_repo = layout.git_repo_root(WorktreeName.canon, repo)
-    _wire_canon_to_bare(canon_repo, layout.bare_repo(repo), dry_run=dry_run)
+    _wire_canon_to_bare(canon_repo, layout.bare_repo(repo), track=repo == DOCS_REPO, dry_run=dry_run)
 
 
 def _classify_marker_step(resume: ResumePlan, project_dir: Path) -> None:
-    metadata_path = project_dir / METADATA_FILENAME
-    if metadata_path.exists():
-        try:
-            read_metadata(project_dir)
-        except WorkflowError:
-            resume.will_run(_STEP_MARKER)
-        else:
-            resume.satisfied(_STEP_MARKER, "metadata file exists")
+    # A malformed file never gets here: _resolve_init_metadata has already failed on it.
+    if (project_dir / METADATA_FILENAME).exists():
+        resume.satisfied(_STEP_MARKER, "metadata file exists")
     else:
         resume.will_run(_STEP_MARKER)
 
 
 def _classify_venv_steps(resume: ResumePlan, config: WorkflowConfig, layout: Layout) -> None:
     worktree_names = [agent.name for agent in config.agents] + [WorktreeName.canon]
-    for repo_name in worktree_names:
-        venv_dir = layout.venv_root(WorktreeName(repo_name)) / ".venv"
-        step = f"venv {repo_name}"
+    for worktree in worktree_names:
+        venv_dir = layout.venv_root(WorktreeName(worktree)) / ".venv"
+        step = f"venv {worktree}"
         if venv_dir.is_dir():
             resume.needs_continue(step, "exists; pass --continue to recreate (destructive)")
         else:
@@ -606,8 +626,15 @@ def _detect_code_repos(canon_root: Path, *, skip_hooks: set[str]) -> list[CodeRe
         if not child.is_dir() or child.name == DOCS_REPO:
             continue
         if (child / ".git").exists():
-            repos.append(CodeRepoMeta(name=child.name, run_hook=child.name not in skip_hooks))
+            repos.append(_code_repo_meta(child.name, run_hook=child.name not in skip_hooks))
     return repos
+
+
+def _code_repo_meta(name: str, *, run_hook: bool) -> CodeRepoMeta:
+    try:
+        return CodeRepoMeta(name=name, run_hook=run_hook)
+    except ValidationError as exc:
+        raise WorkflowError(exc.errors()[0]["msg"]) from exc
 
 
 def _resolve_init_metadata(
@@ -629,6 +656,12 @@ def _resolve_init_metadata(
         if existing.mode != requested_mode:
             msg = f"project was initialised in {existing.mode.value} mode; --oob cannot be changed after init."
             raise WorkflowError(msg)
+        persisted_skips = {repo.name for repo in existing.code_repos if not repo.run_hook}
+        require(
+            not skip_hooks or skip_hooks == persisted_skips,
+            f"--skip-hook cannot be changed after init (recorded: {sorted(persisted_skips)}); "
+            "rerun without it to reuse the recorded values.",
+        )
         return existing
     if requested_mode == ProjectMode.oob:
         code_repos = _detect_code_repos(canon_root, skip_hooks=skip_hooks)
@@ -636,6 +669,8 @@ def _resolve_init_metadata(
             bool(code_repos),
             f"no code repos found under {canon_root}; docs-only oob projects are out of scope.",
         )
+        unknown = skip_hooks - {repo.name for repo in code_repos}
+        require(not unknown, f"--skip-hook names no detected code repo: {sorted(unknown)}.")
         console.print(f"Detected code repos: {', '.join(repo.name for repo in code_repos)}")
         return ProjectMetadata(mode=ProjectMode.oob, code_repos=code_repos)
     return ProjectMetadata()
@@ -656,6 +691,7 @@ def _check_oob_init_preconditions(layout: Layout) -> None:
     docs_repo = layout.git_repo_root(WorktreeName.canon, DOCS_REPO)
     require((docs_repo / ".git").is_dir(), f"{docs_repo} is not a git repository (no .git/ found).")
     require(git_rev_parse(docs_repo, "HEAD") is not None, f"{docs_repo} must have at least one commit.")
+    require(git_current_branch(docs_repo) == "main", f"{docs_repo} must have 'main' checked out.")
     require(not git_index_lock_present(docs_repo), f"leftover git lock in {docs_repo}; remove it first.")
     for repo in layout.code_repos():
         code_repo_path = layout.git_repo_root(WorktreeName.canon, repo)
@@ -667,6 +703,11 @@ def _check_oob_init_preconditions(layout: Layout) -> None:
     bootstrap_path = docs_repo / BOOTSTRAP_VENV_FILENAME
     require(bootstrap_path.is_file(), f"{bootstrap_path} must exist.")
     require(os.access(bootstrap_path, os.X_OK), f"{bootstrap_path} must be executable.")
+    # Agents clone the docs repo, so they only get the committed file and its committed mode.
+    require(
+        git_file_mode_at_ref(docs_repo, "HEAD", BOOTSTRAP_VENV_FILENAME) == _GIT_EXECUTABLE_MODE,
+        f"{bootstrap_path} must be committed as executable (git add --chmod=+x {BOOTSTRAP_VENV_FILENAME}).",
+    )
 
 
 def _check_init_preconditions(layout: Layout) -> None:
@@ -691,9 +732,10 @@ def _check_init_preconditions(layout: Layout) -> None:
 def _create_and_commit_gitkeep_files(layout: Layout, canon_repo: Path, *, dry_run: bool) -> None:
     for state in PlanState:
         state_path = layout.plans_root(WorktreeName.canon) / state.value
-        state_path.mkdir(parents=True, exist_ok=True)
         gitkeep = state_path / ".gitkeep"
-        gitkeep.touch()
+        if not dry_run:
+            state_path.mkdir(parents=True, exist_ok=True)
+            gitkeep.touch()
         git_add(canon_repo, gitkeep, dry_run=dry_run)
     git_commit_if_changed(canon_repo, "chore: .gitkeep files for state dirs", dry_run=dry_run, no_verify=True)
 
@@ -784,7 +826,8 @@ def init(ctx: click.Context, *, oob: bool, skip_hooks: tuple[str, ...], cont: bo
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
     project_dir = (config.project_dir or Path.cwd()).resolve()
-    canon_root = project_dir / WorktreeName.canon.value
+    # No .workflow.json yet: the canon worktree root is mode-independent, so default metadata suffices.
+    canon_root = Layout(project_dir=project_dir, metadata=ProjectMetadata()).worktree_root(WorktreeName.canon)
 
     try:
         require(oob or not skip_hooks, "--skip-hook is only valid with --oob.")
@@ -809,12 +852,20 @@ def init(ctx: click.Context, *, oob: bool, skip_hooks: tuple[str, ...], cont: bo
     ctx.exit(0)
 
 
-def _check_add_repo_preconditions(metadata: ProjectMetadata, layout: Layout, name: str) -> None:
+def _add_repo_metadata(layout: Layout, name: str, *, run_hook: bool) -> ProjectMetadata:
+    """Check the add-repo preconditions and return the metadata with *name* registered."""
+    metadata = layout.metadata
     require(metadata.mode == ProjectMode.oob, "add-repo is only valid for out-of-band projects.")
+    # The docs/duplicate checks repeat the model's validators, for friendlier messages.
     require(name != DOCS_REPO, f"{DOCS_REPO!r} is reserved for the docs repo.")
     require(
         name not in {repo.name for repo in metadata.code_repos},
         f"{name!r} is already registered as a code repo.",
+    )
+    # Validate the name before it is used as a path below.
+    new_metadata = ProjectMetadata(
+        mode=metadata.mode,
+        code_repos=[*metadata.code_repos, _code_repo_meta(name, run_hook=run_hook)],
     )
     canon_repo = layout.git_repo_root(WorktreeName.canon, name)
     require((canon_repo / ".git").is_dir(), f"{canon_repo} is not a git repository (no .git/ found).")
@@ -826,6 +877,7 @@ def _check_add_repo_preconditions(metadata: ProjectMetadata, layout: Layout, nam
             git_is_valid_repo(bare_path, bare=True),
             f"{bare_path} exists but is not a valid bare clone; remove it or fix it.",
         )
+    return new_metadata
 
 
 def _classify_add_repo_steps(resume: ResumePlan, config: WorkflowConfig, layout: Layout, name: str) -> None:
@@ -873,18 +925,9 @@ def add_repo(ctx: click.Context, name: str, *, skip_hook: bool, cont: bool) -> N
     dry_run: bool = ctx.obj["dry_run"]
 
     try:
-        project_dir = _require_project_dir(config)
-        metadata = config.metadata
-        require(metadata is not None, "Error: not inside a workflow project directory.")
-        assert metadata is not None  # narrowed by require() above, for mypy
-
-        layout = Layout(project_dir=project_dir, metadata=metadata)
-        _check_add_repo_preconditions(metadata, layout, name)
-
-        new_metadata = metadata.model_copy(
-            update={"code_repos": [*metadata.code_repos, CodeRepoMeta(name=name, run_hook=not skip_hook)]},
-        )
-        new_layout = Layout(project_dir=project_dir, metadata=new_metadata)
+        layout = config.layout()
+        new_metadata = _add_repo_metadata(layout, name, run_hook=not skip_hook)
+        new_layout = layout.model_copy(update={"metadata": new_metadata})
 
         resume = ResumePlan(title="add-repo")
         _classify_add_repo_steps(resume, config, new_layout, name)
@@ -895,10 +938,13 @@ def add_repo(ctx: click.Context, name: str, *, skip_hook: bool, cont: bool) -> N
 
         _run_add_repo_steps(resume, config, new_layout, name, dry_run=dry_run)
         if not dry_run:
-            write_metadata(project_dir, new_metadata)
+            write_metadata(layout.project_dir, new_metadata)
 
         _write_script_audit_log(config, "add-repo", dry_run=dry_run)
         console.print(f"Registered code repo [bold]{name}[/bold].")
+        console.print(
+            f"The venvs do not include it yet: add it to {DOCS_REPO}/{BOOTSTRAP_VENV_FILENAME} and recreate them.",
+        )
     except (subprocess.CalledProcessError, WorkflowError) as exc:
         print_workflow_error(exc)
         ctx.exit(1)
@@ -936,16 +982,16 @@ def _builder_shell_command(script: str, project_name: str, project_dir: Path) ->
     return shlex.join([script, "shell", project_name, "builder", "--project-dir", str(project_dir)])
 
 
-def _create_venv_command(script: str, project_name: str, project_dir: Path, repo_name: str) -> list[str]:
-    """Build the command for creating the repo's virtual env (agent name or 'canon')."""
-    return [script, "venv", project_name, repo_name, "--project-dir", str(project_dir), "--reset"]
+def _create_venv_command(script: str, project_name: str, project_dir: Path, worktree: str) -> list[str]:
+    """Build the command for creating *worktree*'s virtual env (agent name or 'canon')."""
+    return [script, "venv", project_name, worktree, "--project-dir", str(project_dir), "--reset"]
 
 
 def _hook_command(
     script: str,
     project_name: str,
     project_dir: Path,
-    repo_name: str,
+    worktree: str,
     *,
     repo: str | None = None,
 ) -> list[str]:
@@ -954,7 +1000,7 @@ def _hook_command(
     *repo* is the code repo to run the hook inside, for an oob wrapper (``--repo`` on
     the docker script); omitted for in-band or when the hook targets the wrapper root.
     """
-    command = [script, "hook", project_name, repo_name, "--project-dir", str(project_dir)]
+    command = [script, "hook", project_name, worktree, "--project-dir", str(project_dir)]
     if repo is not None:
         command.extend(["--repo", repo])
     return command
@@ -989,7 +1035,7 @@ def start(ctx: click.Context, *, reset: bool) -> None:
     dry_run: bool = ctx.obj["dry_run"]
 
     try:
-        project_dir = _require_project_dir(config)
+        project_dir = config.require_project_dir()
         if not config.agents:
             msg = "No agents configured."
             raise WorkflowError(msg)
@@ -1255,7 +1301,7 @@ def _transition_if_needed(  # noqa: PLR0913
     unstaged rename would silently no-op the commit.
     """
     worktree = worktree_override or WorktreeName(plan.path.parts[0])
-    target_rel = Path(worktree.value) / "docs" / "plans" / target_state.value / plan.path.name
+    target_rel = _plan_path_in_state(layout, worktree, target_state, plan)
     if (layout.project_dir / target_rel).exists():
         new_plan = plan.model_copy(update={"state": target_state, "path": target_rel})
     else:
@@ -1718,7 +1764,7 @@ def implement(ctx: click.Context, plan_path: str, *, cont: bool, force_push: boo
     dry_run: bool = ctx.obj["dry_run"]
 
     try:
-        _require_project_dir(config)
+        config.require_project_dir()
         layout = config.layout()
         plan = resolve_plan(plan_path, config=config, command_name="implement")
         _enforce_expected_state(plan, "implement")
@@ -1938,7 +1984,7 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_v
     dry_run: bool = ctx.obj["dry_run"]
 
     try:
-        _require_project_dir(config)
+        config.require_project_dir()
         layout = config.layout()
         plan = resolve_plan(plan_path, config=config, command_name="check")
         _enforce_expected_state(plan, "check")
@@ -2032,7 +2078,7 @@ def push(ctx: click.Context, plan_path: str) -> None:
     dry_run: bool = ctx.obj["dry_run"]
 
     try:
-        _require_project_dir(config)
+        config.require_project_dir()
         layout = config.layout()
         plan = resolve_plan(
             plan_path,
@@ -2129,7 +2175,7 @@ def accept(ctx: click.Context, plan_path: str, *, force_push: bool) -> None:
     dry_run: bool = ctx.obj["dry_run"]
 
     try:
-        _require_project_dir(config)
+        config.require_project_dir()
         layout = config.layout()
         plan = resolve_plan(plan_path, config=config, command_name="accept")
         _enforce_expected_state(plan, "accept")
@@ -2233,7 +2279,7 @@ def reject(ctx: click.Context, plan_path: str, target_repo: WorktreeName) -> Non
     dry_run: bool = ctx.obj["dry_run"]
 
     try:
-        _require_project_dir(config)
+        config.require_project_dir()
         layout = config.layout()
         plan = resolve_plan(plan_path, config=config)
         _enforce_expected_state(plan, "reject")
@@ -2332,7 +2378,7 @@ def go(ctx: click.Context, target: str) -> None:
     dry_run: bool = ctx.obj["dry_run"]
 
     try:
-        _require_project_dir(config)
+        config.require_project_dir()
         layout = config.layout()
         if not dry_run:
             assert_in_workflow_session(config)

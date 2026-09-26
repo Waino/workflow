@@ -14,8 +14,8 @@
 # --project-dir - absolute path to the project root directory (passed by `workflow start`)
 # --model       - model id forwarded to the agent CLI (agent only)
 # --reset       - remove the existing container before starting a fresh one (agent/venv only)
-# --repo        - out-of-band code repo name to run the hook inside (hook only); default: the
-#                 mount root itself (in-band, or an oob docs-repo hook)
+# --repo        - out-of-band repo to run the hook inside, e.g. 'docs' or a code repo name
+#                 (hook only); default: the mount root itself (in-band only)
 
 set -euo pipefail
 
@@ -208,9 +208,7 @@ case "$SUBCOMMAND" in
     venv)
         [[ -d "${PROJECT_DIR}/${REPO}/.venv" ]] && rm -rf "${PROJECT_DIR}/${REPO}/.venv"
         # Out-of-band: a bootstrap script version controlled in the docs repo (see
-        # docs/example_bootstrap_venv.sh) knows how to install every code repo; fall back to
-        # plain uv when it is absent (in-band, or an oob project with a single pyproject.toml
-        # at the mount root).
+        # docs/example_bootstrap_venv.sh) knows how to install every code repo.
         BOOTSTRAP_REL="docs/bootstrap_venv.sh"
         if [[ -f "${PROJECT_DIR}/${REPO}/${BOOTSTRAP_REL}" ]]; then
             VENV_CMD="source ~/.bashrc && ./${BOOTSTRAP_REL}"
@@ -234,9 +232,12 @@ case "$SUBCOMMAND" in
         fi
         ;;
     hook)
+        # The single .venv lives at the mount root; out-of-band the hook runs in a repo
+        # subdirectory, so activate it explicitly rather than relying on the working directory.
         # Fall back to .git/hooks/pre-commit when there's no version-controlled
         # .git-pre-commit-hook (e.g. a third-party oob code repo); fail loudly if neither exists.
-        HOOK_CMD='if [[ -x ./.git-pre-commit-hook ]]; then ./.git-pre-commit-hook; \
+        HOOK_CMD="if [[ -f '${REPO_PATH}/.venv/bin/activate' ]]; then source '${REPO_PATH}/.venv/bin/activate'; fi; "
+        HOOK_CMD+='if [[ -x ./.git-pre-commit-hook ]]; then ./.git-pre-commit-hook; \
             elif [[ -x .git/hooks/pre-commit ]]; then .git/hooks/pre-commit; \
             else echo "Error: no pre-commit hook found in $(pwd)" >&2; exit 1; fi'
         # Throwaway container; warm .venv comes from the mounted repo dir.

@@ -19,6 +19,7 @@ from rich.table import Table
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
 from workflow.git_helpers import (
     BARE_REMOTE,
+    LEGACY_BARE_REMOTE,
     git_branch_exists,
     git_current_branch,
     git_index_lock_present,
@@ -119,21 +120,22 @@ def _check_bare_remote(check: WorktreeCheck, repo_path: Path, bare_path: Path) -
     """
     if git_remote_url(repo_path, BARE_REMOTE) is not None:
         return
-    origin_url = git_remote_url(repo_path, "origin")
-    if origin_url is not None and Path(origin_url).resolve() == bare_path.resolve():
-        check.anomalies.append("'origin' remote points at bare; run scripts/migrate_023.py")
+    legacy_url = git_remote_url(repo_path, LEGACY_BARE_REMOTE)
+    if legacy_url is not None and Path(legacy_url).resolve() == bare_path.resolve():
+        check.anomalies.append(f"{LEGACY_BARE_REMOTE!r} remote points at bare; run scripts/migrate_023.py")
     else:
         check.anomalies.append(f"no {BARE_REMOTE!r} remote configured")
 
 
 def _check_worktree(
-    repo_name: WorktreeName,
+    worktree: WorktreeName,
     repo_path: Path,
     *,
     active_branches: set[str],
     bare_path: Path,
 ) -> WorktreeCheck:
-    check = WorktreeCheck(name=repo_name.value, exists=repo_path.is_dir())
+    """Check *worktree*'s docs repo, rooted at *repo_path*."""
+    check = WorktreeCheck(name=worktree.value, exists=repo_path.is_dir())
     if not check.exists:
         check.anomalies.append("missing")
         return check
@@ -154,10 +156,10 @@ def _check_worktree(
     if check.dirty:
         check.anomalies.append("uncommitted changes")
 
-    if repo_name == WorktreeName.canon and check.branch != "main":
+    if worktree == WorktreeName.canon and check.branch != "main":
         check.anomalies.append(f"expected 'main', on {check.branch!r}")
     elif (
-        repo_name in (WorktreeName.builder, WorktreeName.reviewer)
+        worktree in (WorktreeName.builder, WorktreeName.reviewer)
         and check.branch != "main"
         and check.branch not in active_branches
     ):
@@ -170,13 +172,13 @@ def _check_worktree(
 def _duplicate_plan_anomalies(layout: Layout) -> list[str]:
     """Return one message per plan that appears under more than one state dir in the same repo."""
     anomalies: list[str] = []
-    for repo in WorktreeName:
-        if not layout.worktree_root(repo).is_dir():
+    for worktree in WorktreeName:
+        if not layout.worktree_root(worktree).is_dir():
             continue
         try:
-            plans = find_all_plans_in_worktree(layout, repo)
+            plans = find_all_plans_in_worktree(layout, worktree)
         except PlanCollisionError as exc:
-            anomalies.append(f"{repo}: sequence number collision on {exc.sequence_number!r}")
+            anomalies.append(f"{worktree}: sequence number collision on {exc.sequence_number!r}")
             continue
         by_key: dict[str, list[str]] = {}
         for plan in plans:
@@ -186,7 +188,7 @@ def _duplicate_plan_anomalies(layout: Layout) -> list[str]:
             by_key.setdefault(key, []).append(plan.state.value)
         for key, states in by_key.items():
             if len(states) > 1:
-                anomalies.append(f"{repo}: {key} appears in multiple state dirs: {', '.join(sorted(states))}")
+                anomalies.append(f"{worktree}: {key} appears in multiple state dirs: {', '.join(sorted(states))}")
     return anomalies
 
 
@@ -256,7 +258,7 @@ def _stack_anomalies(layout: Layout, config: WorkflowConfig) -> list[str]:
 
 def _render_table(checks: list[WorktreeCheck]) -> Table:
     table = Table(title="Workflow Doctor")
-    table.add_column("repo")
+    table.add_column("worktree")
     table.add_column("exists")
     table.add_column("branch")
     table.add_column("clean")
@@ -295,7 +297,7 @@ def doctor(ctx: click.Context) -> None:
     active_branches = _active_branches(layout)
     checks = [_check_bare(bare_path)]
     checks.extend(
-        _check_worktree(worktree, layout.worktree_root(worktree), active_branches=active_branches, bare_path=bare_path)
+        _check_worktree(worktree, layout.git_repo_root(worktree), active_branches=active_branches, bare_path=bare_path)
         for worktree in WorktreeName
     )
     console.print(_render_table(checks))

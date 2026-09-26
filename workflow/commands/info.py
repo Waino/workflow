@@ -172,7 +172,7 @@ def status(ctx: click.Context, show_all: bool) -> None:  # noqa: FBT001
 
     for worktree in WorktreeName:
         console.print(f"Git status for worktree {worktree}")
-        git_status(layout.worktree_root(worktree))
+        git_status(layout.git_repo_root(worktree))
     ctx.exit(0)
 
 

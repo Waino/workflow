@@ -74,7 +74,34 @@ def _init_repo(path: Path, *, extra_files: dict[str, str] | None = None) -> Path
     return path
 
 
-def _make_oob_project(tmp_path: Path, code_repos: list[str]) -> Path:
+def _add_upstream(repo: Path, upstream_root: Path) -> None:
+    """Give *repo* an ``origin`` upstream (a bare repo under *upstream_root*) that ``main`` tracks."""
+    upstream = upstream_root / f"{repo.name}.git"
+    _git(["init", "--bare", "-b", "main", str(upstream)], cwd=upstream_root.parent)
+    _git(["remote", "add", "origin", str(upstream)], cwd=repo)
+    _git(["push", "-u", "origin", "main"], cwd=repo)
+
+
+def _upstream_of_main(repo: Path) -> str:
+    return _git(["rev-parse", "--abbrev-ref", "main@{upstream}"], cwd=repo).stdout.decode().strip()
+
+
+def _remotes(repo: Path) -> list[str]:
+    return _git(["remote"], cwd=repo).stdout.decode().split()
+
+
+def _hook_symlink(tmp_path: Path, worktree: str, repo: str) -> Path:
+    return tmp_path / worktree / repo / ".git" / "hooks" / "pre-commit"
+
+
+def _add_repo(tmp_path: Path, *args: str) -> Any:
+    return CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", *args])
+
+
+_AGENT_WORKTREES = ("planner", "builder", "reviewer")
+
+
+def _make_oob_project(tmp_path: Path, code_repos: list[str], *, hook_repos: tuple[str, ...] = ()) -> Path:
     """Build project_dir/{env.list,config.yaml,run_agent_in_docker.sh,canon/{docs,*repos}}."""
     (tmp_path / "env.list").touch()
     shutil.copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
@@ -93,7 +120,8 @@ def _make_oob_project(tmp_path: Path, code_repos: list[str]) -> Path:
     _git(["commit", "-m", "add bootstrap script"], cwd=docs_repo)
 
     for name in code_repos:
-        _init_repo(tmp_path / "canon" / name)
+        hook = {".git-pre-commit-hook": "#!/bin/bash\n"} if name in hook_repos else None
+        _init_repo(tmp_path / "canon" / name, extra_files=hook)
 
     return tmp_path / "config.yaml"
 
@@ -142,6 +170,8 @@ class TestInitOob:
                 assert (repo_path / ".git").exists(), f"{repo_path} missing"
                 remote_url = _git(["remote", "get-url", "bare"], cwd=repo_path).stdout.decode().strip()
                 assert remote_url == str(bare_repo)
+                if worktree != "canon":
+                    assert _remotes(repo_path) == ["bare"]
 
         metadata = read_metadata(tmp_path)
         assert metadata.mode == ProjectMode.oob
@@ -177,16 +207,136 @@ class TestInitOob:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        _make_oob_project(tmp_path, ["mypackage"])
-        # mypackage carries no .git-pre-commit-hook: hook install must be silently skipped.
+        _make_oob_project(tmp_path, ["mypackage", "dep1"], hook_repos=("mypackage", "dep1"))
+
         result = _run_init(tmp_path, monkeypatch, "--skip-hook", "mypackage")
 
         assert result.exit_code == 0, result.output
-        metadata = read_metadata(tmp_path)
-        (repo,) = metadata.code_repos
-        assert repo.run_hook is False
-        hook = tmp_path / "builder" / "mypackage" / ".git" / "hooks" / "pre-commit"
-        assert not hook.exists()
+        run_hooks = {repo.name: repo.run_hook for repo in read_metadata(tmp_path).code_repos}
+        assert run_hooks == {"mypackage": False, "dep1": True}
+        for worktree in _AGENT_WORKTREES:
+            assert not _hook_symlink(tmp_path, worktree, "mypackage").is_symlink()
+            assert _hook_symlink(tmp_path, worktree, "dep1").is_symlink()
+
+        rerun = _run_init(tmp_path, monkeypatch, "--continue")
+        assert rerun.exit_code == 0, rerun.output
+        assert not _hook_symlink(tmp_path, "builder", "mypackage").is_symlink()
+
+    def test_code_repo_with_hook_file_gets_symlink(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _make_oob_project(tmp_path, ["mypackage"], hook_repos=("mypackage",))
+        result = _run_init(tmp_path, monkeypatch)
+        assert result.exit_code == 0, result.output
+        for worktree in _AGENT_WORKTREES:
+            hook = _hook_symlink(tmp_path, worktree, "mypackage")
+            assert hook.is_symlink()
+            assert str(hook.readlink()) == "../../.git-pre-commit-hook"
+
+    def test_skip_hook_naming_no_detected_repo_is_rejected(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        result = _run_init(tmp_path, monkeypatch, "--skip-hook", "mypackge")
+        assert result.exit_code == 1
+        assert _contains(result.output, "--skip-hook names no detected code repo: ['mypackge']")
+        assert not (tmp_path / METADATA_FILENAME).exists()
+
+    def test_skip_hook_cannot_change_on_rerun(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _make_oob_project(tmp_path, ["mypackage", "dep1"])
+        first = _run_init(tmp_path, monkeypatch, "--skip-hook", "mypackage")
+        assert first.exit_code == 0, first.output
+
+        changed = _run_init(tmp_path, monkeypatch, "--skip-hook", "dep1", "--continue")
+        assert changed.exit_code == 1
+        assert _contains(changed.output, "--skip-hook cannot be changed after init")
+
+        same = _run_init(tmp_path, monkeypatch, "--skip-hook", "mypackage", "--continue")
+        assert same.exit_code == 0, same.output
+
+    def test_canon_code_repo_keeps_its_upstream(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        canon_repo = tmp_path / "canon" / "mypackage"
+        (tmp_path / "upstream").mkdir()
+        _add_upstream(canon_repo, tmp_path / "upstream")
+
+        result = _run_init(tmp_path, monkeypatch)
+
+        assert result.exit_code == 0, result.output
+        assert _upstream_of_main(canon_repo) == "origin/main"
+        for key in ("push.default", "push.autoSetupRemote"):
+            assert _git(["config", "--local", "--get", key], cwd=canon_repo, check=False).returncode == 1
+        assert (
+            _git(["rev-parse", "main"], cwd=tmp_path / "bare" / "mypackage").stdout
+            == _git(
+                ["rev-parse", "main"],
+                cwd=canon_repo,
+            ).stdout
+        )
+        # The docs repo is the workflow's own: canon tracks bare there.
+        assert _upstream_of_main(tmp_path / "canon" / DOCS_REPO) == "bare/main"
+
+    def test_invalid_code_repo_dir_name_fails_cleanly(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        _init_repo(tmp_path / "canon" / "bad name")
+        result = _run_init(tmp_path, monkeypatch)
+        assert result.exit_code == 1
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert _contains(result.output, "invalid code repo name 'bad name'")
+
+    def test_docs_repo_not_on_main_fails_precondition(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        _git(["branch", "-m", "main", "master"], cwd=tmp_path / "canon" / DOCS_REPO)
+        result = _run_init(tmp_path, monkeypatch)
+        assert result.exit_code == 1
+        assert _contains(result.output, "must have 'main' checked out")
+        assert not (tmp_path / "bare").exists()
+
+    def test_uncommitted_bootstrap_script_fails_precondition(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        docs_repo = tmp_path / "canon" / DOCS_REPO
+        _git(["rm", "--cached", "bootstrap_venv.sh"], cwd=docs_repo)
+        _git(["commit", "-m", "untrack bootstrap"], cwd=docs_repo)
+        result = _run_init(tmp_path, monkeypatch)
+        assert result.exit_code == 1
+        assert _contains(result.output, "must be committed as executable")
+
+    def test_bootstrap_script_committed_non_executable_fails_precondition(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        docs_repo = tmp_path / "canon" / DOCS_REPO
+        _git(["update-index", "--chmod=-x", "bootstrap_venv.sh"], cwd=docs_repo)
+        _git(["commit", "-m", "drop exec bit"], cwd=docs_repo)
+        assert (docs_repo / "bootstrap_venv.sh").stat().st_mode & 0o111  # still executable on disk
+        result = _run_init(tmp_path, monkeypatch)
+        assert result.exit_code == 1
+        assert _contains(result.output, "must be committed as executable")
+
+    def test_dry_run_mutates_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        docs_repo = tmp_path / "canon" / DOCS_REPO
+        head_before = _git(["rev-parse", "HEAD"], cwd=docs_repo).stdout
+        monkeypatch.chdir(tmp_path)
+
+        result = CliRunner().invoke(main, ["--dry-run", "--config", str(tmp_path / "config.yaml"), "init", "--oob"])
+
+        assert result.exit_code == 0, result.output
+        assert _contains(result.output, "Detected code repos: mypackage")
+        assert _contains(result.output, "git clone --bare canon/mypackage bare/mypackage")
+        assert not (tmp_path / "bare").exists()
+        assert not any((tmp_path / worktree).exists() for worktree in _AGENT_WORKTREES)
+        assert not (tmp_path / METADATA_FILENAME).exists()
+        assert not (tmp_path / "canon" / "AGENTS.md").exists()
+        assert _git(["rev-parse", "HEAD"], cwd=docs_repo).stdout == head_before
+        assert _git(["status", "--porcelain"], cwd=docs_repo).stdout == b""
+        assert _remotes(docs_repo) == []
 
     def test_code_repo_without_hook_file_does_not_fail_init(
         self,
@@ -266,6 +416,18 @@ class TestInitOob:
         assert _contains(result.output, "--skip-hook is only valid with --oob")
 
 
+class TestInitInBand:
+    def test_wires_a_single_bare_remote_everywhere(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _make_in_band_project(tmp_path)
+        result = _run_in_band_init(tmp_path, monkeypatch)
+        assert result.exit_code == 0, result.output
+        for worktree in WorktreeName:
+            repo_path = tmp_path / worktree.value
+            assert _remotes(repo_path) == ["bare"], worktree
+            assert _git(["remote", "get-url", "bare"], cwd=repo_path).stdout.decode().strip() == str(tmp_path / "bare")
+        assert _upstream_of_main(tmp_path / "canon") == "bare/main"
+
+
 class TestAddRepo:
     def test_happy_path_registers_clones_and_updates_metadata(
         self,
@@ -275,25 +437,81 @@ class TestAddRepo:
         _make_oob_project(tmp_path, ["mypackage"])
         first = _run_init(tmp_path, monkeypatch)
         assert first.exit_code == 0, first.output
-        _init_repo(tmp_path / "canon" / "dep2")
+        canon_repo = _init_repo(tmp_path / "canon" / "dep2", extra_files={".git-pre-commit-hook": "#!/bin/bash\n"})
+        (tmp_path / "upstream").mkdir()
+        _add_upstream(canon_repo, tmp_path / "upstream")
 
-        result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", "dep2"])
+        result = _add_repo(tmp_path, "dep2")
 
         assert result.exit_code == 0, result.output
+        assert _contains(result.output, "add it to docs/bootstrap_venv.sh")
         metadata = read_metadata(tmp_path)
-        assert {repo.name for repo in metadata.code_repos} == {"mypackage", "dep2"}
+        assert {repo.name: repo.run_hook for repo in metadata.code_repos} == {"mypackage": True, "dep2": True}
         bare_repo = tmp_path / "bare" / "dep2"
         assert _git(["rev-parse", "--is-bare-repository"], cwd=bare_repo).stdout.strip() == b"true"
-        for worktree in ("planner", "builder", "reviewer"):
+        assert _git(["remote", "get-url", "bare"], cwd=canon_repo).stdout.decode().strip() == str(bare_repo)
+        assert _upstream_of_main(canon_repo) == "origin/main"
+        for worktree in _AGENT_WORKTREES:
             repo_path = tmp_path / worktree / "dep2"
-            assert (repo_path / ".git").exists()
+            assert _remotes(repo_path) == ["bare"]
+            assert _hook_symlink(tmp_path, worktree, "dep2").is_symlink()
+
+    def test_skip_hook_is_recorded_and_no_symlink_installed(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        first = _run_init(tmp_path, monkeypatch)
+        assert first.exit_code == 0, first.output
+        _init_repo(tmp_path / "canon" / "dep2", extra_files={".git-pre-commit-hook": "#!/bin/bash\n"})
+
+        result = _add_repo(tmp_path, "dep2", "--skip-hook")
+
+        assert result.exit_code == 0, result.output
+        run_hooks = {repo.name: repo.run_hook for repo in read_metadata(tmp_path).code_repos}
+        assert run_hooks["dep2"] is False
+        for worktree in _AGENT_WORKTREES:
+            assert (tmp_path / worktree / "dep2" / ".git").exists()
+            assert not _hook_symlink(tmp_path, worktree, "dep2").is_symlink()
+
+    @pytest.mark.parametrize("name", ["sub/nested", "../outside", "-x", ".hidden"])
+    def test_rejected_for_invalid_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        first = _run_init(tmp_path, monkeypatch)
+        assert first.exit_code == 0, first.output
+        _init_repo(tmp_path / "canon" / "sub" / "nested")
+        bare_before = sorted(path.name for path in (tmp_path / "bare").iterdir())
+
+        result = _add_repo(tmp_path, "--", name)
+
+        assert result.exit_code == 1
+        assert _contains(result.output, f"invalid code repo name {name!r}")
+        assert sorted(path.name for path in (tmp_path / "bare").iterdir()) == bare_before
+        assert {repo.name for repo in read_metadata(tmp_path).code_repos} == {"mypackage"}
+
+    def test_dry_run_mutates_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        first = _run_init(tmp_path, monkeypatch)
+        assert first.exit_code == 0, first.output
+        _init_repo(tmp_path / "canon" / "dep2")
+        metadata_before = (tmp_path / METADATA_FILENAME).read_text(encoding="utf-8")
+
+        result = CliRunner().invoke(main, ["--dry-run", "--config", str(tmp_path / "config.yaml"), "add-repo", "dep2"])
+
+        assert result.exit_code == 0, result.output
+        assert _contains(result.output, "git clone --bare canon/dep2 bare/dep2")
+        assert not (tmp_path / "bare" / "dep2").exists()
+        assert not any((tmp_path / worktree / "dep2").exists() for worktree in _AGENT_WORKTREES)
+        assert (tmp_path / METADATA_FILENAME).read_text(encoding="utf-8") == metadata_before
+        assert _remotes(tmp_path / "canon" / "dep2") == []
 
     def test_rejected_in_in_band_project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_in_band_project(tmp_path)
         first = _run_in_band_init(tmp_path, monkeypatch)
         assert first.exit_code == 0, first.output
 
-        result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", "dep2"])
+        result = _add_repo(tmp_path, "dep2")
         assert result.exit_code == 1
         assert _contains(result.output, "only valid for out-of-band projects")
 
@@ -302,7 +520,7 @@ class TestAddRepo:
         first = _run_init(tmp_path, monkeypatch)
         assert first.exit_code == 0, first.output
 
-        result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", "mypackage"])
+        result = _add_repo(tmp_path, "mypackage")
         assert result.exit_code == 1
         assert _contains(result.output, "already registered")
 
@@ -311,7 +529,7 @@ class TestAddRepo:
         first = _run_init(tmp_path, monkeypatch)
         assert first.exit_code == 0, first.output
 
-        result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", "docs"])
+        result = _add_repo(tmp_path, "docs")
         assert result.exit_code == 1
         assert _contains(result.output, "reserved for the docs repo")
 
@@ -320,18 +538,6 @@ class TestAddRepo:
         first = _run_init(tmp_path, monkeypatch)
         assert first.exit_code == 0, first.output
 
-        result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", "dep2"])
+        result = _add_repo(tmp_path, "dep2")
         assert result.exit_code == 1
         assert _contains(result.output, "not a git repository")
-
-    def test_metadata_file_is_valid_metadata_json(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Regression: METADATA_FILENAME round-trips through read_metadata after add-repo."""
-        _make_oob_project(tmp_path, ["mypackage"])
-        first = _run_init(tmp_path, monkeypatch)
-        assert first.exit_code == 0, first.output
-        _init_repo(tmp_path / "canon" / "dep2")
-
-        CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", "dep2"])
-
-        assert (tmp_path / METADATA_FILENAME).exists()
-        read_metadata(tmp_path)  # does not raise

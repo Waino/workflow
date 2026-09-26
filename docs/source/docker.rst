@@ -47,11 +47,11 @@ Usage
     ``agent`` and ``venv``.
 
 ``--repo NAME``
-    Out-of-band only: the code repo to run the hook inside, e.g. ``mypackage``. The
-    mounted directory is a wrapper holding one subdirectory per repo (``docs`` plus
-    every code repo), so ``hook`` needs to know which one to ``cd`` into. Only valid
-    with ``hook``; omit it for in-band projects, where the mount root is the repo
-    itself.
+    Out-of-band only: the repo to run the hook inside, e.g. ``docs`` or ``mypackage``.
+    The mounted directory is a wrapper holding one subdirectory per repo (``docs`` plus
+    every code repo) and is not a git repo itself, so ``hook`` needs to know which one
+    to ``cd`` into. Only valid with ``hook``; omit it for in-band projects, where the
+    mount root is the repo itself.
 
 What ``workflow`` expects from the script
 -------------------------------------------
@@ -76,10 +76,11 @@ script commands that run the pre-commit hook) invoke ``hook``. The script must:
   rather than embedding them in the script.
 * Run ``.git-pre-commit-hook`` when present, falling back to ``.git/hooks/pre-commit``
   otherwise, and fail loudly if neither exists (out-of-band code repos are not
-  guaranteed to ship the shared hook script).
+  guaranteed to ship the shared hook script). Activate the mount root's ``.venv``
+  first: out-of-band, the hook runs in a repo subdirectory, away from the venv.
 * For ``venv``, run a version-controlled ``docs/bootstrap_venv.sh`` from the mount
-  root when it exists (out-of-band projects with more than one code repo have no
-  single ``pyproject.toml`` for plain ``uv sync`` to act on), falling back to
+  root when it exists (the out-of-band wrapper root has no ``pyproject.toml`` for
+  plain ``uv sync`` to act on), falling back to
   ``uv venv --seed && uv sync`` otherwise. A template lives at
   ``docs/example_bootstrap_venv.sh``.
 

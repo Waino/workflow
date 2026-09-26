@@ -67,12 +67,6 @@ class TestClassifyMarkerStep:
         wc._classify_marker_step(resume, tmp_path)
         assert not resume.should_run("project metadata")
 
-    def test_will_run_when_metadata_file_is_malformed(self, tmp_path: Path) -> None:
-        (tmp_path / METADATA_FILENAME).write_text("not json")
-        resume = ResumePlan(title="init")
-        wc._classify_marker_step(resume, tmp_path)
-        assert resume.should_run("project metadata")
-
 
 def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path, marker=False)

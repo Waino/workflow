@@ -12,13 +12,12 @@ from pathlib import Path
 
 import click
 
-from workflow.git_helpers import BARE_REMOTE, git_is_valid_repo, git_remote_url
+from workflow.git_helpers import BARE_REMOTE, LEGACY_BARE_REMOTE, git_is_valid_repo, git_remote_url
 from workflow.layout import Layout
 from workflow.metadata import LEGACY_ROOT_MARKER, METADATA_FILENAME, ProjectMetadata, write_metadata
 from workflow.names import WorktreeName
 
 _REPO_OVERRIDE_KEY_RE = re.compile(r"^(\s*(?:- )?)repo_override:", flags=re.MULTILINE)
-_LEGACY_REMOTE = "origin"
 
 
 def migrate_metadata_file(project_dir: Path, *, dry_run: bool) -> None:
@@ -92,17 +91,20 @@ def _rename_bare_remote(repo_path: Path, bare_path: Path, *, dry_run: bool) -> N
     if git_remote_url(repo_path, BARE_REMOTE) is not None:
         click.echo(f"{repo_path} already has a '{BARE_REMOTE}' remote; skipping")
         return
-    origin_url = git_remote_url(repo_path, _LEGACY_REMOTE)
+    origin_url = git_remote_url(repo_path, LEGACY_BARE_REMOTE)
     if origin_url is None:
-        click.echo(f"{repo_path} has no '{_LEGACY_REMOTE}' remote; skipping")
+        click.echo(f"{repo_path} has no '{LEGACY_BARE_REMOTE}' remote; skipping")
         return
     if Path(origin_url).resolve() != bare_path.resolve():
-        click.echo(f"[!] {repo_path}: 'origin' points at {origin_url!r}, not the project's bare path; leaving as-is")
+        click.echo(
+            f"[!] {repo_path}: '{LEGACY_BARE_REMOTE}' points at {origin_url!r}, not the project's bare path; "
+            "leaving as-is",
+        )
         return
 
-    tracked_branches = _tracked_branches(repo_path, _LEGACY_REMOTE)
-    click.echo(f"renaming '{_LEGACY_REMOTE}' to '{BARE_REMOTE}' in {repo_path}")
-    _run_git(["remote", "rename", _LEGACY_REMOTE, BARE_REMOTE], cwd=repo_path, dry_run=dry_run)
+    tracked_branches = _tracked_branches(repo_path, LEGACY_BARE_REMOTE)
+    click.echo(f"renaming '{LEGACY_BARE_REMOTE}' to '{BARE_REMOTE}' in {repo_path}")
+    _run_git(["remote", "rename", LEGACY_BARE_REMOTE, BARE_REMOTE], cwd=repo_path, dry_run=dry_run)
     _run_git(["fetch", BARE_REMOTE], cwd=repo_path, dry_run=dry_run)
     for branch in tracked_branches:
         click.echo(f"re-pointing {repo_path} branch {branch!r} upstream to '{BARE_REMOTE}/{branch}'")

@@ -29,7 +29,7 @@ from workflow.agents_md import (
     replace_managed_section,
 )
 from workflow.config import WorkflowConfig, load_config
-from workflow.exceptions import AgentsMdGenerationError
+from workflow.exceptions import AgentsMdGenerationError, WorkflowError
 from workflow.metadata import CodeRepoMeta, ProjectMetadata, ProjectMode, write_metadata
 
 # ---------------------------------------------------------------------------
@@ -388,12 +388,12 @@ def _load_oob_config(tmp_path: Path) -> WorkflowConfig:
     copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
     for worktree in ("canon", "planner", "builder", "reviewer"):
         (tmp_path / worktree / "docs").mkdir(parents=True)
+    (tmp_path / "canon" / "docs" / "body_of_agents.md").write_text("# Hand-written body\n", encoding="utf-8")
     return load_config(tmp_path / "config.yaml", project_dir=tmp_path)
 
 
 def test_prepare_agents_md_update_oob_writes_four_targets_from_body(tmp_path: Path) -> None:
     config = _load_oob_config(tmp_path)
-    (tmp_path / "canon" / "docs" / "body_of_agents.md").write_text("# Hand-written body\n", encoding="utf-8")
 
     update = cm_cmd.prepare_agents_md_update(config)
 
@@ -407,10 +407,46 @@ def test_prepare_agents_md_update_oob_writes_four_targets_from_body(tmp_path: Pa
     assert MARKER_BEGIN in update.new_text
 
 
-def test_prepare_agents_md_update_oob_missing_body_starts_fresh(tmp_path: Path) -> None:
+def test_prepare_agents_md_update_oob_missing_body_raises(tmp_path: Path) -> None:
     config = _load_oob_config(tmp_path)
-    update = cm_cmd.prepare_agents_md_update(config)
-    assert update.new_text.startswith(MARKER_BEGIN)
+    (tmp_path / "canon" / "docs" / "body_of_agents.md").unlink()
+    with pytest.raises(AgentsMdGenerationError, match=r"body_of_agents\.md not found"):
+        cm_cmd.prepare_agents_md_update(config)
+
+
+def test_agents_md_command_oob_missing_body_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _load_oob_config(tmp_path)
+    cm_cmd.generate_and_write_agents_md(config)
+    before = (tmp_path / "builder" / "AGENTS.md").read_text(encoding="utf-8")
+    (tmp_path / "canon" / "docs" / "body_of_agents.md").unlink()
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "agents_md"])
+
+    assert result.exit_code == 1
+    assert "body_of_agents.md not found" in result.output
+    assert (tmp_path / "builder" / "AGENTS.md").read_text(encoding="utf-8") == before
+
+
+def test_agents_md_command_oob_success_message_names_the_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _load_oob_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "agents_md"])
+
+    assert result.exit_code == 0, result.output
+    assert "every worktree" in result.output
+    assert "docs/body_of_agents.md" in result.output
+    assert "git diff" not in result.output
+
+
+def test_prepare_agents_md_update_requires_metadata(tmp_path: Path) -> None:
+    config = _load_default_config(tmp_path).model_copy(update={"metadata": None})
+    with pytest.raises(WorkflowError, match="not inside a workflow project directory"):
+        cm_cmd.prepare_agents_md_update(config)
 
 
 def test_prepare_agents_md_update_oob_rejects_body_containing_markers(tmp_path: Path) -> None:
@@ -449,3 +485,5 @@ def test_prepare_agents_md_update_in_band_unaffected_by_oob_changes(tmp_path: Pa
     update = cm_cmd.prepare_agents_md_update(config)
 
     assert update.write_targets == [tmp_path / "canon" / "AGENTS.md"]
+    golden = _GOLDEN_PATH.read_text(encoding="utf-8")
+    assert update.new_text == f"{MARKER_BEGIN}\n{golden}{MARKER_END}\n"

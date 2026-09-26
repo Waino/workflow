@@ -6,11 +6,8 @@ This module registers the ``agents_md`` script command and exposes the
 
 from __future__ import annotations
 
-import contextlib
-import os
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
@@ -22,12 +19,15 @@ from workflow.agents_md import (
     render_workflow_section,
     replace_managed_section,
 )
-from workflow.config import WorkflowConfig
+from workflow.config import NOT_IN_PROJECT_MSG, WorkflowConfig
 from workflow.exceptions import AgentsMdGenerationError, WorkflowError
-from workflow.layout import Layout
-from workflow.metadata import ProjectMetadata, ProjectMode
+from workflow.fileio import atomic_write
+from workflow.metadata import ProjectMode
 from workflow.names import DOCS_REPO, WorktreeName
 from workflow.registry import register_script
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 BODY_OF_AGENTS_FILENAME = "body_of_agents.md"
 """Hand-written AGENTS.md body, version controlled in the docs repo (oob mode only)."""
@@ -45,17 +45,6 @@ class _AgentsMdUpdate:
     hash_unchanged: bool  # True when on-disk hash already matches new_hash
 
 
-def _read_body(layout: Layout) -> tuple[str, Path]:
-    """Return (existing body text, the single in-band target) for in-band mode.
-
-    In-band, the body and the single write target are the same file: the
-    hand-written prose and the managed section already live together in
-    ``canon/AGENTS.md``.
-    """
-    target = layout.worktree_root(WorktreeName.canon) / "AGENTS.md"
-    return (target.read_text(encoding="utf-8") if target.exists() else ""), target
-
-
 def prepare_agents_md_update(config: WorkflowConfig) -> _AgentsMdUpdate:
     """Compute the new AGENTS.md content and hash without writing anything.
 
@@ -66,18 +55,13 @@ def prepare_agents_md_update(config: WorkflowConfig) -> _AgentsMdUpdate:
     itself contain markers; the managed section is appended to render each of the
     four worktree-root ``AGENTS.md`` copies (unversioned build artifacts).
 
-    Raises :class:`~workflow.exceptions.AgentsMdGenerationError` when
-    ``config.project_dir`` is unset, markers are malformed, or the generated
-    output is internally inconsistent.
+    Raises :class:`~workflow.exceptions.AgentsMdGenerationError` when the oob body
+    is missing, markers are malformed, or the generated output is internally
+    inconsistent; :class:`~workflow.exceptions.WorkflowError` when ``config`` has
+    no project_dir/metadata (``init`` passes the metadata it is about to write).
     """
-    if config.project_dir is None:
-        msg = "config.project_dir must be set to generate AGENTS.md."
-        raise AgentsMdGenerationError(msg)
-    project_dir = config.project_dir
-    # A fresh default metadata is used as a fallback since generate_and_write_agents_md is also
-    # called from `init`, before .workflow.json exists; init threads the intended metadata through
-    # config.metadata explicitly (including for --oob) so this fallback is in-band-only in practice.
-    layout = Layout(project_dir=project_dir, metadata=config.metadata or ProjectMetadata())
+    layout = config.layout()
+    project_dir = layout.project_dir
     config_yaml_path = project_dir / "config.yaml"
     hash_file_path = project_dir / ".agents_md_hash"
 
@@ -85,14 +69,20 @@ def prepare_agents_md_update(config: WorkflowConfig) -> _AgentsMdUpdate:
 
     if layout.metadata.mode == ProjectMode.oob:
         body_path = layout.git_repo_root(WorktreeName.canon, DOCS_REPO) / BODY_OF_AGENTS_FILENAME
-        body_text = body_path.read_text(encoding="utf-8") if body_path.exists() else ""
+        if not body_path.is_file():
+            # Treating it as empty would overwrite every AGENTS.md copy without the hand-written text.
+            msg = f"{body_path} not found; it holds the hand-written part of every AGENTS.md."
+            raise AgentsMdGenerationError(msg)
+        body_text = body_path.read_text(encoding="utf-8")
         if find_managed_section(body_text) is not None:
             msg = f"{body_path} must not contain workflow markers; they belong in the generated AGENTS.md only."
             raise AgentsMdGenerationError(msg)
         new_text = normalise(append_managed_section(body_text, managed))
         write_targets = [layout.worktree_root(worktree) / "AGENTS.md" for worktree in WorktreeName]
     else:
-        existing_text, target = _read_body(layout)
+        # In-band, the hand-written body and the single write target are the same file.
+        target = layout.worktree_root(WorktreeName.canon) / "AGENTS.md"
+        existing_text = target.read_text(encoding="utf-8") if target.exists() else ""
         span = find_managed_section(existing_text)  # raises AgentsMdGenerationError on malformed
         new_text = (
             replace_managed_section(existing_text, span, managed)
@@ -139,32 +129,16 @@ def generate_and_write_agents_md(
     committing, or pushing.
     """
     update = prepare_agents_md_update(config)
-    # Write atomically. AGENTS.md is committed to git in-band, so use 0o644;
-    # the hash file is a local trust anchor that does not need to be world-readable.
-    for target in update.write_targets:
-        _atomic_write(target, update.new_text.encode("utf-8"), mode=0o644)
-    _atomic_write(update.hash_file_path, update.new_hash.encode("utf-8"))
+    _write_update(update)
     return update.write_targets
 
 
-def _atomic_write(path: Path, data: bytes, *, mode: int | None = None) -> None:
-    """Write *data* to *path* atomically via a temporary file in the same directory.
-
-    When *mode* is provided, set permissions on the temp file before the rename
-    (``tempfile.mkstemp`` defaults to 0o600).
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp_")
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        if mode is not None:
-            Path(tmp).chmod(mode)
-        Path(tmp).replace(path)
-    except Exception:
-        with contextlib.suppress(OSError):
-            Path(tmp).unlink()
-        raise
+def _write_update(update: _AgentsMdUpdate) -> None:
+    # AGENTS.md is committed to git in-band, so use 0o644;
+    # the hash file is a local trust anchor that does not need to be world-readable.
+    for target in update.write_targets:
+        atomic_write(target, update.new_text.encode("utf-8"), mode=0o644)
+    atomic_write(update.hash_file_path, update.new_hash.encode("utf-8"))
 
 
 @register_script("agents_md")
@@ -174,7 +148,7 @@ def agents_md(ctx: click.Context, check: bool) -> None:  # noqa: FBT001
     """Regenerate the auto-generated workflow section of AGENTS.md."""
     config: WorkflowConfig = ctx.obj["config"]
     if config.project_dir is None:
-        click.echo("Error: not inside a workflow project directory.", err=True)
+        click.echo(NOT_IN_PROJECT_MSG, err=True)
         ctx.exit(1)
         return
 
@@ -196,10 +170,14 @@ def agents_md(ctx: click.Context, check: bool) -> None:  # noqa: FBT001
             ctx.exit(1)
             return
 
-        for target in update.write_targets:
-            _atomic_write(target, update.new_text.encode("utf-8"), mode=0o644)
-        _atomic_write(update.hash_file_path, update.new_hash.encode("utf-8"))
-        click.echo("AGENTS.md written. Review with 'git diff' in canon, then commit and push.")
+        _write_update(update)
+        if config.layout().metadata.mode == ProjectMode.oob:
+            click.echo(
+                f"AGENTS.md written to every worktree (unversioned). "
+                f"Edit {DOCS_REPO}/{BODY_OF_AGENTS_FILENAME} in canon for the hand-written part.",
+            )
+        else:
+            click.echo("AGENTS.md written. Review with 'git diff' in canon, then commit and push.")
 
     except (AgentsMdGenerationError, WorkflowError) as exc:
         click.echo(f"Error: {exc}", err=True)

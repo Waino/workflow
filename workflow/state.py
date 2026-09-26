@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from workflow.exceptions import PlanCollisionError, WorkflowError
@@ -12,6 +11,8 @@ from workflow.names import WorktreeName
 from workflow.plan_resolver import find_plan_file_in_worktree
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from workflow.layout import Layout
 
 
@@ -76,5 +77,4 @@ def transition_plan(
         target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / plan.path.name
     git_mv(repo_root, source, target, dry_run=dry_run)
-    new_path = Path(worktree.value) / "docs" / "plans" / target_state.value / plan.path.name
-    return plan.model_copy(update={"state": target_state, "path": new_path})
+    return plan.model_copy(update={"state": target_state, "path": target.relative_to(layout.project_dir)})

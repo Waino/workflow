@@ -17,6 +17,7 @@ from workflow.models import PlanState
 from workflow.names import WorktreeName
 
 CONFIG_FILENAME = "config.yaml"
+NOT_IN_PROJECT_MSG = "Error: not inside a workflow project directory."
 
 
 # --- Command models (discriminated union) ---
@@ -208,16 +209,20 @@ class WorkflowConfig(BaseModel):
                 raise ValueError(msg)
         return self
 
+    def require_project_dir(self) -> Path:
+        """Return project_dir, raising WorkflowError when not inside a workflow project directory."""
+        if self.project_dir is None:
+            raise WorkflowError(NOT_IN_PROJECT_MSG)
+        return self.project_dir
+
     def layout(self) -> Layout:
         """Build this project's Layout from project_dir and metadata.
 
-        Raises WorkflowError (matching _require_project_dir's wording) when either
-        is None, i.e. when not inside a workflow project directory.
+        Raises WorkflowError when either is None, i.e. when not inside a workflow project directory.
         """
-        if self.project_dir is None or self.metadata is None:
-            msg = "Error: not inside a workflow project directory."
-            raise WorkflowError(msg)
-        return Layout(project_dir=self.project_dir, metadata=self.metadata)
+        if self.metadata is None:
+            raise WorkflowError(NOT_IN_PROJECT_MSG)
+        return Layout(project_dir=self.require_project_dir(), metadata=self.metadata)
 
 
 # --- Project root discovery ---

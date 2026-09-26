@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from workflow.exceptions import WorkflowError
 from workflow.metadata import (
@@ -69,6 +70,36 @@ class TestReadMetadataErrors:
         with pytest.raises(WorkflowError, match="malformed"):
             read_metadata(tmp_path)
 
+    def test_non_utf8_file_names_path(self, tmp_path: Path) -> None:
+        (tmp_path / METADATA_FILENAME).write_bytes(b"\xff\xfe{}")
+        with pytest.raises(WorkflowError, match=str(tmp_path / METADATA_FILENAME)):
+            read_metadata(tmp_path)
+
+    def test_unreadable_path_names_path(self, tmp_path: Path) -> None:
+        (tmp_path / METADATA_FILENAME).mkdir()
+        with pytest.raises(WorkflowError, match=str(tmp_path / METADATA_FILENAME)):
+            read_metadata(tmp_path)
+
+
+class TestCodeRepoNames:
+    @pytest.mark.parametrize("name", ["mypackage", "dep-1", "a", "my_pkg.v2", "9lives"])
+    def test_accepts_single_safe_component(self, name: str) -> None:
+        assert CodeRepoMeta(name=name).name == name
+
+    @pytest.mark.parametrize("name", ["", "docs", "sub/nested", "../outside", "..", ".", ".hidden", "-x", "_x", "a b"])
+    def test_rejects_unsafe_or_reserved(self, name: str) -> None:
+        with pytest.raises(ValidationError, match="invalid code repo name"):
+            CodeRepoMeta(name=name)
+
+    def test_rejects_duplicate_names(self) -> None:
+        with pytest.raises(ValidationError, match="duplicate code repo names"):
+            ProjectMetadata(mode=ProjectMode.oob, code_repos=[CodeRepoMeta(name="a"), CodeRepoMeta(name="a")])
+
+    def test_runs_hook_defaults_true_for_docs_and_unknown(self) -> None:
+        metadata = ProjectMetadata(mode=ProjectMode.oob, code_repos=[CodeRepoMeta(name="a", run_hook=False)])
+        assert metadata.runs_hook("a") is False
+        assert metadata.runs_hook("docs") is True
+
 
 class TestCodeReposMatchesMode:
     def test_oob_without_code_repos_raises(self) -> None:
@@ -96,7 +127,7 @@ class TestWriteMetadataAtomicity:
         original_content = (tmp_path / METADATA_FILENAME).read_text()
 
         with (
-            patch("workflow.metadata.json.dump", side_effect=RuntimeError("boom")),
+            patch("workflow.metadata.json.dumps", side_effect=RuntimeError("boom")),
             pytest.raises(RuntimeError, match="boom"),
         ):
             write_metadata(
@@ -106,3 +137,7 @@ class TestWriteMetadataAtomicity:
 
         assert (tmp_path / METADATA_FILENAME).read_text() == original_content
         assert list(tmp_path.iterdir()) == [tmp_path / METADATA_FILENAME]
+
+    def test_written_file_is_world_readable(self, tmp_path: Path) -> None:
+        write_metadata(tmp_path, ProjectMetadata())
+        assert (tmp_path / METADATA_FILENAME).stat().st_mode & 0o777 == 0o644

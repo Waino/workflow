@@ -33,6 +33,8 @@ GIT_REVPARSE_NO_UPSTREAM = 128
 
 BARE_REMOTE = "bare"
 """Name of the remote pointing at the workflow's own bare clone, in both in-band and oob modes."""
+LEGACY_BARE_REMOTE = "origin"
+"""Pre-023 name of the bare remote; only migration and doctor's leftover detection may use it."""
 
 
 class CommitResult(enum.Enum):
@@ -287,6 +289,21 @@ def git_branch_delete(repo_path: Path, branch: str, *, dry_run: bool = False) ->
 def git_delete_remote_branch(repo_path: Path, branch: str, *, dry_run: bool = False) -> None:
     """Delete *branch* on ``bare`` via ``git push bare --delete``."""
     run_command(["git", "push", BARE_REMOTE, "--delete", branch], cwd=repo_path, dry_run=dry_run)
+
+
+def git_file_mode_at_ref(repo_path: Path, ref: str, rel_path: str) -> str | None:
+    """Return *rel_path*'s git file mode (e.g. ``100755``) in *ref*'s tree, or ``None`` if absent.
+
+    Read-only guard query: always runs for real, even in dry-run.
+    """
+    result = subprocess.run(  # noqa: S603
+        ["git", "ls-tree", ref, "--", rel_path],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=False,
+    )
+    fields = result.stdout.decode().split()
+    return fields[0] if result.returncode == 0 and fields else None
 
 
 def git_rev_parse(repo_path: Path, ref: str) -> str | None:
