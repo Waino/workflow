@@ -96,6 +96,18 @@ def git_fetch(repo_path: Path, *, dry_run: bool = False) -> None:
     run_command(["git", "fetch", BARE_REMOTE], cwd=repo_path, dry_run=dry_run)
 
 
+def git_fetch_remote(repo_path: Path, remote: str, *, prune: bool = False, dry_run: bool = False) -> None:
+    """Run ``git fetch <remote>`` (optionally ``--prune``) in *repo_path*.
+
+    Unlike :func:`git_fetch`, *remote* is caller-supplied rather than hardcoded to
+    ``bare`` -- used by ``workflow sync`` to fetch a code repo's ``origin``.
+    """
+    args = ["git", "fetch", remote]
+    if prune:
+        args.append("--prune")
+    run_command(args, cwd=repo_path, dry_run=dry_run)
+
+
 def git_push_branch(repo_path: Path, branch: str, *, force: bool = False, dry_run: bool = False) -> None:
     """Push *branch* to ``bare`` by explicit refspec, optionally with ``--force-with-lease``.
 
@@ -109,23 +121,56 @@ def git_push_branch(repo_path: Path, branch: str, *, force: bool = False, dry_ru
     run_command(args, cwd=repo_path, dry_run=dry_run)
 
 
+def git_push_refspec(repo_path: Path, refspec: str, *, dry_run: bool = False) -> None:
+    """Push *refspec* verbatim to ``bare`` in *repo_path*.
+
+    The caller builds *refspec* (e.g. ``"origin/main:refs/heads/main"`` or, force-prefixed,
+    ``"+origin/main:refs/heads/main"``); this helper does not interpret it.
+    """
+    run_command(["git", "push", BARE_REMOTE, refspec], cwd=repo_path, dry_run=dry_run)
+
+
 def git_status(repo_path: Path, *, dry_run: bool = False) -> None:
     """Print ``git status`` (short, with branch header) for *repo_path*."""
     run_command(["git", "status", "--short", "--branch"], cwd=repo_path, dry_run=dry_run)
 
 
-def git_status_porcelain(repo_path: Path) -> str:
+def git_status_porcelain(repo_path: Path, *, untracked: bool = True) -> str:
     """Return ``git status --porcelain`` output for *repo_path* (empty == clean tree).
 
-    Read-only guard query: always runs for real, even in dry-run (see module docstring).
+    Pass ``untracked=False`` to see only tracked modifications (``--untracked-files=no``) --
+    used by preconditions that must fail on real changes but merely warn on stray untracked
+    files (e.g. third-party repos' build output). Read-only guard query: always runs for
+    real, even in dry-run (see module docstring).
     """
-    result = subprocess.run(
-        ["git", "status", "--porcelain"],  # noqa: S607
+    args = ["git", "status", "--porcelain"]
+    if not untracked:
+        args.append("--untracked-files=no")
+    result = subprocess.run(  # noqa: S603
+        args,
         cwd=repo_path,
         capture_output=True,
         check=True,
     )
     return result.stdout.decode().strip()
+
+
+def git_commits_not_in_bare(repo_path: Path) -> int:
+    """Return how many commits reachable from HEAD are not reachable from any ``bare`` ref.
+
+    Counting against every ``bare/*`` ref (``--remotes=bare``), rather than a single
+    ``bare/<branch>``, is what makes a brand-new branch count correctly: its commits
+    are simply not reachable from any bare ref yet. Assumes the caller has already
+    fetched ``bare``; a stale fetch under-counts. Read-only guard query: always runs
+    for real, even in dry-run.
+    """
+    result = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD", "--not", "--remotes=bare"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    return int(result.stdout.decode().strip())
 
 
 def git_branch_exists(repo_path: Path, branch: str) -> bool:
@@ -304,6 +349,33 @@ def git_file_mode_at_ref(repo_path: Path, ref: str, rel_path: str) -> str | None
     )
     fields = result.stdout.decode().split()
     return fields[0] if result.returncode == 0 and fields else None
+
+
+def resolve_upstream_default_branch(repo_path: Path) -> str:
+    """Return *repo_path*'s ``origin``'s default branch name.
+
+    Prefers ``refs/remotes/origin/HEAD`` (set by ``git clone``/``git remote set-head``);
+    falls back to ``main``, then ``master``, whichever exists as a remote-tracking ref.
+    Does not itself fetch -- relies on whatever ``origin`` state the caller already has
+    locally, so it is safe to use from a fetch-free context (e.g. ``doctor``) as well as
+    right after a fresh fetch (e.g. ``workflow sync``). Read-only guard query: always
+    runs for real, even in dry-run.
+
+    Raises :class:`WorkflowError` if none of the three resolve.
+    """
+    result = subprocess.run(
+        ["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return result.stdout.decode().strip().rsplit("/", 1)[-1]
+    for candidate in ("main", "master"):
+        if git_rev_parse(repo_path, f"refs/remotes/origin/{candidate}") is not None:
+            return candidate
+    msg = f"{repo_path}: cannot resolve upstream default branch (no origin/HEAD, 'main', or 'master')."
+    raise WorkflowError(msg)
 
 
 def git_rev_parse(repo_path: Path, ref: str) -> str | None:

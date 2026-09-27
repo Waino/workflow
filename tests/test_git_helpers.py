@@ -18,16 +18,19 @@ from workflow.git_helpers import (
     git_branch_exists,
     git_commit_if_changed,
     git_commits_ahead_of_remote,
+    git_commits_not_in_bare,
     git_current_branch,
     git_index_lock_present,
     git_is_ancestor,
     git_is_valid_repo,
+    git_push_refspec,
     git_ref_exists_remote,
     git_remote_url,
     git_rev_parse,
     git_status_porcelain,
     park_on_main,
     refresh_main,
+    resolve_upstream_default_branch,
     transfer_branch_to_main,
 )
 
@@ -50,16 +53,24 @@ def _init_repo(path: Path) -> Path:
 
 
 def test_no_origin_literal_in_workflow_package() -> None:
-    """023.3: the bare remote is named BARE_REMOTE everywhere; 'origin' means canon/upstream now."""
+    """023.3: the bare remote is named BARE_REMOTE everywhere; 'origin' means canon/upstream now.
+
+    023.5 gives ``"origin"`` its second, legitimate meaning: a code (or docs) repo's real
+    upstream remote (intent decision 11), read by ``workflow sync`` and its callers. Those
+    lines carry the marker below and are excluded; everywhere else a literal ``"origin"``
+    would still mean the pre-023.3 name for the bare remote.
+    """
     package_root = Path(__file__).parents[1] / "workflow"
     pattern = re.compile(r"""['"]origin['"]""")
     # The single sanctioned spelling, used only to detect/migrate the pre-023 shape.
     legacy_definition = 'LEGACY_BARE_REMOTE = "origin"'
-    offending = [
-        str(path.relative_to(package_root))
-        for path in package_root.rglob("*.py")
-        if pattern.search(path.read_text(encoding="utf-8").replace(legacy_definition, ""))
-    ]
+    upstream_remote_marker = "# upstream remote, not bare (023.5)"
+    offending = []
+    for path in package_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8").replace(legacy_definition, "")
+        lines = [line for line in text.splitlines() if upstream_remote_marker not in line]
+        if pattern.search("\n".join(lines)):
+            offending.append(str(path.relative_to(package_root)))
     assert offending == []
 
 
@@ -714,3 +725,161 @@ def test_git_commits_ahead_of_remote_raises_when_remote_branch_is_missing(tmp_pa
 
     with pytest.raises(WorkflowError, match="cannot compare"):
         git_commits_ahead_of_remote(repo, "main")
+
+
+# ---------------------------------------------------------------------------
+# git_commits_not_in_bare
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_commits_not_in_bare_zero_for_clean_clone(tmp_path: Path) -> None:
+    _bare, clone = _make_bare_and_clone(tmp_path)
+
+    assert git_commits_not_in_bare(clone) == 0
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_commits_not_in_bare_counts_local_commits_on_main(tmp_path: Path) -> None:
+    _bare, clone = _make_bare_and_clone(tmp_path)
+    for i in range(2):
+        (clone / f"local{i}.txt").write_text("local\n", encoding="utf-8")
+        _git(["add", "."], cwd=clone)
+        _git(["commit", "-m", f"local commit {i}"], cwd=clone)
+
+    assert git_commits_not_in_bare(clone) == 2
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_commits_not_in_bare_counts_brand_new_branch(tmp_path: Path) -> None:
+    """A branch bare has never seen: its commit is reachable from no bare/* ref at all."""
+    _bare, clone = _make_bare_and_clone(tmp_path)
+    _git(["checkout", "-b", "feat/x"], cwd=clone)
+    (clone / "new.txt").write_text("new\n", encoding="utf-8")
+    _git(["add", "."], cwd=clone)
+    _git(["commit", "-m", "new branch commit"], cwd=clone)
+
+    assert git_commits_not_in_bare(clone) == 1
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_commits_not_in_bare_zero_after_push(tmp_path: Path) -> None:
+    _bare, clone = _make_bare_and_clone(tmp_path)
+    _git(["checkout", "-b", "feat/x"], cwd=clone)
+    (clone / "new.txt").write_text("new\n", encoding="utf-8")
+    _git(["add", "."], cwd=clone)
+    _git(["commit", "-m", "new branch commit"], cwd=clone)
+    _git(["push", "-u", "bare", "feat/x"], cwd=clone)
+    _git(["fetch", "bare"], cwd=clone)
+
+    assert git_commits_not_in_bare(clone) == 0
+
+
+# ---------------------------------------------------------------------------
+# git_status_porcelain(untracked=)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_status_porcelain_untracked_false_ignores_untracked_files(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    (repo / "untracked.txt").write_text("stray\n", encoding="utf-8")
+
+    assert git_status_porcelain(repo) != ""
+    assert git_status_porcelain(repo, untracked=False) == ""
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_status_porcelain_untracked_false_still_reports_tracked_modifications(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    (repo / "README.md").write_text("changed\n", encoding="utf-8")
+
+    assert git_status_porcelain(repo, untracked=False) != ""
+
+
+# ---------------------------------------------------------------------------
+# git_push_refspec
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_push_refspec_pushes_named_branch(tmp_path: Path) -> None:
+    bare, clone = _make_bare_and_clone(tmp_path)
+    _git(["checkout", "-b", "feat/x"], cwd=clone)
+    (clone / "new.txt").write_text("new\n", encoding="utf-8")
+    _git(["add", "."], cwd=clone)
+    _git(["commit", "-m", "new branch commit"], cwd=clone)
+
+    git_push_refspec(clone, "feat/x:refs/heads/feat/x")
+
+    assert (
+        _git(["rev-parse", "refs/heads/feat/x"], cwd=bare).stdout.decode().strip()
+        == _git(
+            ["rev-parse", "HEAD"],
+            cwd=clone,
+        )
+        .stdout.decode()
+        .strip()
+    )
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_push_refspec_dry_run_does_not_mutate(tmp_path: Path) -> None:
+    bare, clone = _make_bare_and_clone(tmp_path)
+    _git(["checkout", "-b", "feat/x"], cwd=clone)
+    (clone / "new.txt").write_text("new\n", encoding="utf-8")
+    _git(["add", "."], cwd=clone)
+    _git(["commit", "-m", "new branch commit"], cwd=clone)
+
+    git_push_refspec(clone, "feat/x:refs/heads/feat/x", dry_run=True)
+
+    assert git_rev_parse(bare, "refs/heads/feat/x") is None
+
+
+# ---------------------------------------------------------------------------
+# resolve_upstream_default_branch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_resolve_upstream_default_branch_prefers_origin_head(tmp_path: Path) -> None:
+    upstream = _init_repo(tmp_path / "upstream")
+    _git(["branch", "-m", "trunk"], cwd=upstream)
+    clone = tmp_path / "clone"
+    _git(["clone", str(upstream), str(clone)], cwd=tmp_path)
+
+    assert resolve_upstream_default_branch(clone) == "trunk"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_resolve_upstream_default_branch_falls_back_to_main(tmp_path: Path) -> None:
+    upstream = _init_repo(tmp_path / "upstream")
+    clone = tmp_path / "clone"
+    _git(["clone", str(upstream), str(clone)], cwd=tmp_path)
+    # Simulate a clone that never got origin/HEAD set (e.g. a shallow/partial mirror).
+    _git(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], cwd=clone)
+
+    assert resolve_upstream_default_branch(clone) == "main"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_resolve_upstream_default_branch_falls_back_to_master(tmp_path: Path) -> None:
+    upstream = _init_repo(tmp_path / "upstream")
+    _git(["branch", "-m", "master"], cwd=upstream)
+    clone = tmp_path / "clone"
+    _git(["clone", str(upstream), str(clone)], cwd=tmp_path)
+    _git(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], cwd=clone)
+
+    assert resolve_upstream_default_branch(clone) == "master"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_resolve_upstream_default_branch_raises_when_unresolvable(tmp_path: Path) -> None:
+    upstream = _init_repo(tmp_path / "upstream")
+    _git(["branch", "-m", "trunk"], cwd=upstream)
+    clone = tmp_path / "clone"
+    _git(["clone", str(upstream), str(clone)], cwd=tmp_path)
+    _git(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], cwd=clone)
+
+    with pytest.raises(WorkflowError, match="cannot resolve upstream default branch"):
+        resolve_upstream_default_branch(clone)
