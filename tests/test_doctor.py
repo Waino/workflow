@@ -13,6 +13,7 @@ from tests.conftest import create_project_marker, make_layout
 from workflow.cli import main
 from workflow.commands.doctor import (
     _active_branches,
+    _bare_staleness_notes,
     _check_bare,
     _check_worktree,
     _duplicate_plan_anomalies,
@@ -21,8 +22,9 @@ from workflow.commands.doctor import (
 )
 from workflow.config import WorkflowConfig, load_config
 from workflow.frontmatter import PlanFrontmatter, RepoBranch, render_frontmatter
-from workflow.metadata import LEGACY_ROOT_MARKER
-from workflow.names import WorktreeName
+from workflow.layout import Layout
+from workflow.metadata import LEGACY_ROOT_MARKER, CodeRepoMeta, ProjectMetadata, ProjectMode, write_metadata
+from workflow.names import DOCS_REPO, WorktreeName
 
 _GIT = shutil.which("git") or "git"
 
@@ -360,3 +362,96 @@ def test_stack_anomalies_flags_a_branch_whose_plans_are_all_finished(tmp_path: P
     anomalies = _stack_anomalies(make_layout(tmp_path), _config_for(tmp_path))
 
     assert anomalies == ["feat/005_foo: exists but every plan on it is done/rejected"]
+
+
+# ---------------------------------------------------------------------------
+# _bare_staleness_notes
+# ---------------------------------------------------------------------------
+
+
+def _oob_layout(tmp_path: Path, repos: list[str]) -> Layout:
+    return Layout(
+        project_dir=tmp_path,
+        metadata=ProjectMetadata(mode=ProjectMode.oob, code_repos=[CodeRepoMeta(name=repo) for repo in repos]),
+    )
+
+
+def _make_oob_code_repo(tmp_path: Path, repo: str) -> tuple[Path, Path]:
+    """Create canon/<repo> as an upstream-tracking clone, and bare/<repo> seeded from it. Returns (canon, bare).
+
+    The upstream itself is a *bare* repo (a push-able target), matching the real shape
+    of a code repo's ``origin``; a plain worktree upstream refuses a push to its
+    checked-out branch.
+    """
+    seed = _init_repo(tmp_path / f"{repo}-seed")
+    upstream = tmp_path / f"{repo}-upstream.git"
+    _git(["init", "--bare", "-b", "main", str(upstream)], cwd=tmp_path)
+    _git(["push", str(upstream), "main"], cwd=seed)
+    canon_repo = tmp_path / "canon" / repo
+    _git(["clone", str(upstream), str(canon_repo)], cwd=tmp_path)
+    bare_repo = tmp_path / "bare" / repo
+    _git(["clone", "--bare", str(canon_repo), str(bare_repo)], cwd=tmp_path)
+    return canon_repo, bare_repo
+
+
+def test_bare_staleness_notes_empty_when_bare_matches_origin(tmp_path: Path) -> None:
+    canon_repo, _bare_repo = _make_oob_code_repo(tmp_path, "mypackage")
+
+    assert _bare_staleness_notes(_oob_layout(tmp_path, ["mypackage"])) == []
+    del canon_repo
+
+
+def test_bare_staleness_notes_flags_behind_upstream(tmp_path: Path) -> None:
+    canon_repo, _bare_repo = _make_oob_code_repo(tmp_path, "mypackage")
+    (canon_repo / "more.txt").write_text("more\n", encoding="utf-8")
+    _git(["add", "."], cwd=canon_repo)
+    _git(["commit", "-m", "advance upstream"], cwd=canon_repo)
+    _git(["push"], cwd=canon_repo)
+    _git(["fetch", "origin"], cwd=canon_repo)
+
+    notes = _bare_staleness_notes(_oob_layout(tmp_path, ["mypackage"]))
+
+    assert notes == ["mypackage: bare is 1 commit(s) behind upstream (main); run workflow sync"]
+
+
+def test_bare_staleness_notes_silent_when_bare_holds_unpushed_local_work(tmp_path: Path) -> None:
+    """Not the 'behind upstream' case this note covers -- ancestry runs the other way."""
+    canon_repo, bare_repo = _make_oob_code_repo(tmp_path, "mypackage")
+    _git(["clone", "-o", "bare", str(bare_repo), str(tmp_path / "agent-clone")], cwd=tmp_path)
+    agent_clone = tmp_path / "agent-clone"
+    (agent_clone / "local.txt").write_text("local\n", encoding="utf-8")
+    _git(["add", "."], cwd=agent_clone)
+    _git(["commit", "-m", "agent work"], cwd=agent_clone)
+    _git(["push", "bare", "HEAD:main"], cwd=agent_clone)
+    del canon_repo
+
+    assert _bare_staleness_notes(_oob_layout(tmp_path, ["mypackage"])) == []
+
+
+def test_bare_staleness_notes_skips_repo_with_unresolvable_default_branch(tmp_path: Path) -> None:
+    canon_repo, _bare_repo = _make_oob_code_repo(tmp_path, "mypackage")
+    _git(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], cwd=canon_repo)
+    _git(["branch", "-m", "trunk"], cwd=canon_repo)
+
+    assert _bare_staleness_notes(_oob_layout(tmp_path, ["mypackage"])) == []
+
+
+def test_doctor_cli_prints_bare_staleness_section(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _config_for(tmp_path)
+    canon_repo, _bare_repo = _make_oob_code_repo(tmp_path, "mypackage")
+    (canon_repo / "more.txt").write_text("more\n", encoding="utf-8")
+    _git(["add", "."], cwd=canon_repo)
+    _git(["commit", "-m", "advance upstream"], cwd=canon_repo)
+    _git(["push"], cwd=canon_repo)
+    _git(["fetch", "origin"], cwd=canon_repo)
+    docs_repo = _init_repo(tmp_path / "canon" / DOCS_REPO)
+    del docs_repo
+
+    write_metadata(tmp_path, ProjectMetadata(mode=ProjectMode.oob, code_repos=[CodeRepoMeta(name="mypackage")]))
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "doctor"])
+
+    assert "Bare staleness" in result.output
+    assert "mypackage" in result.output
+    assert "run workflow sync" in result.output

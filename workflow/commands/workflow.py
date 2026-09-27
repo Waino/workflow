@@ -13,7 +13,8 @@ from pathlib import Path, PurePosixPath
 
 import click
 import jinja2
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
+from rich.table import Table
 
 from workflow.audit import write_audit_log
 from workflow.commands.agents_md import (
@@ -42,9 +43,11 @@ from workflow.git_helpers import (
     git_commit_hash,
     git_commit_if_changed,
     git_commits_ahead_of_remote,
+    git_commits_not_in_bare,
     git_config_get,
     git_current_branch,
     git_fetch,
+    git_fetch_remote,
     git_file_mode_at_ref,
     git_index_lock_present,
     git_is_ancestor,
@@ -53,6 +56,8 @@ from workflow.git_helpers import (
     git_path_exists_at_ref,
     git_pull,
     git_push,
+    git_push_branch,
+    git_push_refspec,
     git_ref_exists_remote,
     git_remote_url,
     git_rev_parse,
@@ -60,6 +65,7 @@ from workflow.git_helpers import (
     git_status_porcelain,
     park_on_main,
     refresh_main,
+    resolve_upstream_default_branch,
     transfer_branch_to_main,
 )
 from workflow.layout import Layout
@@ -952,6 +958,112 @@ def add_repo(ctx: click.Context, name: str, *, skip_hook: bool, cont: bool) -> N
     ctx.exit(0)
 
 
+def _sync_default_repos(layout: Layout) -> list[str]:
+    """Every code repo, plus ``docs`` if it has an ``origin`` remote (decision 8: docs's is optional)."""
+    repos = list(layout.code_repos())
+    docs_repo = layout.git_repo_root(WorktreeName.canon, DOCS_REPO)
+    if git_remote_url(docs_repo, "origin") is not None:  # upstream remote, not bare (023.5)
+        repos.append(DOCS_REPO)
+    return repos
+
+
+def _sync_one_branch(  # noqa: PLR0913
+    canon_repo: Path,
+    repo: str,
+    branch: str,
+    origin_ref: str,
+    *,
+    force: bool,
+    dry_run: bool,
+) -> bool:
+    """Sync one branch of *repo* from *origin_ref* to ``bare``; returns False if refused.
+
+    Refuses (rather than force-pushing) when ``bare``'s current tip is not an ancestor of
+    *origin_ref* -- i.e. bare holds commits origin does not -- unless *force* is passed,
+    since that push would otherwise silently discard them (Risk 2).
+    """
+    bare_ref = f"refs/remotes/{BARE_REMOTE}/{branch}"
+    old_sha = git_rev_parse(canon_repo, bare_ref)
+    new_sha = git_rev_parse(canon_repo, origin_ref)
+    if old_sha == new_sha:
+        console.print(f"{repo} {branch}: up to date ({new_sha}).")
+        return True
+    fast_forward = old_sha is None or git_is_ancestor(canon_repo, bare_ref, origin_ref)
+    if not fast_forward and not force:
+        console.print(
+            f"[yellow]\\[!] {repo} {branch}: bare ({old_sha}) is not an ancestor of origin ({new_sha}); "
+            "rerun with --force to overwrite.[/yellow]",
+        )
+        return False
+    refspec = f"{'' if fast_forward else '+'}{origin_ref}:refs/heads/{branch}"
+    git_push_refspec(canon_repo, refspec, dry_run=dry_run)
+    console.print(f"{repo} {branch}: {old_sha or '(none)'} -> {new_sha}")
+    return True
+
+
+def _sync_one_repo(layout: Layout, repo: str, extra_branches: tuple[str, ...], *, force: bool, dry_run: bool) -> bool:
+    """Sync one repo's ``bare`` from canon's ``origin``; returns False if any branch was refused."""
+    canon_repo = layout.git_repo_root(WorktreeName.canon, repo)
+    if git_remote_url(canon_repo, "origin") is None:  # upstream remote, not bare (023.5)
+        console.print(f"[dim]{repo}: no upstream remote configured; skipping.[/dim]")
+        return True
+
+    # Both fetches always run for real, even in --dry-run: they only touch remote-tracking
+    # refs (never the working tree), and the fast-forward check below needs them to be
+    # current for the preview to mean anything (same classification-time-fetch exception
+    # documented in this module's docstring).
+    git_fetch(canon_repo)
+    git_fetch_remote(canon_repo, "origin", prune=True)  # upstream remote, not bare (023.5)
+    default_branch = resolve_upstream_default_branch(canon_repo)
+
+    ok = True
+    for branch in (default_branch, *extra_branches):
+        origin_ref = f"refs/remotes/origin/{branch}"
+        if git_rev_parse(canon_repo, origin_ref) is None:
+            if branch != default_branch:
+                console.print(f"[dim]{repo}: {branch!r} not found on origin; skipping.[/dim]")
+            continue
+        ok &= _sync_one_branch(canon_repo, repo, branch, origin_ref, force=force, dry_run=dry_run)
+    return ok
+
+
+@register_script("sync")
+@click.option("--repo", "repos", multiple=True, metavar="NAME", help="Restrict sync to this repo. Repeatable.")
+@click.option(
+    "--branch",
+    "branches",
+    multiple=True,
+    metavar="NAME",
+    help="Extra branch to sync besides the upstream default branch. Repeatable.",
+)
+@click.option("--force", is_flag=True, help="Force-push even when bare is not a fast-forward ancestor of origin.")
+@click.pass_context
+def sync(ctx: click.Context, repos: tuple[str, ...], branches: tuple[str, ...], *, force: bool) -> None:
+    """Refresh bare/<repo> from canon's upstream (origin)."""
+    config: WorkflowConfig = ctx.obj["config"]
+    dry_run: bool = ctx.obj["dry_run"]
+
+    try:
+        layout = config.layout()
+        selected = list(repos) if repos else _sync_default_repos(layout)
+        unknown = sorted(set(selected) - set(layout.repos()))
+        require(not unknown, f"unknown repo(s): {unknown}")
+
+        ok = True
+        for repo in selected:
+            ok &= _sync_one_repo(layout, repo, branches, force=force, dry_run=dry_run)
+
+        _write_script_audit_log(config, "sync", dry_run=dry_run)
+        if not ok:
+            ctx.exit(1)
+            return
+    except (subprocess.CalledProcessError, WorkflowError) as exc:
+        print_workflow_error(exc)
+        ctx.exit(1)
+        return
+    ctx.exit(0)
+
+
 def _find_docker_script(project_dir: Path) -> str:
     """Return the path to run_agent_in_docker.sh, or just its name for PATH lookup."""
     candidate = project_dir / "run_agent_in_docker.sh"
@@ -1230,18 +1342,119 @@ def _sync_repos_best_effort(layout: Layout, *, park: WorktreeName | None = None,
     just the two the handoff touched: a clone left behind cuts its next branch from a
     stale ``main``, and ``doctor``'s stale-main check treats any difference from bare as
     an anomaly. Only *park* is checked out to ``main`` -- the others may be mid-work.
+
+    Code repos (oob mode) never have their branch touched -- the tool does not manage
+    code-repo branch lifecycle -- so they only get a plain ``git fetch bare``.
     """
     for worktree in WorktreeName:
-        repo_path = layout.git_repo_root(worktree)
+        docs_repo_path = layout.git_repo_root(worktree)
+        if docs_repo_path.is_dir():
+            try:
+                if worktree == park:
+                    park_on_main(docs_repo_path, dry_run=dry_run)
+                else:
+                    refresh_main(docs_repo_path, dry_run=dry_run)
+            except (subprocess.CalledProcessError, WorkflowError) as exc:
+                error_console.print(f"[yellow]main sync skipped in {docs_repo_path}: {exc}[/yellow]")
+        for repo in layout.code_repos():
+            repo_path = layout.git_repo_root(worktree, repo)
+            if not repo_path.is_dir():
+                continue
+            try:
+                git_fetch(repo_path, dry_run=dry_run)
+            except subprocess.CalledProcessError as exc:
+                error_console.print(f"[yellow]fetch skipped in {repo_path}: {exc}[/yellow]")
+
+
+class RepoPushInfo(BaseModel):
+    """One repo's ahead-of-bare state in the acting worktree, for the ``check``/``accept`` push set."""
+
+    model_config = ConfigDict(frozen=True)
+
+    repo: str
+    branch: str
+    commits: int
+
+
+def _compute_push_set(layout: Layout, worktree: WorktreeName) -> list[RepoPushInfo]:
+    """Return every repo in *worktree* that has commits bare does not, fetching bare first.
+
+    The fetch always runs for real (never gated on ``--dry-run``), matching the module
+    docstring's classification-time-fetch exception in ``git_helpers``: a stale fetch
+    would silently under-count and drop a repo that genuinely has something to push.
+    """
+    push_set = []
+    for repo in layout.repos():
+        repo_path = layout.git_repo_root(worktree, repo)
+        git_fetch(repo_path)
+        commits = git_commits_not_in_bare(repo_path)
+        if commits > 0:
+            push_set.append(RepoPushInfo(repo=repo, branch=git_current_branch(repo_path), commits=commits))
+    return push_set
+
+
+def _print_push_set_table(push_set: list[RepoPushInfo]) -> None:
+    """Print a (repo, branch, commits) table of every repo about to be pushed."""
+    table = Table(title="Repos ahead of bare")
+    table.add_column("repo")
+    table.add_column("branch")
+    table.add_column("commits")
+    for info in push_set:
+        table.add_row(info.repo, info.branch, str(info.commits))
+    console.print(table)
+
+
+def _require_clean_repos(layout: Layout, worktree: WorktreeName) -> None:
+    """Fail on tracked modifications in any repo of *worktree*; warn only on untracked files.
+
+    Untracked files are common noise in third-party code repos (build output, caches)
+    and are not actionable here, so they only warn; tracked modifications mean the agent
+    has uncommitted work that would not be reviewed, so they are a hard failure.
+    """
+    for repo in layout.repos():
+        repo_path = layout.git_repo_root(worktree, repo)
         if not repo_path.is_dir():
             continue
-        try:
-            if worktree == park:
-                park_on_main(repo_path, dry_run=dry_run)
-            else:
-                refresh_main(repo_path, dry_run=dry_run)
-        except (subprocess.CalledProcessError, WorkflowError) as exc:
-            error_console.print(f"[yellow]main sync skipped in {repo_path}: {exc}[/yellow]")
+        tracked = git_status_porcelain(repo_path, untracked=False)
+        require(
+            not tracked,
+            f"{repo_path} has uncommitted tracked changes; commit or discard them first:\n{tracked}",
+        )
+        if git_status_porcelain(repo_path):
+            error_console.print(f"[yellow]\\[!] {repo_path} has untracked files (not blocking).[/yellow]")
+
+
+def _run_repo_push_set(push_set: list[RepoPushInfo], layout: Layout, worktree: WorktreeName, *, dry_run: bool) -> None:
+    """Push every non-docs repo in *push_set*; the docs repo keeps its own dedicated push steps."""
+    for info in push_set:
+        if info.repo == DOCS_REPO:
+            continue
+        git_push_branch(layout.git_repo_root(worktree, info.repo), info.branch, dry_run=dry_run)
+
+
+def _run_repo_push_set_hooks(
+    config: WorkflowConfig,
+    push_set: list[RepoPushInfo],
+    layout: Layout,
+    worktree: str,
+    *,
+    dry_run: bool,
+) -> None:
+    """Run the pre-commit hook for every repo in *push_set* that has one enabled.
+
+    In-band mode has a single repo (docs) and runs the hook exactly as before *repo*
+    plumbing existed (``repo=None``, no ``--repo`` flag). Oob mode runs it once per
+    repo in the push set, passing ``--repo NAME`` (docs included -- the wrapper root is
+    not a git repo, so the hook must still be told which directory to run in).
+    """
+    if layout.metadata.mode != ProjectMode.oob:
+        _run_pre_commit_hook(config, worktree, dry_run=dry_run)
+        return
+    for info in push_set:
+        if not layout.metadata.runs_hook(info.repo):
+            console.print(f"[dim]skipping pre-commit hook for {info.repo} (run_hook: false)[/dim]")
+            continue
+        _run_pre_commit_hook(config, worktree, dry_run=dry_run, repo=info.repo)
 
 
 def _classify_rebase_step(
@@ -1279,6 +1492,14 @@ def _ensure_branch_checked_out(repo_path: Path, branch: str, *, dry_run: bool) -
     """Check out *branch* in *repo_path* unless it is already the current branch."""
     if git_current_branch(repo_path) != branch:
         git_checkout(repo_path, branch, dry_run=dry_run)
+
+
+def _fetch_code_repos(layout: Layout, worktree: WorktreeName, *, dry_run: bool) -> None:
+    """Fetch bare for every code repo in *worktree*; never checks out (decision 13)."""
+    for repo in layout.code_repos():
+        repo_path = layout.git_repo_root(worktree, repo)
+        if repo_path.is_dir():
+            git_fetch(repo_path, dry_run=dry_run)
 
 
 def _transition_if_needed(  # noqa: PLR0913
@@ -1936,6 +2157,43 @@ _STEP_CHECK_CHECKOUT_REVIEWER = "checkout branch in reviewer"
 _STEP_CHECK_CHECKOUT_MAIN_BUILDER = "checkout main in builder"
 
 
+def _classify_push_set_steps(resume: ResumePlan, push_set: list[RepoPushInfo]) -> None:
+    """Add a ``push {repo}`` step for every non-docs repo in *push_set*.
+
+    Shared between ``check`` and ``accept``: the docs repo keeps its own dedicated named
+    steps (transition commit, transfer to main) in each command's own classify function.
+    """
+    for info in push_set:
+        if info.repo != DOCS_REPO:
+            resume.will_run(f"push {info.repo}")
+
+
+def _run_check_handoff(  # noqa: PLR0913
+    resume: ResumePlan,
+    layout: Layout,
+    target_repo: AgentName,
+    target_repo_path: Path,
+    reviewer_repo: Path,
+    builder_repo: Path,
+    branch: str,
+    push_set: list[RepoPushInfo],
+    *,
+    dry_run: bool,
+) -> None:
+    """Push *target_repo* (and every push-set repo), then fetch/checkout reviewer, park builder."""
+    git_push(target_repo_path, dry_run=dry_run)
+    _run_repo_push_set(push_set, layout, WorktreeName(target_repo), dry_run=dry_run)
+    git_fetch(reviewer_repo, dry_run=dry_run)
+    _fetch_code_repos(layout, WorktreeName.reviewer, dry_run=dry_run)
+    if resume.should_run(_STEP_CHECK_CHECKOUT_REVIEWER):
+        _ensure_branch_checked_out(reviewer_repo, branch, dry_run=dry_run)
+    git_pull(reviewer_repo, dry_run=dry_run)
+    # checkout main in builder to make it ready for the next task
+    if resume.should_run(_STEP_CHECK_CHECKOUT_MAIN_BUILDER):
+        _ensure_branch_checked_out(builder_repo, "main", dry_run=dry_run)
+    git_pull(builder_repo, dry_run=dry_run)
+
+
 def _classify_check_steps(
     resume: ResumePlan,
     stack: list[Plan],
@@ -1997,6 +2255,7 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_v
             f"leftover git lock in {target_repo_path}; remove it first.",
         )
         require(not git_index_lock_present(reviewer_repo), f"leftover git lock in {reviewer_repo}; remove it first.")
+        _require_clean_repos(layout, WorktreeName(target_repo))
         stack = resolve_stack(layout, plan)
         branch = branch_for_plan(layout, plan)
         if plan.state == PlanState.IMPLEMENTING:
@@ -2009,12 +2268,16 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_v
                 f"currently on {current_branch!r}.",
             )
 
+        # Fetches bare for every repo in *target_repo*'s worktree, so the push set below is
+        # accurate (a stale fetch would silently under-count and drop a repo to push).
+        push_set = _compute_push_set(layout, WorktreeName(target_repo))
+
         # On a resume where a prior run already transitioned the plan to checking, these
         # checks either already passed or are moot (builder may already be on main); skip
         # them unconditionally rather than re-running pre-commit/validate against 'main'.
         # An operator who wants to re-run validation post-transition can use `workflow validate`.
         if plan.state == PlanState.IMPLEMENTING:
-            _run_pre_commit_hook(config, target_repo, dry_run=dry_run)
+            _run_repo_push_set_hooks(config, push_set, layout, target_repo, dry_run=dry_run)
             results = run_validate(plan, config, target_worktree_override=target_repo, dry_run=dry_run)
             if not dry_run:
                 _print_results(results)
@@ -2022,8 +2285,10 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_v
                     ctx.exit(1)
                     return
 
+        _print_push_set_table(push_set)
         resume = ResumePlan(title="check")
         _classify_check_steps(resume, stack, layout, target_repo, branch)
+        _classify_push_set_steps(resume, push_set)
         resume.render()
 
         new_stack = _transition_stack_members(
@@ -2035,15 +2300,17 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_v
             dry_run=dry_run,
         )
         new_plan = new_stack[-1]
-        git_push(target_repo_path, dry_run=dry_run)
-        git_fetch(reviewer_repo, dry_run=dry_run)
-        if resume.should_run(_STEP_CHECK_CHECKOUT_REVIEWER):
-            _ensure_branch_checked_out(reviewer_repo, branch, dry_run=dry_run)
-        git_pull(reviewer_repo, dry_run=dry_run)
-        # checkout main in builder to make it ready for the next task
-        if resume.should_run(_STEP_CHECK_CHECKOUT_MAIN_BUILDER):
-            _ensure_branch_checked_out(builder_repo, "main", dry_run=dry_run)
-        git_pull(builder_repo, dry_run=dry_run)
+        _run_check_handoff(
+            resume,
+            layout,
+            target_repo,
+            target_repo_path,
+            reviewer_repo,
+            builder_repo,
+            branch,
+            push_set,
+            dry_run=dry_run,
+        )
         _write_script_audit_log(
             config,
             "check",
@@ -2125,7 +2392,13 @@ _STEP_ACCEPT_TRANSFER = "transfer reviewer branch to main"
 _STEP_ACCEPT_REBASE = "rebase reviewer branch onto main"
 
 
-def _classify_accept_steps(resume: ResumePlan, stack: list[Plan], layout: Layout, branch: str) -> None:
+def _classify_accept_steps(
+    resume: ResumePlan,
+    stack: list[Plan],
+    layout: Layout,
+    branch: str,
+    push_set: list[RepoPushInfo],
+) -> None:
     canon_repo = layout.git_repo_root(WorktreeName.canon)
 
     # transfer_branch_to_main is one guarded+idempotent unit (Fix 3); classify it as a
@@ -2158,6 +2431,9 @@ def _classify_accept_steps(resume: ResumePlan, stack: list[Plan], layout: Layout
         else:
             resume.will_run(step)
 
+    for info in push_set:
+        if info.repo != DOCS_REPO:
+            resume.will_run(f"push {info.repo}")
     resume.will_run("push canon")
 
 
@@ -2185,6 +2461,7 @@ def accept(ctx: click.Context, plan_path: str, *, force_push: bool) -> None:
         require(not git_index_lock_present(reviewer_repo), f"leftover git lock in {reviewer_repo}; remove it first.")
         require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
         require(git_current_branch(canon_repo) == "main", "accept: canon must be on 'main'.")
+        _require_clean_repos(layout, WorktreeName.reviewer)
         # The feature branch follows *plan*'s resolved branch (set by `implement`), not
         # whatever reviewer happens to be checked out to right now -- a prior run may have
         # already advanced reviewer to 'main' (decision 2).
@@ -2196,9 +2473,13 @@ def accept(ctx: click.Context, plan_path: str, *, force_push: bool) -> None:
                 raise WorkflowError(msg)
 
         stack = resolve_stack(layout, plan)
+        # Fetches bare for every repo in the reviewer worktree, so the push set below is
+        # accurate (a stale fetch would silently under-count and drop a repo to push).
+        push_set = _compute_push_set(layout, WorktreeName.reviewer)
+        _print_push_set_table(push_set)
 
         resume = ResumePlan(title="accept")
-        _classify_accept_steps(resume, stack, layout, branch)
+        _classify_accept_steps(resume, stack, layout, branch, push_set)
         resume.render()
 
         # Gated on should_run: unlike a fresh run, a resume where this already landed must
@@ -2216,6 +2497,7 @@ def accept(ctx: click.Context, plan_path: str, *, force_push: bool) -> None:
                 dry_run=dry_run,
             )
             _warn_if_rebased(result, branch)
+        _run_repo_push_set(push_set, layout, WorktreeName.reviewer, dry_run=dry_run)
         new_stack = _transition_stack_members(
             stack,
             PlanState.DONE,

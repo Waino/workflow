@@ -468,6 +468,8 @@ def test_check_runs_pre_commit_and_prints_review_reminder(tmp_path: Path, monkey
     monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="feat/005_foo"))
     monkeypatch.setattr(wc, "git_checkout", MagicMock())
     monkeypatch.setattr(wc, "git_pull", MagicMock())
+    monkeypatch.setattr(wc, "git_status_porcelain", MagicMock(return_value=""))
+    monkeypatch.setattr(wc, "git_commits_not_in_bare", MagicMock(return_value=1))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005"])
 
@@ -502,6 +504,8 @@ def test_check_resume_skips_precommit_and_validate_when_already_checking(
     monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="main"))
     monkeypatch.setattr(wc, "git_checkout", MagicMock())
     monkeypatch.setattr(wc, "git_pull", MagicMock())
+    monkeypatch.setattr(wc, "git_status_porcelain", MagicMock(return_value=""))
+    monkeypatch.setattr(wc, "git_commits_not_in_bare", MagicMock(return_value=1))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005"])
 
@@ -602,6 +606,9 @@ def test_accept_and_reject_run_in_expected_repos(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(wc, "branch_needs_rebase", MagicMock(return_value=False))
     monkeypatch.setattr(wc, "git_ref_exists_remote", MagicMock(return_value=True))
     monkeypatch.setattr(wc, "delete_merged_branch", MagicMock())
+    monkeypatch.setattr(wc, "git_fetch", MagicMock())
+    monkeypatch.setattr(wc, "git_status_porcelain", MagicMock(return_value=""))
+    monkeypatch.setattr(wc, "git_commits_not_in_bare", MagicMock(return_value=1))
 
     accept_result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005"])
     reject_result = CliRunner().invoke(
@@ -1101,6 +1108,7 @@ def test_accept_main_branch_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     _make_plan(tmp_path, "reviewer", "checking", "005_foo.md")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="main"))
+    monkeypatch.setattr(wc, "git_status_porcelain", MagicMock(return_value=""))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "accept", "005"])
 
@@ -1277,6 +1285,8 @@ def test_rotate_best_effort_downgrades_error_to_warning(
     monkeypatch.setattr(wc, "git_current_branch", MagicMock(return_value="feat/005_foo"))
     monkeypatch.setattr(wc, "git_checkout", MagicMock())
     monkeypatch.setattr(wc, "git_pull", MagicMock())
+    monkeypatch.setattr(wc, "git_status_porcelain", MagicMock(return_value=""))
+    monkeypatch.setattr(wc, "git_commits_not_in_bare", MagicMock(return_value=1))
     monkeypatch.setattr(wc, "rotate_control_pane", MagicMock(side_effect=WorkflowError("boom")))
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "check", "005"])

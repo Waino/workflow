@@ -8,6 +8,7 @@ anything; exits non-zero when any anomaly is found.
 
 from __future__ import annotations
 
+import subprocess
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +29,7 @@ from workflow.git_helpers import (
     git_remote_url,
     git_rev_parse,
     git_status_porcelain,
+    resolve_upstream_default_branch,
 )
 from workflow.metadata import LEGACY_ROOT_MARKER
 from workflow.models import PlanState
@@ -192,6 +194,46 @@ def _duplicate_plan_anomalies(layout: Layout) -> list[str]:
     return anomalies
 
 
+def _bare_staleness_notes(layout: Layout) -> list[str]:
+    """Return one note per code repo whose ``bare`` default branch lags canon's ``origin``.
+
+    Fetch-free like the rest of ``doctor``: reads whatever ``origin`` state canon's own
+    last fetch left behind (no live network fetch here), and reads ``bare/<repo>``'s ref
+    directly off disk. A note, not an anomaly -- falling behind upstream between
+    ``workflow sync`` runs is the expected steady state, not a problem.
+    """
+    notes: list[str] = []
+    for repo in layout.code_repos():
+        canon_repo = layout.git_repo_root(WorktreeName.canon, repo)
+        bare_repo = layout.bare_repo(repo)
+        if not (canon_repo.is_dir() and bare_repo.is_dir()):
+            continue
+        try:
+            default_branch = resolve_upstream_default_branch(canon_repo)
+        except WorkflowError:
+            continue
+        origin_tip = git_rev_parse(canon_repo, f"refs/remotes/origin/{default_branch}")
+        bare_tip = git_rev_parse(bare_repo, f"refs/heads/{default_branch}")
+        if origin_tip is None or bare_tip is None or origin_tip == bare_tip:
+            continue
+        if not git_is_ancestor(canon_repo, bare_tip, origin_tip):
+            continue  # bare holds commits origin doesn't -- not the "behind upstream" case this note covers
+        behind = _commits_between(canon_repo, bare_tip, origin_tip)
+        notes.append(f"{repo}: bare is {behind} commit(s) behind upstream ({default_branch}); run workflow sync")
+    return notes
+
+
+def _commits_between(repo_path: Path, old: str, new: str) -> int:
+    """Return ``git rev-list --count old..new`` in *repo_path*. Read-only guard query."""
+    result = subprocess.run(  # noqa: S603
+        ["git", "rev-list", "--count", f"{old}..{new}"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    return int(result.stdout.decode().strip())
+
+
 def _legacy_marker_anomalies(project_dir: Path) -> list[str]:
     """Return an anomaly if a leftover legacy .workflow_root marker is present."""
     if (project_dir / LEGACY_ROOT_MARKER).exists():
@@ -312,6 +354,12 @@ def doctor(ctx: click.Context) -> None:
     if stack_anomalies:
         console.print("[bold]Stack anomalies:[/bold]")
         for msg in stack_anomalies:
+            console.print(f"  - {msg}")
+
+    bare_staleness_notes = _bare_staleness_notes(layout)
+    if bare_staleness_notes:
+        console.print("[bold]Bare staleness:[/bold]")
+        for msg in bare_staleness_notes:
             console.print(f"  - {msg}")
 
     legacy_marker_anomalies = _legacy_marker_anomalies(project_dir)

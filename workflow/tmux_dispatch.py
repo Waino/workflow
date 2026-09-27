@@ -32,7 +32,7 @@ from workflow.exceptions import (
     PlanNotFoundError,
     WorkflowError,
 )
-from workflow.git_helpers import git_commit_hash, git_current_branch, git_pull, refresh_main
+from workflow.git_helpers import git_commit_hash, git_current_branch, git_fetch, git_pull, refresh_main
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import WorktreeName, command_cli_name
 from workflow.plan_resolver import resolve_plan
@@ -284,12 +284,20 @@ def _dispatch_prompt(
     prompt = result.prompt
     audit_input_plan = result.audit_input_plan
 
-    repo_path = config.layout().git_repo_root(worktree_name)
+    layout = config.layout()
+    repo_path = layout.git_repo_root(worktree_name)
     try:
         git_pull(repo_path, dry_run=dry_run, skip_if_no_upstream=True)
         # An agent asked to rebase (the 'rebase' prompt) needs a current bare/main;
         # the plain pull above only advances the checked-out branch.
         refresh_main(repo_path, dry_run=dry_run)
+        # Code repos' branches are not managed by the tool (see the intent's "Git branch
+        # model"), so they only get fetched -- but every prompt dispatch must still leave
+        # them fetched, or the agent silently starts work from stale bare/*.
+        for code_repo in layout.code_repos():
+            code_repo_path = layout.git_repo_root(worktree_name, code_repo)
+            if code_repo_path.is_dir():
+                git_fetch(code_repo_path, dry_run=dry_run)
     except subprocess.CalledProcessError as exc:
         error_console.print(f"[red]git sync failed in {repo_path}: {exc}[/red]")
         return 1
