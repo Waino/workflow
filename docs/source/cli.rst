@@ -61,6 +61,11 @@ Setup and session management
     new repo until it is added to ``docs/bootstrap_venv.sh`` and they are recreated.
     There is no command to remove a registered repo.
 
+``sync [--repo NAME]... [--branch NAME]... [--force]``
+    Out-of-band only (state-independent, like ``doctor``): refresh ``bare/<repo>``
+    from each code repo's own upstream (``origin``), plus ``docs`` if it has one.
+    Fast-forward-only unless ``--force`` is passed (see :ref:`Out-of-band mode`).
+
 ``start``
     Create the tmux session (or attach to it if it already exists), one window per
     agent plus a ``builder-shell`` window for manual shell access. Supports
@@ -125,7 +130,10 @@ operations (push/pull/merge) needed at each handoff.
     pushed (default ``builder``); ``--force-validation`` skips a failing validation.
     On a stacked plan this cascades: every stack member not already ``checking`` is
     transitioned in the same commit (see `Stacked plans`_); *PLAN_PATH* must be the
-    tip of its stack.
+    tip of its stack. Out-of-band: also pushes every code repo with commits bare
+    doesn't have, fetches (never checks out) the reviewer's code repos, runs the
+    pre-commit hook once per pushed repo, and refuses on a repo with uncommitted
+    tracked changes (see `Multi-repo handoffs`_).
 
 ``validate PLAN_PATH``
     Run the pre-merge verification checks (also run internally by ``todo``,
@@ -139,7 +147,9 @@ operations (push/pull/merge) needed at each handoff.
     failures are warnings — the accept itself has already landed).
     ``--force-push`` is explained under `Landing a branch on main`_. On a stacked
     plan this cascades every member to ``done`` in one commit and deletes the one
-    shared branch; *PLAN_PATH* must be the tip of its stack.
+    shared branch; *PLAN_PATH* must be the tip of its stack. Out-of-band: also
+    pushes every code repo with commits bare doesn't have, and refuses on a repo
+    with uncommitted tracked changes (see `Multi-repo handoffs`_).
 
 ``reject PLAN_PATH``
     Close out a plan without merging: transition to ``rejected`` and push that

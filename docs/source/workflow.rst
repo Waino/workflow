@@ -96,6 +96,49 @@ are the same, version-controlled ``AGENTS.md``). A single ``.venv`` at each wrap
 root covers every code repo, bootstrapped by the docs repo's own
 ``bootstrap_venv.sh`` — see :ref:`Docker`.
 
+.. _Multi-repo handoffs:
+
+Multi-repo handoffs
+'''''''''''''''''''
+
+The tool does not manage a code repo's branch lifecycle at all (see "Git branch
+model" in the intent): agents create, check out, and name code-repo branches
+themselves; a plan's frontmatter records which branch/base to use, for the agents'
+own reference. Only the following are automated:
+
+* **``check`` and ``accept`` push every repo with commits bare doesn't have**, not
+  just the docs repo. Before pushing, they fetch ``bare`` in every repo of the acting
+  worktree (``builder`` for ``check``, ``reviewer`` for ``accept``) and print a
+  (repo, branch, commits) table of what is about to move. The docs repo keeps its
+  usual dedicated transition/merge steps; every code repo with commits ahead gets a
+  plain ``git push -u bare <branch>``, under whatever branch that repo happens to be
+  on.
+* **``check`` fetches (never checks out) the reviewer's code repos.** The reviewer
+  agent checks out whichever branches the plan's frontmatter names.
+* **Every prompt dispatch fetches ``bare`` in every code repo** of the target
+  worktree, in addition to the docs repo's existing pull/refresh -- the single most
+  important defence against an agent starting work from stale code.
+* **``check``/``accept`` refuse on a repo with uncommitted tracked changes**
+  (anywhere in the acting worktree); an untracked file only warns, since third-party
+  repos routinely carry untracked build output.
+* **The pre-commit hook runs once per repo** in the push set (skipping any repo
+  with ``run_hook: false``), passing ``--repo NAME`` to the docker script so it runs
+  inside the right subdirectory.
+
+``workflow sync [--repo NAME]... [--branch NAME]... [--force]`` refreshes
+``bare/<repo>`` from each repo's own ``origin`` (canon's upstream) -- the
+counterpart to the above, since nothing else keeps ``bare`` from drifting behind
+upstream between syncs. Per repo (default: every code repo, plus ``docs`` if it has
+an ``origin`` remote): fetches ``origin``, resolves the upstream default branch
+(``origin/HEAD``, falling back to ``main``, then ``master``), and pushes it (and any
+``--branch``) to ``bare``. The push is fast-forward-only by default -- refusing and
+printing the old/new sha when ``bare`` holds commits ``origin`` doesn't -- unless
+``--force`` is passed; it never mirrors *every* upstream branch, only the default
+plus whatever ``--branch`` names, so it can never clobber an agent's in-flight
+feature branch that happens to share a name with something on upstream. ``workflow
+doctor`` separately notes (not an anomaly) when a code repo's ``bare`` has fallen
+behind its ``origin``.
+
 Plans and the state machine
 ----------------------------
 
