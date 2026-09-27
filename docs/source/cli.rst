@@ -82,7 +82,11 @@ Setup and session management
     plans are all ``done``/``rejected``, or a recorded branch that exists nowhere).
     Exits non-zero if any anomaly is found; the separate *notes* column carries
     observations that are normal during parallel work (e.g. a branch that still
-    needs rebasing) and never affects the exit code.
+    needs rebasing) and never affects the exit code. Out-of-band: one ``bare``/
+    worktree row per registered code repo, plus two repo-scoped anomalies -- a
+    planner/builder/reviewer clone with a remote other than ``bare``, and a
+    worktree-root ``AGENTS.md`` that doesn't hash-match ``.agents_md_hash`` (see
+    `Multi-repo validate, doctor, and status`_).
 
 ``agents_md``
     Regenerate the auto-generated section of ``AGENTS.md`` (plan state machine and
@@ -138,7 +142,10 @@ operations (push/pull/merge) needed at each handoff.
 ``validate PLAN_PATH``
     Run the pre-merge verification checks (also run internally by ``todo``,
     ``check``, and ``accept``) without transitioning state. ``--target-repo``
-    overrides the repo the checks run against.
+    overrides the repo the checks run against. Out-of-band: ``file-scope`` and
+    ``git-hooks`` run once per repo, and two repo-scoped checks are added --
+    ``planner-code-commits`` and ``branches-frontmatter`` (see `Multi-repo
+    validate, doctor, and status`_).
 
 ``accept PLAN_PATH``
     Accept a reviewed plan: push from reviewer, pull to canon, transition to
@@ -241,7 +248,9 @@ Information
 ``status``
     Show every plan's current state and its likely next step(s), plus a ``stack``
     column naming the plan it is stacked onto (blank when unstacked). Omits ``done``
-    and ``rejected`` plans unless ``--all`` is given.
+    and ``rejected`` plans unless ``--all`` is given. Followed by each worktree's git
+    status; out-of-band, this is a worktree × repo matrix instead of a linear list
+    (see `Multi-repo validate, doctor, and status`_).
 
 ``log``
     Pretty-print the JSONL audit log. Filterable by ``--agent``, ``--plan``,

@@ -139,6 +139,46 @@ feature branch that happens to share a name with something on upstream. ``workfl
 doctor`` separately notes (not an anomaly) when a code repo's ``bare`` has fallen
 behind its ``origin``.
 
+.. _Multi-repo validate, doctor, and status:
+
+Multi-repo validate, doctor, and status
+''''''''''''''''''''''''''''''''''''''
+
+A plan's frontmatter can now record a ``branches`` entry per registered code repo, not
+just the docs repo; a value of ``null`` means the plan legitimately doesn't touch that
+repo. Once a plan reaches ``implementing`` or ``checking``, ``workflow check``'s
+``branches-frontmatter`` check requires an entry (name or ``null``) for every code repo
+and validates any recorded branch name with ``git check-ref-format``.
+
+In oob mode, ``workflow check``/``workflow accept``'s ``validate`` step runs one
+``file-scope`` and one ``git-hooks`` result per repo (code repos are unrestricted for
+file scope; a stray executable hook only warns there, since third-party repos routinely
+ship their own). ``noqa-nosec`` and ``agents-md`` stay single, worktree-level results,
+but internally cover every repo/worktree: ``noqa-nosec`` scans each code repo's commits
+not yet in ``bare`` the same way it scans the docs repo's diff, and ``agents-md`` checks
+the AGENTS.md copy at every worktree root, not just the acting one. Two checks are new
+and oob-only: ``planner-code-commits`` fails if the planner has committed to any code
+repo (code changes belong to builder/reviewer), and ``branches-frontmatter`` enforces the
+rule above.
+
+``workflow doctor`` mirrors the same per-repo shape: the table gains a ``repo`` column
+(omitted in-band) with one ``bare`` row and one row per worktree for every registered
+repo. Two anomalies are oob-only: a planner/builder/reviewer clone with anything other
+than exactly one remote named ``bare`` (canon is exempt -- it legitimately keeps
+``origin`` too, for ``workflow sync``), and a worktree-root ``AGENTS.md`` copy that
+doesn't hash-match ``.agents_md_hash``. The tracked/untracked dirty-tree split (tracked
+changes are an anomaly, untracked-only is a note) now applies uniformly to every repo,
+in-band and oob alike.
+
+``workflow status`` replaces its linear per-worktree ``git status`` block with a matrix
+in oob mode: one row per worktree, one column per repo, each cell showing the branch
+plus how many commits it is ahead/behind ``bare``, with a ``*`` marker when the repo has
+tracked changes. In-band output is unchanged.
+
+The trusted-hash file (``.agents_md_hash``) is now a ``v2`` format that additionally
+covers ``.workflow.json``, so an oob project's registered code repos (and their
+``run_hook`` flags) are part of what a drifted-AGENTS.md check protects.
+
 Plans and the state machine
 ----------------------------
 
