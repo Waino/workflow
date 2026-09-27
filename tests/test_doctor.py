@@ -56,7 +56,9 @@ def _make_plan(
     plan_dir.mkdir(parents=True, exist_ok=True)
     body = "# 005: Foo\n\n## Goal\nDo stuff.\n"
     if onto is not None or branch is not None:
-        branches = {"docs": RepoBranch(branch=branch, base="abc1234")} if branch is not None else {}
+        branches: dict[str, RepoBranch | None] = (
+            {"docs": RepoBranch(branch=branch, base="abc1234")} if branch is not None else {}
+        )
         body = render_frontmatter(PlanFrontmatter(onto=onto, branches=branches)) + body
     (plan_dir / filename).write_text(body, encoding="utf-8")
 

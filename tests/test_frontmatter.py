@@ -48,6 +48,18 @@ def test_render_frontmatter_uses_fences_and_yaml() -> None:
     assert "branch: feat/001_base" in rendered
 
 
+def test_null_branches_entry_round_trips_as_none() -> None:
+    fm = PlanFrontmatter(branches={"docs": RepoBranch(branch="feat/001_base", base="abc1234"), "dep2": None})
+
+    text = render_frontmatter(fm) + _BODY
+    parsed, body = strip_frontmatter(text)
+
+    assert parsed == fm
+    assert parsed is not None
+    assert parsed.branches["dep2"] is None
+    assert body == _BODY
+
+
 def test_parse_frontmatter_malformed_yaml_raises(tmp_path: Path) -> None:
     path = tmp_path / "002_foo.md"
     text = "---\nonto: [unterminated\n---\nbody\n"
@@ -120,4 +132,6 @@ def test_write_frontmatter_preserves_unknown_keys_when_rewritten(tmp_path: Path)
     reparsed = parse_frontmatter(path.read_text(encoding="utf-8"))
     assert reparsed is not None
     assert reparsed.model_extra == {"future_key": "some_value"}
-    assert reparsed.branches["docs"].base == "abc1234"
+    docs_branch = reparsed.branches["docs"]
+    assert docs_branch is not None
+    assert docs_branch.base == "abc1234"

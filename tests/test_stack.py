@@ -43,7 +43,9 @@ def _make_plan(  # noqa: PLR0913 - test helper, kept explicit rather than bundli
     d.mkdir(parents=True, exist_ok=True)
     body = f"# {filename}\n"
     if onto is not None or branch is not None:
-        branches = {"docs": RepoBranch(branch=branch or "", base=base or "")} if branch is not None else {}
+        branches: dict[str, RepoBranch | None] = (
+            {"docs": RepoBranch(branch=branch or "", base=base or "")} if branch is not None else {}
+        )
         fm = PlanFrontmatter(onto=onto, branches=branches)
         body = render_frontmatter(fm) + body
     (d / filename).write_text(body, encoding="utf-8")

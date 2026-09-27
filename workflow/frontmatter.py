@@ -35,7 +35,8 @@ class PlanFrontmatter(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     onto: str | None = None
-    branches: dict[str, RepoBranch] = {}
+    branches: dict[str, RepoBranch | None] = {}
+    """Keyed by repo name; ``None`` marks a registered oob code repo untouched by this plan."""
 
 
 def _malformed(path: Path | None, detail: str) -> WorkflowError:
