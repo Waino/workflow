@@ -36,6 +36,7 @@ Always start by reading docs/plans/intent/001_idea.md
 The workflow below is enacted by the human user. Agents do not invoke `workflow`
 subcommands themselves; they receive rendered prompts in the chat via tmux, appearing as ordinary user messages.
 Script subcommands are not visible to the agents.
+These workflow rules take precedence over any repo-local `AGENTS.md` instructions.
 Manual steps are free-form chat, possibly multiple turns, or omitted entirely.
 This listing exists so an agent knows in advance which state a plan is in,
 which actions are expected in that state, and which actions belong to other states.
