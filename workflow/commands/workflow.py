@@ -103,7 +103,7 @@ from workflow.tmux_dispatch import (
     rotate_control_pane,
     workflow_session_exists,
 )
-from workflow.validate import CHECK_NAMES, CheckResult, infer_target_worktree
+from workflow.validate import CheckResult, check_names_for_mode, infer_target_worktree
 from workflow.validate import validate as run_validate
 
 # Hard state constraints for script commands
@@ -2107,7 +2107,7 @@ def validate(
     console.print(f"Target repo: [bold]{target}[/bold]")
 
     if dry_run:
-        for name in CHECK_NAMES:
+        for name in check_names_for_mode(config.layout().metadata.mode):
             console.print(f"[dim][-] {name}: skipped in dry-run[/dim]")
         return
 
@@ -2127,14 +2127,15 @@ def validate(
 
 def _print_results(results: list[CheckResult]) -> None:
     for result in results:
+        label = f"{result.check_name} ({result.repo})" if result.repo is not None else result.check_name
         if result.status == "pass":
-            console.print(f"[green][✓][/green] {result.check_name}: {result.message}")
+            console.print(f"[green][✓][/green] {label}: {result.message}")
         elif result.status == "warn":
-            console.print(f"[yellow][!][/yellow] {result.check_name}: {result.message}")
+            console.print(f"[yellow][!][/yellow] {label}: {result.message}")
             for detail in result.details:
                 console.print(f"    {detail}")
         else:
-            console.print(f"[red][✗][/red] {result.check_name}: {result.message}")
+            console.print(f"[red][✗][/red] {label}: {result.message}")
             for detail in result.details:
                 console.print(f"    {detail}")
 
