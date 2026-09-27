@@ -15,10 +15,11 @@ import libtmux
 import pytest
 from rich.console import Console
 
-from tests.conftest import create_project_marker, make_layout
+from tests.conftest import create_project_marker, make_layout, make_project
 from workflow.audit import build_audit_command_repo_state, write_audit_log
 from workflow.config import WorkflowConfig, load_config
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
+from workflow.metadata import ProjectMode
 from workflow.models import AuditLogEntry, Plan, PlanState, Review, ReviewSubState
 from workflow.names import WorktreeName
 from workflow.plan_resolver import (
@@ -862,44 +863,90 @@ def _init_git_repo(repo: Path) -> None:
     subprocess.run([git, "config", "user.name", "Test"], cwd=repo, check=True, capture_output=True)  # noqa: S603
 
 
-def _commit_plan(repo: Path, state: PlanState, name: str) -> None:
-    """Add a plan file under *repo*/docs/plans/<state>/ and commit it (test helper)."""
+def _commit_plan(repo: Path, plans_prefix: Path, state: PlanState, name: str) -> None:
+    """Add a plan file under *repo*/*plans_prefix*/<state>/ and commit it (test helper).
+
+    *plans_prefix* is the plan tree's location relative to the git repo root: ``docs/plans``
+    in-band, ``plans`` in oob (where the git repo root is already the ``docs`` subdirectory).
+    """
     git = shutil.which("git") or "git"
-    plan_dir = repo / "docs" / "plans" / state.value
+    plan_dir = repo / plans_prefix / state.value
     plan_dir.mkdir(parents=True, exist_ok=True)
     (plan_dir / name).write_text("# plan\n")
     subprocess.run([git, "add", "."], cwd=repo, check=True, capture_output=True)  # noqa: S603
     subprocess.run([git, "commit", "-m", f"add {name}"], cwd=repo, check=True, capture_output=True)  # noqa: S603
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-class TestGitProvidesRepoFlag:
-    """_from_git_history contributes a repo only when provides_repo=True."""
+_GIT_HISTORY_MODES = [
+    pytest.param(ProjectMode.in_band, (), id="in_band"),
+    pytest.param(ProjectMode.oob, ("mypackage",), id="oob"),
+]
 
-    def test_default_returns_state_only(self, tmp_path: Path) -> None:
-        _init_git_repo(tmp_path / "canon")
-        _commit_plan(tmp_path / "canon", PlanState.IMPLEMENTING, "005_foo.md")
-        constraint = _from_git_history(make_layout(tmp_path), [5], "foo")
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+@pytest.mark.parametrize(("mode", "code_repos"), _GIT_HISTORY_MODES)
+class TestGitProvidesRepoFlag:
+    """_from_git_history contributes a repo only when provides_repo=True.
+
+    Genuinely mode-sensitive (unlike most of this file): it reads git history from
+    ``layout.git_repo_root(worktree)``, which is the worktree root in-band but the
+    ``docs`` subdirectory in oob.
+    """
+
+    def test_default_returns_state_only(
+        self,
+        tmp_path: Path,
+        mode: ProjectMode,
+        code_repos: tuple[str, ...],
+    ) -> None:
+        layout = make_project(tmp_path, mode=mode, code_repos=code_repos)
+        _init_git_repo(layout.git_repo_root(WorktreeName.canon))
+        _commit_plan(
+            layout.git_repo_root(WorktreeName.canon),
+            Path(layout.plans_prefix),
+            PlanState.IMPLEMENTING,
+            "005_foo.md",
+        )
+        constraint = _from_git_history(layout, [5], "foo")
         assert constraint.repos is None
         assert constraint.states == frozenset({PlanState.IMPLEMENTING})
 
-    def test_provides_repo_true_returns_repo_and_state(self, tmp_path: Path) -> None:
-        _init_git_repo(tmp_path / "canon")
-        _commit_plan(tmp_path / "canon", PlanState.IMPLEMENTING, "005_foo.md")
-        constraint = _from_git_history(make_layout(tmp_path), [5], "foo", provides_repo=True)
+    def test_provides_repo_true_returns_repo_and_state(
+        self,
+        tmp_path: Path,
+        mode: ProjectMode,
+        code_repos: tuple[str, ...],
+    ) -> None:
+        layout = make_project(tmp_path, mode=mode, code_repos=code_repos)
+        _init_git_repo(layout.git_repo_root(WorktreeName.canon))
+        _commit_plan(
+            layout.git_repo_root(WorktreeName.canon),
+            Path(layout.plans_prefix),
+            PlanState.IMPLEMENTING,
+            "005_foo.md",
+        )
+        constraint = _from_git_history(layout, [5], "foo", provides_repo=True)
         assert constraint.repos == frozenset({WorktreeName.canon})
         assert constraint.states == frozenset({PlanState.IMPLEMENTING})
 
-    def test_ties_break_to_more_progressed_state(self, tmp_path: Path) -> None:
+    def test_ties_break_to_more_progressed_state(
+        self,
+        tmp_path: Path,
+        mode: ProjectMode,
+        code_repos: tuple[str, ...],
+    ) -> None:
         # Both repos commit at the same %ct (one-second resolution); the more
         # progressed state (CHECKING > IMPLEMENTING) wins because tickets only
         # ever move forward.
+        layout = make_project(tmp_path, mode=mode, code_repos=code_repos)
         git = shutil.which("git") or "git"
-        _init_git_repo(tmp_path / "canon")
-        _init_git_repo(tmp_path / "builder")
+        canon_repo = layout.git_repo_root(WorktreeName.canon)
+        builder_repo = layout.git_repo_root(WorktreeName.builder)
+        _init_git_repo(canon_repo)
+        _init_git_repo(builder_repo)
         env = {**os.environ, "GIT_COMMITTER_DATE": "1700000000 +0000", "GIT_AUTHOR_DATE": "1700000000 +0000"}
-        for repo, state in ((tmp_path / "canon", PlanState.IMPLEMENTING), (tmp_path / "builder", PlanState.CHECKING)):
-            plan_dir = repo / "docs" / "plans" / state.value
+        for repo, state in ((canon_repo, PlanState.IMPLEMENTING), (builder_repo, PlanState.CHECKING)):
+            plan_dir = repo / layout.plans_prefix / state.value
             plan_dir.mkdir(parents=True, exist_ok=True)
             (plan_dir / "005_foo.md").write_text("# plan\n")
             subprocess.run([git, "add", "."], cwd=repo, check=True, capture_output=True)  # noqa: S603
@@ -910,7 +957,7 @@ class TestGitProvidesRepoFlag:
                 capture_output=True,
                 env=env,
             )
-        constraint = _from_git_history(make_layout(tmp_path), [5], "foo")
+        constraint = _from_git_history(layout, [5], "foo")
         assert constraint.states == frozenset({PlanState.CHECKING})
 
 
