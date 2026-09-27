@@ -11,7 +11,14 @@ from rich.table import Table
 from workflow.audit import read_audit_log
 from workflow.config import WorkflowConfig
 from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
-from workflow.git_helpers import git_status
+from workflow.git_helpers import (
+    git_commits_behind_bare,
+    git_commits_not_in_bare,
+    git_current_branch,
+    git_status,
+    git_status_porcelain,
+)
+from workflow.metadata import ProjectMode
 from workflow.models import PlanState
 from workflow.names import WorktreeName
 from workflow.next_step import find_next_step, find_source_state_for_command
@@ -25,6 +32,7 @@ if TYPE_CHECKING:
 
     from rich.text import Text
 
+    from workflow.layout import Layout
     from workflow.models import AuditLogEntry, Plan
 
 
@@ -117,6 +125,34 @@ def _last_audit_entry_for_plan(entries: list[AuditLogEntry], plan: Plan) -> Audi
     return None
 
 
+def _git_status_matrix(layout: Layout) -> Table:
+    """Build the oob git-status matrix.
+
+    Rows = worktrees, columns = repos: `branch` plus ahead/behind-bare counts and a
+    tracked-dirty marker per cell. Denser than a linear per-worktree block once there's
+    more than one repo per worktree.
+    """
+    repos = layout.repos()
+    table = Table(title="Git Status")
+    table.add_column("worktree")
+    for repo in repos:
+        table.add_column(repo)
+    for worktree in WorktreeName:
+        row = [worktree.value]
+        for repo in repos:
+            repo_path = layout.git_repo_root(worktree, repo)
+            branch = git_current_branch(repo_path)
+            ahead = git_commits_not_in_bare(repo_path)
+            behind = git_commits_behind_bare(repo_path)
+            dirty = bool(git_status_porcelain(repo_path, untracked=False))
+            cell = f"{branch} +{ahead}/-{behind}"
+            if dirty:
+                cell += " *"
+            row.append(cell)
+        table.add_row(*row)
+    return table
+
+
 @register_script("status")
 @click.option("--all", "show_all", is_flag=True, default=False, help="Include done and rejected plans.")
 @click.pass_context
@@ -170,9 +206,12 @@ def status(ctx: click.Context, show_all: bool) -> None:  # noqa: FBT001
     next_number = next_intent_number(layout)
     console.print(f"Next free number: [bold]{next_number:03d}[/bold]")
 
-    for worktree in WorktreeName:
-        console.print(f"Git status for worktree {worktree}")
-        git_status(layout.git_repo_root(worktree))
+    if layout.metadata.mode == ProjectMode.oob:
+        console.print(_git_status_matrix(layout))
+    else:
+        for worktree in WorktreeName:
+            console.print(f"Git status for worktree {worktree}")
+            git_status(layout.git_repo_root(worktree))
     ctx.exit(0)
 
 

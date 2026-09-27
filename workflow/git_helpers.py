@@ -173,6 +173,22 @@ def git_commits_not_in_bare(repo_path: Path) -> int:
     return int(result.stdout.decode().strip())
 
 
+def git_commits_behind_bare(repo_path: Path) -> int:
+    """Return how many commits reachable from any ``bare`` ref are not reachable from HEAD.
+
+    The mirror image of :func:`git_commits_not_in_bare`, for the `info` status matrix: what
+    a `workflow sync` would bring in. Assumes the caller has already fetched ``bare``.
+    Read-only guard query: always runs for real, even in dry-run.
+    """
+    result = subprocess.run(
+        ["git", "rev-list", "--count", "--remotes=bare", "--not", "HEAD"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    return int(result.stdout.decode().strip())
+
+
 def git_changed_files_not_in_bare(repo_path: Path) -> list[str]:
     """Return the paths touched by commits reachable from HEAD but not from any ``bare`` ref.
 
