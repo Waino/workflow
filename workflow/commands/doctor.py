@@ -8,6 +8,7 @@ anything; exits non-zero when any anomaly is found.
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -17,7 +18,14 @@ from typing import TYPE_CHECKING
 import click
 from rich.table import Table
 
-from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotFoundError, WorkflowError
+from workflow.agents_md import parse_hash_file
+from workflow.exceptions import (
+    AgentsMdGenerationError,
+    AmbiguousPlanError,
+    PlanCollisionError,
+    PlanNotFoundError,
+    WorkflowError,
+)
 from workflow.git_helpers import (
     BARE_REMOTE,
     LEGACY_BARE_REMOTE,
@@ -26,12 +34,13 @@ from workflow.git_helpers import (
     git_index_lock_present,
     git_is_ancestor,
     git_is_valid_repo,
+    git_list_remotes,
     git_remote_url,
     git_rev_parse,
     git_status_porcelain,
     resolve_upstream_default_branch,
 )
-from workflow.metadata import LEGACY_ROOT_MARKER
+from workflow.metadata import LEGACY_ROOT_MARKER, ProjectMode
 from workflow.models import PlanState
 from workflow.names import DOCS_REPO, WorktreeName
 from workflow.plan_resolver import find_all_plans_in_worktree, resolve_plan
@@ -66,6 +75,8 @@ class WorktreeCheck:
     anomalies: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     """Informational, non-anomalous observations -- rendered but excluded from the exit code."""
+    repo: str | None = None
+    """Which repo this row covers; ``None`` in-band (the repo column is omitted there)."""
 
 
 def _active_branches(layout: Layout) -> set[str]:
@@ -86,8 +97,8 @@ def _active_branches(layout: Layout) -> set[str]:
     return branches
 
 
-def _check_bare(bare_path: Path) -> WorktreeCheck:
-    check = WorktreeCheck(name="bare", exists=bare_path.is_dir())
+def _check_bare(bare_path: Path, *, repo: str | None = None) -> WorktreeCheck:
+    check = WorktreeCheck(name="bare", exists=bare_path.is_dir(), repo=repo)
     if not check.exists:
         check.anomalies.append("missing")
         return check
@@ -129,15 +140,34 @@ def _check_bare_remote(check: WorktreeCheck, repo_path: Path, bare_path: Path) -
         check.anomalies.append(f"no {BARE_REMOTE!r} remote configured")
 
 
+def _check_oob_single_remote(check: WorktreeCheck, repo_path: Path, worktree: WorktreeName) -> None:
+    """Oob-only: planner/builder/reviewer clones must have exactly one remote (``bare``).
+
+    The load-bearing guarantee that an agent cannot reach any repo's real upstream.
+    Canon is exempt: it legitimately keeps ``origin`` alongside ``bare`` for every code
+    repo, so `workflow sync` has something to fetch from.
+    """
+    if worktree == WorktreeName.canon:
+        return
+    remotes = git_list_remotes(repo_path)
+    if remotes != [BARE_REMOTE]:
+        check.anomalies.append(f"expected exactly one remote ({BARE_REMOTE!r}), found {remotes}")
+
+
 def _check_worktree(
     worktree: WorktreeName,
     repo_path: Path,
     *,
     active_branches: set[str],
     bare_path: Path,
+    repo: str | None = None,
 ) -> WorktreeCheck:
-    """Check *worktree*'s docs repo, rooted at *repo_path*."""
-    check = WorktreeCheck(name=worktree.value, exists=repo_path.is_dir())
+    """Check *worktree*'s clone of *repo* (``docs`` in-band), rooted at *repo_path*.
+
+    *repo* is ``None`` in-band; a non-``None`` value both labels the row and turns on the
+    oob-only single-remote check (the two only ever come as a pair -- see ``doctor()``).
+    """
+    check = WorktreeCheck(name=worktree.value, exists=repo_path.is_dir(), repo=repo)
     if not check.exists:
         check.anomalies.append("missing")
         return check
@@ -152,11 +182,16 @@ def _check_worktree(
         check.anomalies.append("stale .git/index.lock")
 
     _check_bare_remote(check, repo_path, bare_path)
+    if repo is not None:
+        _check_oob_single_remote(check, repo_path, worktree)
 
     check.branch = git_current_branch(repo_path)
-    check.dirty = bool(git_status_porcelain(repo_path))
-    if check.dirty:
+    tracked_dirty = bool(git_status_porcelain(repo_path, untracked=False))
+    check.dirty = tracked_dirty
+    if tracked_dirty:
         check.anomalies.append("uncommitted changes")
+    elif git_status_porcelain(repo_path):
+        check.notes.append("untracked files present")
 
     if worktree == WorktreeName.canon and check.branch != "main":
         check.anomalies.append(f"expected 'main', on {check.branch!r}")
@@ -234,6 +269,36 @@ def _commits_between(repo_path: Path, old: str, new: str) -> int:
     return int(result.stdout.decode().strip())
 
 
+def _agents_md_hash_anomalies(layout: Layout) -> list[str]:
+    """Oob only: flag a worktree-root AGENTS.md copy that doesn't hash-match the trusted value.
+
+    Four separate copies (one per worktree) make drift detection essential -- an agent
+    silently working off different instructions than its siblings has no other signal.
+    Fetch-free like the rest of ``doctor``: reads whatever is already on disk.
+    """
+    if layout.metadata.mode != ProjectMode.oob:
+        return []
+
+    hash_file = layout.project_dir / ".agents_md_hash"
+    if not hash_file.exists():
+        return [f"{hash_file} not found; run workflow agents_md"]
+    try:
+        trusted = parse_hash_file(hash_file.read_text(encoding="utf-8"))
+    except AgentsMdGenerationError as exc:
+        return [f"trusted hash file invalid: {exc}"]
+
+    anomalies: list[str] = []
+    for worktree in WorktreeName:
+        agents_md = layout.worktree_root(worktree) / "AGENTS.md"
+        if not agents_md.exists():
+            anomalies.append(f"{worktree}: AGENTS.md not found")
+            continue
+        actual_hash = hashlib.sha256(agents_md.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
+        if actual_hash != trusted.agents_md_sha:
+            anomalies.append(f"{worktree}: AGENTS.md hash does not match trusted value; run workflow agents_md")
+    return anomalies
+
+
 def _legacy_marker_anomalies(project_dir: Path) -> list[str]:
     """Return an anomaly if a leftover legacy .workflow_root marker is present."""
     if (project_dir / LEGACY_ROOT_MARKER).exists():
@@ -298,8 +363,19 @@ def _stack_anomalies(layout: Layout, config: WorkflowConfig) -> list[str]:
     return anomalies
 
 
+def _print_anomaly_section(title: str, messages: list[str]) -> None:
+    if not messages:
+        return
+    console.print(f"[bold]{title}:[/bold]")
+    for msg in messages:
+        console.print(f"  - {msg}")
+
+
 def _render_table(checks: list[WorktreeCheck]) -> Table:
+    show_repo = any(check.repo is not None for check in checks)
     table = Table(title="Workflow Doctor")
+    if show_repo:
+        table.add_column("repo")
     table.add_column("worktree")
     table.add_column("exists")
     table.add_column("branch")
@@ -309,7 +385,8 @@ def _render_table(checks: list[WorktreeCheck]) -> Table:
     table.add_column("anomalies")
     table.add_column("notes")
     for check in checks:
-        table.add_row(
+        row = [check.repo or ""] if show_repo else []
+        row += [
             check.name,
             "yes" if check.exists else "no",
             check.branch or "",
@@ -318,7 +395,8 @@ def _render_table(checks: list[WorktreeCheck]) -> Table:
             "" if check.valid is None else ("yes" if check.valid else "no"),
             "; ".join(check.anomalies) if check.anomalies else "",
             "; ".join(check.notes) if check.notes else "",
-        )
+        ]
+        table.add_row(*row)
     return table
 
 
@@ -334,44 +412,46 @@ def doctor(ctx: click.Context) -> None:
         return
     project_dir: Path = config.project_dir
     layout = config.layout()
-    bare_path = layout.bare_repo()
+    oob = layout.metadata.mode == ProjectMode.oob
 
     active_branches = _active_branches(layout)
-    checks = [_check_bare(bare_path)]
-    checks.extend(
-        _check_worktree(worktree, layout.git_repo_root(worktree), active_branches=active_branches, bare_path=bare_path)
-        for worktree in WorktreeName
-    )
+    checks: list[WorktreeCheck] = []
+    for repo in layout.repos():
+        bare_path = layout.bare_repo(repo)
+        check_repo = repo if oob else None
+        checks.append(_check_bare(bare_path, repo=check_repo))
+        checks.extend(
+            _check_worktree(
+                worktree,
+                layout.git_repo_root(worktree, repo),
+                active_branches=active_branches,
+                bare_path=bare_path,
+                repo=check_repo,
+            )
+            for worktree in WorktreeName
+        )
     console.print(_render_table(checks))
 
     duplicate_anomalies = _duplicate_plan_anomalies(layout)
-    if duplicate_anomalies:
-        console.print("[bold]Duplicated plan files:[/bold]")
-        for msg in duplicate_anomalies:
-            console.print(f"  - {msg}")
+    _print_anomaly_section("Duplicated plan files", duplicate_anomalies)
 
     stack_anomalies = _stack_anomalies(layout, config)
-    if stack_anomalies:
-        console.print("[bold]Stack anomalies:[/bold]")
-        for msg in stack_anomalies:
-            console.print(f"  - {msg}")
+    _print_anomaly_section("Stack anomalies", stack_anomalies)
+
+    agents_md_anomalies = _agents_md_hash_anomalies(layout)
+    _print_anomaly_section("AGENTS.md anomalies", agents_md_anomalies)
 
     bare_staleness_notes = _bare_staleness_notes(layout)
-    if bare_staleness_notes:
-        console.print("[bold]Bare staleness:[/bold]")
-        for msg in bare_staleness_notes:
-            console.print(f"  - {msg}")
+    _print_anomaly_section("Bare staleness", bare_staleness_notes)
 
     legacy_marker_anomalies = _legacy_marker_anomalies(project_dir)
-    if legacy_marker_anomalies:
-        console.print("[bold]Project anomalies:[/bold]")
-        for msg in legacy_marker_anomalies:
-            console.print(f"  - {msg}")
+    _print_anomaly_section("Project anomalies", legacy_marker_anomalies)
 
     any_anomaly = (
         any(c.anomalies for c in checks)
         or bool(duplicate_anomalies)
         or bool(stack_anomalies)
+        or bool(agents_md_anomalies)
         or bool(legacy_marker_anomalies)
     )
     ctx.exit(1 if any_anomaly else 0)
