@@ -173,6 +173,53 @@ def git_commits_not_in_bare(repo_path: Path) -> int:
     return int(result.stdout.decode().strip())
 
 
+def git_changed_files_not_in_bare(repo_path: Path) -> list[str]:
+    """Return the paths touched by commits reachable from HEAD but not from any ``bare`` ref.
+
+    A code repo's counterpart to ``git diff bare/main...HEAD --name-only``: there is no
+    single stable baseline ref for a third-party repo, so this uses the same commit set
+    as :func:`git_commits_not_in_bare`. Read-only guard query: always runs for real, even
+    in dry-run.
+    """
+    result = subprocess.run(
+        ["git", "log", "--name-only", "--pretty=format:", "HEAD", "--not", "--remotes=bare"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    return sorted({line for line in result.stdout.decode().splitlines() if line})
+
+
+def git_diff_text_not_in_bare(repo_path: Path) -> str:
+    """Return concatenated patches for commits reachable from HEAD but not from any ``bare`` ref.
+
+    The full-diff-text counterpart to :func:`git_changed_files_not_in_bare`: one consistent
+    "reviewable diff" definition for a code repo, reused by ``noqa-nosec``. Read-only guard
+    query: always runs for real, even in dry-run.
+    """
+    result = subprocess.run(
+        ["git", "log", "-p", "HEAD", "--not", "--remotes=bare"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout.decode()
+
+
+def git_check_ref_format(branch: str) -> bool:
+    """Return whether *branch* is a valid git branch name (``git check-ref-format --branch``).
+
+    Delegates name validity to git rather than a hand-rolled regex. Needs no repo, so no
+    ``cwd`` -- runs in the current process directory, which is irrelevant to the check.
+    """
+    result = subprocess.run(  # noqa: S603
+        ["git", "check-ref-format", "--branch", branch],  # noqa: S607
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def git_branch_exists(repo_path: Path, branch: str) -> bool:
     """Return whether *branch* exists locally in *repo_path*.
 
@@ -239,6 +286,20 @@ def git_remote_url(repo_path: Path, name: str) -> str | None:
     Read-only guard query: always runs for real, even in dry-run.
     """
     return git_config_get(repo_path, f"remote.{name}.url")
+
+
+def git_list_remotes(repo_path: Path) -> list[str]:
+    """Return the configured remote names in *repo_path*, in git's own order.
+
+    Read-only guard query: always runs for real, even in dry-run.
+    """
+    result = subprocess.run(
+        ["git", "remote"],  # noqa: S607
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout.decode().split()
 
 
 def git_index_lock_present(repo_path: Path) -> bool:
