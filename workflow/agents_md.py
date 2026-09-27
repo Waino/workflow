@@ -16,6 +16,7 @@ import jinja2
 from pydantic import BaseModel
 
 from workflow.exceptions import AgentsMdGenerationError
+from workflow.metadata import ProjectMode
 
 if TYPE_CHECKING:
     from workflow.config import WorkflowConfig
@@ -37,12 +38,14 @@ class ManagedSection:
     end_line: int
 
 
-class HashFileV1(BaseModel):
-    """Parsed representation of the v1 trusted hash file."""
+class HashFileV2(BaseModel):
+    """Parsed representation of the v2 trusted hash file."""
 
-    version: Literal["v1"]
+    version: Literal["v2"]
     agents_md_sha: str
     config_yaml_sha: str
+    workflow_json_sha: str
+    """Covers ``.workflow.json`` so e.g. ``add-repo`` invalidates the trusted hash too."""
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +207,9 @@ def render_workflow_section(config: WorkflowConfig) -> str:
         keep_trailing_newline=True,
     )
     template = env.from_string(template_text)
-    return normalise(template.render(states=states_data))
+    oob = config.metadata is not None and config.metadata.mode == ProjectMode.oob
+    code_repos = [repo.name for repo in config.metadata.code_repos] if oob and config.metadata is not None else []
+    return normalise(template.render(states=states_data, oob=oob, code_repos=code_repos))
 
 
 # ---------------------------------------------------------------------------
@@ -212,28 +217,35 @@ def render_workflow_section(config: WorkflowConfig) -> str:
 # ---------------------------------------------------------------------------
 
 
-def compute_hash_file_contents(agents_md_text: str, config_yaml_bytes: bytes) -> str:
-    r"""Return the ``v1 <sha> <sha>\n`` hash file contents.
+def compute_hash_file_contents(agents_md_text: str, config_yaml_bytes: bytes, workflow_json_bytes: bytes) -> str:
+    r"""Return the ``v2 <sha> <sha> <sha>\n`` hash file contents.
 
     *agents_md_text* must already be normalised before calling.
     """
     agents_md_sha = hashlib.sha256(agents_md_text.encode("utf-8")).hexdigest()
     config_yaml_sha = hashlib.sha256(config_yaml_bytes).hexdigest()
-    return f"v1 {agents_md_sha} {config_yaml_sha}\n"
+    workflow_json_sha = hashlib.sha256(workflow_json_bytes).hexdigest()
+    return f"v2 {agents_md_sha} {config_yaml_sha} {workflow_json_sha}\n"
 
 
-def parse_hash_file(text: str) -> HashFileV1:
-    """Parse the hash file *text* and return a :class:`HashFileV1`.
+def parse_hash_file(text: str) -> HashFileV2:
+    """Parse the hash file *text* and return a :class:`HashFileV2`.
 
     Raises :class:`~workflow.exceptions.AgentsMdGenerationError` on malformed
-    input or an unsupported version tag.
+    input or an unsupported version tag (including a pre-023.6 ``v1`` file,
+    which lacks the ``.workflow.json`` hash entirely).
     """
     tokens = text.strip().split()
-    if len(tokens) != 3:  # noqa: PLR2004
-        msg = f"Malformed hash file: expected 3 space-separated tokens, got {len(tokens)}."
+    if len(tokens) != 4:  # noqa: PLR2004
+        msg = f"Malformed hash file: expected 4 space-separated tokens, got {len(tokens)}."
         raise AgentsMdGenerationError(msg)
-    version, agents_md_sha, config_yaml_sha = tokens
-    if version != "v1":
-        msg = f"Unsupported hash file version: {version!r} (expected 'v1')."
+    version, agents_md_sha, config_yaml_sha, workflow_json_sha = tokens
+    if version != "v2":
+        msg = f"Unsupported hash file version: {version!r} (expected 'v2')."
         raise AgentsMdGenerationError(msg)
-    return HashFileV1(version="v1", agents_md_sha=agents_md_sha, config_yaml_sha=config_yaml_sha)
+    return HashFileV2(
+        version="v2",
+        agents_md_sha=agents_md_sha,
+        config_yaml_sha=config_yaml_sha,
+        workflow_json_sha=workflow_json_sha,
+    )

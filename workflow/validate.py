@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from workflow.agents_md import parse_hash_file
 from workflow.exceptions import AgentsMdGenerationError, WorkflowError
 from workflow.git_helpers import git_diff_branch, git_fetch
+from workflow.metadata import METADATA_FILENAME
 from workflow.names import WorktreeName
 
 if TYPE_CHECKING:
@@ -220,7 +221,11 @@ def _check_agents_md(repo_path: Path, project_dir: Path, changed_files: list[str
     try:
         trusted = parse_hash_file(hash_file.read_text(encoding="utf-8"))
     except AgentsMdGenerationError as exc:
-        return CheckResult(check_name="agents-md", status="fail", message=f"Hash file invalid: {exc}")
+        return CheckResult(
+            check_name="agents-md",
+            status="fail",
+            message=f"Hash file invalid: {exc} Run `workflow agents_md` to regenerate it.",
+        )
 
     actual_hash = hashlib.sha256(agents_md.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
     agents_md_modified = "AGENTS.md" in changed_files
@@ -228,10 +233,18 @@ def _check_agents_md(repo_path: Path, project_dir: Path, changed_files: list[str
     if actual_hash != trusted.agents_md_sha:
         config_yaml = project_dir / "config.yaml"
         config_yaml_sha = hashlib.sha256(config_yaml.read_bytes()).hexdigest() if config_yaml.exists() else ""
+        workflow_json = project_dir / METADATA_FILENAME
+        workflow_json_sha = hashlib.sha256(workflow_json.read_bytes()).hexdigest() if workflow_json.exists() else ""
+        stale_inputs = []
         if config_yaml_sha != trusted.config_yaml_sha:
+            stale_inputs.append("config.yaml")
+        if workflow_json_sha != trusted.workflow_json_sha:
+            stale_inputs.append(f"{METADATA_FILENAME} (e.g. add-repo)")
+        if stale_inputs:
+            verb = "has" if len(stale_inputs) == 1 else "have"
             message = (
-                "AGENTS.md hash does not match trusted value; "
-                "config.yaml has changed since AGENTS.md was last generated — run `workflow agents_md`."
+                f"AGENTS.md hash does not match trusted value; {' and '.join(stale_inputs)} {verb} changed "
+                "since AGENTS.md was last generated — run `workflow agents_md`."
             )
         else:
             message = "AGENTS.md hash does not match trusted value"

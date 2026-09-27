@@ -22,7 +22,7 @@ from workflow.agents_md import (
 from workflow.config import NOT_IN_PROJECT_MSG, WorkflowConfig
 from workflow.exceptions import AgentsMdGenerationError, WorkflowError
 from workflow.fileio import atomic_write
-from workflow.metadata import ProjectMode
+from workflow.metadata import METADATA_FILENAME, ProjectMode
 from workflow.names import DOCS_REPO, WorktreeName
 from workflow.registry import register_script
 
@@ -63,6 +63,7 @@ def prepare_agents_md_update(config: WorkflowConfig) -> _AgentsMdUpdate:
     layout = config.layout()
     project_dir = layout.project_dir
     config_yaml_path = project_dir / "config.yaml"
+    workflow_json_path = project_dir / METADATA_FILENAME
     hash_file_path = project_dir / ".agents_md_hash"
 
     managed = render_workflow_section(config)
@@ -98,7 +99,8 @@ def prepare_agents_md_update(config: WorkflowConfig) -> _AgentsMdUpdate:
         raise AgentsMdGenerationError(msg)
 
     config_yaml_bytes = config_yaml_path.read_bytes() if config_yaml_path.exists() else b""
-    new_hash = compute_hash_file_contents(new_text, config_yaml_bytes)
+    workflow_json_bytes = workflow_json_path.read_bytes() if workflow_json_path.exists() else b""
+    new_hash = compute_hash_file_contents(new_text, config_yaml_bytes, workflow_json_bytes)
 
     existing_hash = hash_file_path.read_text(encoding="utf-8") if hash_file_path.exists() else ""
     agents_md_unchanged = all(

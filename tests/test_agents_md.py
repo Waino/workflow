@@ -18,7 +18,7 @@ from workflow import main
 from workflow.agents_md import (
     MARKER_BEGIN,
     MARKER_END,
-    HashFileV1,
+    HashFileV2,
     ManagedSection,
     append_managed_section,
     compute_hash_file_contents,
@@ -165,32 +165,35 @@ def test_append_managed_section_on_empty_file() -> None:
 
 
 def test_compute_hash_file_contents_format() -> None:
-    content = compute_hash_file_contents("hello\n", b"config")
+    content = compute_hash_file_contents("hello\n", b"config", b"workflow_json")
     tokens = content.strip().split()
-    assert len(tokens) == 3
-    assert tokens[0] == "v1"
+    assert len(tokens) == 4
+    assert tokens[0] == "v2"
     assert len(tokens[1]) == 64  # sha256 hex
     assert len(tokens[2]) == 64
+    assert len(tokens[3]) == 64
 
 
 def test_parse_hash_file_returns_model() -> None:
     sha = "a" * 64
     cfg = "b" * 64
-    result = parse_hash_file(f"v1 {sha} {cfg}\n")
-    assert isinstance(result, HashFileV1)
-    assert result.version == "v1"
+    wf = "c" * 64
+    result = parse_hash_file(f"v2 {sha} {cfg} {wf}\n")
+    assert isinstance(result, HashFileV2)
+    assert result.version == "v2"
     assert result.agents_md_sha == sha
     assert result.config_yaml_sha == cfg
+    assert result.workflow_json_sha == wf
 
 
 def test_parse_hash_file_raises_on_wrong_version() -> None:
-    with pytest.raises(AgentsMdGenerationError, match="v1"):
-        parse_hash_file(f"v2 {'a' * 64} {'b' * 64}\n")
+    with pytest.raises(AgentsMdGenerationError, match="v2"):
+        parse_hash_file(f"v1 {'a' * 64} {'b' * 64} {'c' * 64}\n")
 
 
 def test_parse_hash_file_raises_on_malformed() -> None:
-    with pytest.raises(AgentsMdGenerationError, match="3 space-separated tokens"):
-        parse_hash_file("v1 onlytwo\n")
+    with pytest.raises(AgentsMdGenerationError, match="4 space-separated tokens"):
+        parse_hash_file("v2 onlytwo\n")
 
 
 # ---------------------------------------------------------------------------

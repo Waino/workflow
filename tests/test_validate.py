@@ -116,7 +116,8 @@ def test_check_agents_md_passes_with_matching_hash(tmp_path: Path) -> None:
     agents_md.write_text("trusted\n", encoding="utf-8")
     digest = hashlib.sha256(b"trusted\n").hexdigest()
     config_sha = "a" * 64
-    (tmp_path / ".agents_md_hash").write_text(f"v1 {digest} {config_sha}\n", encoding="utf-8")
+    workflow_json_sha = "c" * 64
+    (tmp_path / ".agents_md_hash").write_text(f"v2 {digest} {config_sha} {workflow_json_sha}\n", encoding="utf-8")
 
     result = dc._check_agents_md(repo_path, tmp_path, [])
     assert result.status == "pass"
@@ -129,7 +130,8 @@ def test_check_agents_md_fails_when_file_modified_on_branch(tmp_path: Path) -> N
     agents_md.write_text("trusted\n", encoding="utf-8")
     digest = hashlib.sha256(b"trusted\n").hexdigest()
     config_sha = "a" * 64
-    (tmp_path / ".agents_md_hash").write_text(f"v1 {digest} {config_sha}\n", encoding="utf-8")
+    workflow_json_sha = "c" * 64
+    (tmp_path / ".agents_md_hash").write_text(f"v2 {digest} {config_sha} {workflow_json_sha}\n", encoding="utf-8")
 
     result = dc._check_agents_md(repo_path, tmp_path, ["AGENTS.md"])
     assert result.status == "fail"
@@ -143,7 +145,8 @@ def test_check_agents_md_fails_on_hash_mismatch(tmp_path: Path) -> None:
     agents_md.write_text("modified\n", encoding="utf-8")
     wrong_digest = "a" * 64
     config_sha = "b" * 64
-    (tmp_path / ".agents_md_hash").write_text(f"v1 {wrong_digest} {config_sha}\n", encoding="utf-8")
+    workflow_json_sha = "c" * 64
+    (tmp_path / ".agents_md_hash").write_text(f"v2 {wrong_digest} {config_sha} {workflow_json_sha}\n", encoding="utf-8")
 
     result = dc._check_agents_md(repo_path, tmp_path, [])
     assert result.status == "fail"
@@ -160,23 +163,46 @@ def test_check_agents_md_suggests_regeneration_when_config_changed(tmp_path: Pat
     config_yaml = tmp_path / "config.yaml"
     config_yaml.write_text("different: content\n", encoding="utf-8")
     stale_config_sha = "b" * 64  # deliberately wrong
-    (tmp_path / ".agents_md_hash").write_text(f"v1 {wrong_digest} {stale_config_sha}\n", encoding="utf-8")
+    workflow_json_sha = "c" * 64
+    (tmp_path / ".agents_md_hash").write_text(
+        f"v2 {wrong_digest} {stale_config_sha} {workflow_json_sha}\n",
+        encoding="utf-8",
+    )
 
     result = dc._check_agents_md(repo_path, tmp_path, [])
     assert result.status == "fail"
     assert "workflow agents_md" in result.message
 
 
-def test_check_agents_md_fails_on_non_v1_hash_file(tmp_path: Path) -> None:
+def test_check_agents_md_suggests_regeneration_when_workflow_json_changed(tmp_path: Path) -> None:
+    repo_path = tmp_path / "planner"
+    repo_path.mkdir()
+    agents_md = repo_path / "AGENTS.md"
+    agents_md.write_text("modified\n", encoding="utf-8")
+    wrong_digest = "a" * 64
+    (tmp_path / ".workflow.json").write_text('{"different": true}', encoding="utf-8")
+    stale_workflow_json_sha = "b" * 64  # deliberately wrong
+    (tmp_path / ".agents_md_hash").write_text(
+        f"v2 {wrong_digest} {'c' * 64} {stale_workflow_json_sha}\n",
+        encoding="utf-8",
+    )
+
+    result = dc._check_agents_md(repo_path, tmp_path, [])
+    assert result.status == "fail"
+    assert "workflow agents_md" in result.message
+    assert ".workflow.json" in result.message
+
+
+def test_check_agents_md_fails_on_non_v2_hash_file(tmp_path: Path) -> None:
     repo_path = tmp_path / "planner"
     repo_path.mkdir()
     (repo_path / "AGENTS.md").write_text("anything\n", encoding="utf-8")
-    (tmp_path / ".agents_md_hash").write_text(f"v2 {'a' * 64} {'b' * 64}\n", encoding="utf-8")
+    (tmp_path / ".agents_md_hash").write_text(f"v1 {'a' * 64} {'b' * 64} {'c' * 64}\n", encoding="utf-8")
 
     result = dc._check_agents_md(repo_path, tmp_path, [])
     assert result.status == "fail"
     assert "Hash file invalid" in result.message
-    assert "v1" in result.message
+    assert "v2" in result.message
 
 
 def test_validate_wraps_fetch_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

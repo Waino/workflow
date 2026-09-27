@@ -17,6 +17,21 @@ Plans reside in `docs/plans`.
 The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md` is in the state `implementing`.
 Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
 Reviews (in docs/plans/reviews) do not follow this naming scheme.
+{% if oob %}
+This project is out-of-band: plans live in `docs`, and code lives in separate repos ({{ code_repos|join(', ') }}).
+Every plan file in the `implementing` or `checking` state must carry a `branches` frontmatter block
+naming, for every one of those repos, either the branch/base it uses there or `null` if the plan
+doesn't touch that repo:
+
+```yaml
+---
+branches:
+{% for repo in code_repos %}  {{ repo }}: null
+{% endfor %}---
+```
+
+Replace `null` with `{branch: NAME, base: REF}` for any repo the plan actually changes.
+{% endif %}
 {% for state in states %}
 
 ### {{ state.name }} (agent: {{ state.agent }})
