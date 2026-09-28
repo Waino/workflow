@@ -56,15 +56,17 @@ Setup and session management
 
 ``add-repo NAME``
     Out-of-band only: register one more code repo after ``init`` (clone into ``bare``
-    and every agent worktree, record it in ``.workflow.json``). ``--skip-hook`` skips
+    and every agent worktree, record it in ``.workflow.json``, regenerate every
+    ``AGENTS.md`` copy). ``--skip-hook`` skips
     installing the pre-commit hook symlink for this repo. The venvs do not pick up the
     new repo until it is added to ``docs/bootstrap_venv.sh`` and they are recreated.
     There is no command to remove a registered repo.
 
 ``sync [--repo NAME]... [--branch NAME]... [--force]``
     Out-of-band only (state-independent, like ``doctor``): refresh ``bare/<repo>``
-    from each code repo's own upstream (``origin``), plus ``docs`` if it has one.
-    Fast-forward-only unless ``--force`` is passed (see :ref:`Out-of-band mode`).
+    from each code repo's own upstream (``origin``); ``docs`` only when named with
+    ``--repo docs``. Fast-forward-only unless ``--force`` is passed (see
+    :ref:`Out-of-band mode`).
 
 ``start``
     Create the tmux session (or attach to it if it already exists), one window per
@@ -86,7 +88,7 @@ Setup and session management
     worktree row per registered code repo, plus two repo-scoped anomalies -- a
     planner/builder/reviewer clone with a remote other than ``bare``, and a
     worktree-root ``AGENTS.md`` that doesn't hash-match ``.agents_md_hash`` (see
-    `Multi-repo validate, doctor, and status`_).
+    :ref:`Multi-repo validate, doctor, and status`).
 
 ``agents_md``
     Regenerate the auto-generated section of ``AGENTS.md`` (plan state machine and
@@ -125,7 +127,7 @@ operations (push/pull/merge) needed at each handoff.
     clone, and switch the tmux focus to the builder. ``--continue`` resumes after a
     partially completed run; ``--force-push`` is explained under
     `Landing a branch on main`_. ``--onto`` builds a stack instead of a fresh branch —
-    see `Stacked plans`_.
+    see :ref:`Stacked plans`.
 
 ``check PLAN_PATH``
     Hand a finished implementation off from builder to reviewer: rerun the
@@ -133,19 +135,20 @@ operations (push/pull/merge) needed at each handoff.
     fetch it into the reviewer's clone. ``--target-repo`` overrides which repo is
     pushed (default ``builder``); ``--force-validation`` skips a failing validation.
     On a stacked plan this cascades: every stack member not already ``checking`` is
-    transitioned in the same commit (see `Stacked plans`_); *PLAN_PATH* must be the
+    transitioned in the same commit (see :ref:`Stacked plans`); *PLAN_PATH* must be the
     tip of its stack. Out-of-band: also pushes every code repo with commits bare
     doesn't have, fetches (never checks out) the reviewer's code repos, runs the
     pre-commit hook once per pushed repo, and refuses on a repo with uncommitted
-    tracked changes (see `Multi-repo handoffs`_).
+    tracked changes, a detached HEAD, a diverged branch, or commits on its default
+    branch (see :ref:`Multi-repo handoffs`).
 
 ``validate PLAN_PATH``
-    Run the pre-merge verification checks (also run internally by ``todo``,
-    ``check``, and ``accept``) without transitioning state. ``--target-repo``
+    Run the pre-merge verification checks (also run internally by ``todo`` and
+    ``check``) without transitioning state. ``--target-repo``
     overrides the repo the checks run against. Out-of-band: ``file-scope`` and
     ``git-hooks`` run once per repo, and two repo-scoped checks are added --
-    ``planner-code-commits`` and ``branches-frontmatter`` (see `Multi-repo
-    validate, doctor, and status`_).
+    ``planner-code-commits`` and ``branches-frontmatter`` (see :ref:`Multi-repo
+    validate, doctor, and status`).
 
 ``accept PLAN_PATH``
     Accept a reviewed plan: push from reviewer, pull to canon, transition to
@@ -155,8 +158,9 @@ operations (push/pull/merge) needed at each handoff.
     ``--force-push`` is explained under `Landing a branch on main`_. On a stacked
     plan this cascades every member to ``done`` in one commit and deletes the one
     shared branch; *PLAN_PATH* must be the tip of its stack. Out-of-band: also
-    pushes every code repo with commits bare doesn't have, and refuses on a repo
-    with uncommitted tracked changes (see `Multi-repo handoffs`_).
+    runs the pre-commit hook in and pushes every code repo with commits bare doesn't
+    have (``--force-push`` also covers a rewritten code-repo branch), and refuses on a
+    repo with uncommitted tracked changes (see :ref:`Multi-repo handoffs`).
 
 ``reject PLAN_PATH``
     Close out a plan without merging: transition to ``rejected`` and push that
@@ -165,7 +169,7 @@ operations (push/pull/merge) needed at each handoff.
     ``--target-repo`` selects which repo holds the plan being rejected (default
     ``canon``). On a stacked plan, the note instead gives the concrete checkout and
     ``git reset --hard`` that rewind the shared branch past this plan's commits (see
-    `Stacked plans`_); rejecting a plan that itself has a child stacked on it prints
+    :ref:`Stacked plans`); rejecting a plan that itself has a child stacked on it prints
     an additional warning that the child's commits stay on the branch regardless.
 
 ``canon_pre_commit``
@@ -250,7 +254,7 @@ Information
     column naming the plan it is stacked onto (blank when unstacked). Omits ``done``
     and ``rejected`` plans unless ``--all`` is given. Followed by each worktree's git
     status; out-of-band, this is a worktree × repo matrix instead of a linear list
-    (see `Multi-repo validate, doctor, and status`_).
+    (see :ref:`Multi-repo validate, doctor, and status`).
 
 ``log``
     Pretty-print the JSONL audit log. Filterable by ``--agent``, ``--plan``,

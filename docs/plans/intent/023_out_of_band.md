@@ -368,4 +368,6 @@ Chosen: **B**.
    `info` matrix, mode-parameterised fixtures.
 
 Post-completion tasks for the operator (not automated): run `scripts/migrate_023.py` on every
-existing project, and update each project's customized `run_agent_in_docker.sh`.
+existing project, update each project's customized `run_agent_in_docker.sh`, and run
+`workflow agents_md` in every existing project (in-band too) to rewrite `.agents_md_hash` in the
+`v2` format -- until then `validate` fails its `agents-md` check.

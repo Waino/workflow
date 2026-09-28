@@ -89,7 +89,8 @@ alone.
 
 ``workflow add-repo NAME`` registers one more code repo after ``init`` (it clones
 ``canon/NAME`` into ``bare`` and every agent worktree, and records it in
-``.workflow.json``); there is no command to remove one. ``AGENTS.md`` is generated
+``.workflow.json``, and regenerates every ``AGENTS.md`` copy so agents learn about the new
+repo); there is no command to remove one. ``AGENTS.md`` is generated
 from a hand-written ``docs/body_of_agents.md`` into every worktree root as an
 unversioned build artifact (in-band, the hand-written body and the generated file
 are the same, version-controlled ``AGENTS.md``). A single ``.venv`` at each wrapper
@@ -121,39 +122,59 @@ own reference. Only the following are automated:
 * **``check``/``accept`` refuse on a repo with uncommitted tracked changes**
   (anywhere in the acting worktree); an untracked file only warns, since third-party
   repos routinely carry untracked build output.
+* **``check``/``accept`` refuse, before anything is transitioned or pushed, a code repo
+  that can't be pushed cleanly:** a detached HEAD (commit on a named branch first), or
+  a branch that diverged from its ``bare`` counterpart (e.g. rebased). ``accept
+  --force-push`` pushes such a branch with ``--force-with-lease``; for ``check``, push it
+  by hand.
+* **``check`` refuses commits on a code repo's default branch** (``bare``'s ``HEAD``,
+  usually ``main``): all code work belongs on feature branches. Commits pushed to the
+  default branch would make ``workflow sync`` refuse that repo, and ``--force`` would
+  discard them.
 * **The pre-commit hook runs once per repo** in the push set (skipping any repo
   with ``run_hook: false``), passing ``--repo NAME`` to the docker script so it runs
-  inside the right subdirectory.
+  inside the right subdirectory. ``check`` runs it on the builder's repos, ``accept``
+  on the code repos holding reviewer commits.
 
-``workflow sync [--repo NAME]... [--branch NAME]... [--force]`` refreshes
+The push-set table and the tracked/untracked dirty-tree precondition apply in-band
+too, where the push set is just the single repo.
+
+``workflow sync [--repo NAME]... [--branch NAME]... [--force]`` (oob only) refreshes
 ``bare/<repo>`` from each repo's own ``origin`` (canon's upstream) -- the
 counterpart to the above, since nothing else keeps ``bare`` from drifting behind
-upstream between syncs. Per repo (default: every code repo, plus ``docs`` if it has
-an ``origin`` remote): fetches ``origin``, resolves the upstream default branch
+upstream between syncs. By default it covers every code repo; ``docs`` is synced only
+when named with ``--repo docs``, since ``bare`` is the docs repo's source of truth and is
+normally ahead of its ``origin`` (``--force`` then applies to docs too, and would
+discard those commits). Per repo: fetches ``origin``, resolves the upstream default branch
 (``origin/HEAD``, falling back to ``main``, then ``master``), and pushes it (and any
 ``--branch``) to ``bare``. The push is fast-forward-only by default -- refusing and
 printing the old/new sha when ``bare`` holds commits ``origin`` doesn't -- unless
 ``--force`` is passed; it never mirrors *every* upstream branch, only the default
 plus whatever ``--branch`` names, so it can never clobber an agent's in-flight
-feature branch that happens to share a name with something on upstream. ``workflow
+feature branch that happens to share a name with something on upstream. A branch
+missing on ``origin`` is skipped with a warning. ``workflow
 doctor`` separately notes (not an anomaly) when a code repo's ``bare`` has fallen
 behind its ``origin``.
 
 .. _Multi-repo validate, doctor, and status:
 
 Multi-repo validate, doctor, and status
-''''''''''''''''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''''''''''
 
 A plan's frontmatter can now record a ``branches`` entry per registered code repo, not
 just the docs repo; a value of ``null`` means the plan legitimately doesn't touch that
 repo. Once a plan reaches ``implementing`` or ``checking``, ``workflow check``'s
-``branches-frontmatter`` check requires an entry (name or ``null``) for every code repo
-and validates any recorded branch name with ``git check-ref-format``.
+``branches-frontmatter`` check requires an entry (name or ``null``) for every code repo,
+rejects entries for repos that aren't registered, and validates any recorded branch name
+with ``git check-ref-format``.
 
-In oob mode, ``workflow check``/``workflow accept``'s ``validate`` step runs one
-``file-scope`` and one ``git-hooks`` result per repo (code repos are unrestricted for
-file scope; a stray executable hook only warns there, since third-party repos routinely
-ship their own). ``noqa-nosec`` and ``agents-md`` stay single, worktree-level results,
+In oob mode, the ``validate`` step of ``workflow todo`` (planner) and ``workflow check``
+(builder) runs one ``file-scope`` and one ``git-hooks`` result per repo. Code repos are
+unrestricted for file scope. ``git-hooks`` expects the managed ``pre-commit`` symlink
+only in a repo that ships ``.git-pre-commit-hook`` (the same repos ``init`` installs it
+in); elsewhere an executable hook -- e.g. a code repo's own pre-commit-framework hook --
+counts as unmanaged, which only warns in a code repo but fails in docs.
+``noqa-nosec`` and ``agents-md`` stay single, worktree-level results,
 but internally cover every repo/worktree: ``noqa-nosec`` scans each code repo's commits
 not yet in ``bare`` the same way it scans the docs repo's diff, and ``agents-md`` checks
 the AGENTS.md copy at every worktree root, not just the acting one. Two checks are new
@@ -161,23 +182,35 @@ and oob-only: ``planner-code-commits`` fails if the planner has committed to any
 repo (code changes belong to builder/reviewer), and ``branches-frontmatter`` enforces the
 rule above.
 
+A code repo has no stable baseline ref to diff against, so its ``file-scope`` and
+``noqa-nosec`` inputs are *every* commit reachable from ``HEAD`` but from no ``bare`` ref
+-- all unpushed work in that clone, not a diff of one branch against its base. A
+``noqa`` added in one such commit and removed in a later one is still reported.
+
 ``workflow doctor`` mirrors the same per-repo shape: the table gains a ``repo`` column
 (omitted in-band) with one ``bare`` row and one row per worktree for every registered
 repo. Two anomalies are oob-only: a planner/builder/reviewer clone with anything other
 than exactly one remote named ``bare`` (canon is exempt -- it legitimately keeps
 ``origin`` too, for ``workflow sync``), and a worktree-root ``AGENTS.md`` copy that
-doesn't hash-match ``.agents_md_hash``. The tracked/untracked dirty-tree split (tracked
-changes are an anomaly, untracked-only is a note) now applies uniformly to every repo,
-in-band and oob alike.
+doesn't hash-match ``.agents_md_hash``. The branch rules (canon on ``main``, no stray
+builder/reviewer branch, local ``main`` matching ``bare``) apply to the docs repo only:
+the tool manages neither code-repo branches nor their local ``main``. The
+tracked/untracked dirty-tree split (tracked changes are an anomaly, untracked-only is a
+note) now applies uniformly to every repo, in-band and oob alike.
 
 ``workflow status`` replaces its linear per-worktree ``git status`` block with a matrix
-in oob mode: one row per worktree, one column per repo, each cell showing the branch
-plus how many commits it is ahead/behind ``bare``, with a ``*`` marker when the repo has
-tracked changes. In-band output is unchanged.
+in oob mode: one row per worktree, one column per repo, each cell showing the branch,
+``+N`` commits not in any ``bare`` ref, and ``-M`` commits its own ``bare/<branch>`` has
+that the checkout lacks (``-`` when there is no such branch yet, or on a detached HEAD),
+with a ``*`` marker when the repo has tracked changes; a missing clone shows
+``missing``. In-band output is unchanged.
 
 The trusted-hash file (``.agents_md_hash``) is now a ``v2`` format that additionally
-covers ``.workflow.json``, so an oob project's registered code repos (and their
-``run_hook`` flags) are part of what a drifted-AGENTS.md check protects.
+records a hash of ``.workflow.json`` in oob mode (in-band, where ``AGENTS.md`` doesn't
+depend on it, the entry is the hash of empty input). It doesn't affect pass/fail -- that
+is the ``AGENTS.md`` hash alone -- but when an ``AGENTS.md`` copy has drifted, the error
+names ``.workflow.json`` if it changed since the last generation. Upgrading: an existing
+project's ``v1`` hash file fails ``agents-md`` until ``workflow agents_md`` is rerun.
 
 Plans and the state machine
 ----------------------------
