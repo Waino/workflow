@@ -16,13 +16,20 @@ from workflow.git_helpers import (
     delete_merged_branch,
     git_branch_delete,
     git_branch_exists,
+    git_changed_files_not_in_bare,
+    git_check_ref_format,
     git_commit_if_changed,
     git_commits_ahead_of_remote,
+    git_commits_behind_bare,
+    git_commits_between,
     git_commits_not_in_bare,
     git_current_branch,
+    git_diff_text_not_in_bare,
+    git_fetch_remote,
     git_index_lock_present,
     git_is_ancestor,
     git_is_valid_repo,
+    git_list_remotes,
     git_push_refspec,
     git_ref_exists_remote,
     git_remote_url,
@@ -30,7 +37,7 @@ from workflow.git_helpers import (
     git_status_porcelain,
     park_on_main,
     refresh_main,
-    resolve_upstream_default_branch,
+    resolve_default_branch,
     transfer_branch_to_main,
 )
 
@@ -837,49 +844,201 @@ def test_git_push_refspec_dry_run_does_not_mutate(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# resolve_upstream_default_branch
+# resolve_default_branch
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-def test_resolve_upstream_default_branch_prefers_origin_head(tmp_path: Path) -> None:
+def test_resolve_default_branch_prefers_origin_head(tmp_path: Path) -> None:
     upstream = _init_repo(tmp_path / "upstream")
     _git(["branch", "-m", "trunk"], cwd=upstream)
     clone = tmp_path / "clone"
     _git(["clone", str(upstream), str(clone)], cwd=tmp_path)
 
-    assert resolve_upstream_default_branch(clone) == "trunk"
+    assert resolve_default_branch(clone, "origin") == "trunk"
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-def test_resolve_upstream_default_branch_falls_back_to_main(tmp_path: Path) -> None:
+def test_resolve_default_branch_falls_back_to_main(tmp_path: Path) -> None:
     upstream = _init_repo(tmp_path / "upstream")
     clone = tmp_path / "clone"
     _git(["clone", str(upstream), str(clone)], cwd=tmp_path)
     # Simulate a clone that never got origin/HEAD set (e.g. a shallow/partial mirror).
     _git(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], cwd=clone)
 
-    assert resolve_upstream_default_branch(clone) == "main"
+    assert resolve_default_branch(clone, "origin") == "main"
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-def test_resolve_upstream_default_branch_falls_back_to_master(tmp_path: Path) -> None:
+def test_resolve_default_branch_falls_back_to_master(tmp_path: Path) -> None:
     upstream = _init_repo(tmp_path / "upstream")
     _git(["branch", "-m", "master"], cwd=upstream)
     clone = tmp_path / "clone"
     _git(["clone", str(upstream), str(clone)], cwd=tmp_path)
     _git(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], cwd=clone)
 
-    assert resolve_upstream_default_branch(clone) == "master"
+    assert resolve_default_branch(clone, "origin") == "master"
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-def test_resolve_upstream_default_branch_raises_when_unresolvable(tmp_path: Path) -> None:
+def test_resolve_default_branch_raises_when_unresolvable(tmp_path: Path) -> None:
     upstream = _init_repo(tmp_path / "upstream")
     _git(["branch", "-m", "trunk"], cwd=upstream)
     clone = tmp_path / "clone"
     _git(["clone", str(upstream), str(clone)], cwd=tmp_path)
     _git(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], cwd=clone)
 
-    with pytest.raises(WorkflowError, match="cannot resolve upstream default branch"):
-        resolve_upstream_default_branch(clone)
+    with pytest.raises(WorkflowError, match="cannot resolve origin's default branch"):
+        resolve_default_branch(clone, "origin")
+
+
+def _commit_file(repo: Path, name: str, message: str) -> None:
+    (repo / name).write_text(f"{name}\n", encoding="utf-8")
+    _git(["add", "."], cwd=repo)
+    _git(["-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-m", message], cwd=repo)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_resolve_default_branch_keeps_slashes_in_branch_name(tmp_path: Path) -> None:
+    upstream = _init_repo(tmp_path / "upstream")
+    _git(["branch", "-m", "release/2.x"], cwd=upstream)
+    clone = tmp_path / "clone"
+    _git(["clone", str(upstream), str(clone)], cwd=tmp_path)
+
+    assert resolve_default_branch(clone, "origin") == "release/2.x"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_resolve_default_branch_of_bare_remote(tmp_path: Path) -> None:
+    _bare, clone = _make_bare_and_clone(tmp_path)
+
+    assert resolve_default_branch(clone, "bare") == "main"
+
+
+# ---------------------------------------------------------------------------
+# git_commits_between / git_commits_behind_bare
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_commits_between_counts_the_range(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    base = git_rev_parse(repo, "HEAD")
+    assert base is not None
+    _commit_file(repo, "a.txt", "a")
+    _commit_file(repo, "b.txt", "b")
+
+    assert git_commits_between(repo, base, "HEAD") == 2
+    assert git_commits_between(repo, "HEAD", base) == 0
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_commits_behind_bare_counts_only_the_branchs_own_counterpart(tmp_path: Path) -> None:
+    bare, clone = _make_bare_and_clone(tmp_path)
+    _advance_bare_main(bare, tmp_path)
+    # Unrelated parallel work on another bare branch must not count.
+    pusher = tmp_path / "pusher"
+    _git(["checkout", "-b", "feat/other"], cwd=pusher)
+    _commit_file(pusher, "other.txt", "other")
+    _git(["push", "bare", "feat/other"], cwd=pusher)
+    _git(["fetch", "bare"], cwd=clone)
+
+    assert git_commits_behind_bare(clone) == 1
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_commits_behind_bare_none_without_counterpart_or_on_detached_head(tmp_path: Path) -> None:
+    _bare, clone = _make_bare_and_clone(tmp_path)
+    _git(["checkout", "-b", "feat/new"], cwd=clone)
+    assert git_commits_behind_bare(clone) is None
+
+    _git(["checkout", "--detach"], cwd=clone)
+    assert git_commits_behind_bare(clone) is None
+
+
+# ---------------------------------------------------------------------------
+# git_changed_files_not_in_bare / git_diff_text_not_in_bare
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_not_in_bare_helpers_cover_only_unpushed_commits(tmp_path: Path) -> None:
+    _bare, clone = _make_bare_and_clone(tmp_path)
+    _git(["checkout", "-b", "feat/x"], cwd=clone)
+    _commit_file(clone, "pushed.txt", "pushed")
+    _git(["push", "-u", "bare", "feat/x"], cwd=clone)
+    _commit_file(clone, "b.txt", "b")
+    _commit_file(clone, "a.txt", "a")
+
+    assert git_changed_files_not_in_bare(clone) == ["a.txt", "b.txt"]
+    diff = git_diff_text_not_in_bare(clone)
+    assert "+a.txt" in diff
+    assert "+b.txt" in diff
+    assert "pushed.txt" not in diff
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_not_in_bare_helpers_empty_for_a_clean_clone(tmp_path: Path) -> None:
+    _bare, clone = _make_bare_and_clone(tmp_path)
+
+    assert git_changed_files_not_in_bare(clone) == []
+    assert git_diff_text_not_in_bare(clone) == ""
+
+
+# ---------------------------------------------------------------------------
+# git_check_ref_format / git_list_remotes / git_fetch_remote
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+@pytest.mark.parametrize(
+    ("branch", "valid"),
+    [
+        ("main", True),
+        ("feat/widget", True),
+        ("release/2.x", True),
+        ("", False),
+        ("-foo", False),
+        ("a..b", False),
+        ("HEAD", False),
+        ("@{-1}", False),
+        ("with space", False),
+        ("trailing/", False),
+    ],
+)
+def test_git_check_ref_format(branch: str, *, valid: bool) -> None:
+    assert git_check_ref_format(branch) is valid
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_list_remotes(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    assert git_list_remotes(repo) == []
+
+    _git(["remote", "add", "bare", str(tmp_path / "x")], cwd=repo)
+    _git(["remote", "add", "origin", str(tmp_path / "y")], cwd=repo)
+    assert git_list_remotes(repo) == ["bare", "origin"]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_fetch_remote_prunes_deleted_branches(tmp_path: Path) -> None:
+    bare, clone = _make_bare_and_clone(tmp_path)
+    _git(["branch", "gone"], cwd=bare)
+    git_fetch_remote(clone, "bare")
+    assert git_rev_parse(clone, "refs/remotes/bare/gone") is not None
+
+    _git(["update-ref", "-d", "refs/heads/gone"], cwd=bare)
+    git_fetch_remote(clone, "bare")
+    assert git_rev_parse(clone, "refs/remotes/bare/gone") is not None
+    git_fetch_remote(clone, "bare", prune=True)
+    assert git_rev_parse(clone, "refs/remotes/bare/gone") is None
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_git_fetch_remote_dry_run_does_not_fetch(tmp_path: Path) -> None:
+    bare, clone = _make_bare_and_clone(tmp_path)
+    _git(["branch", "new"], cwd=bare)
+
+    git_fetch_remote(clone, "bare", dry_run=True)
+
+    assert git_rev_parse(clone, "refs/remotes/bare/new") is None

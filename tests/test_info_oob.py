@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 from click.testing import CliRunner
 
-from tests.test_init_oob import _make_oob_project, _run_init
+from tests.test_init_oob import _git, _make_oob_project, _run_init
 from workflow.cli import main
 
 if TYPE_CHECKING:
@@ -32,3 +32,26 @@ def test_status_prints_a_repo_by_worktree_matrix_in_oob_mode(tmp_path: Path, mon
     for repo in ("docs", "mypackage", "dep1"):
         assert repo in result.output
     assert "Git status for worktree" not in result.output
+
+
+def test_status_matrix_cells_show_counts_dirty_marker_and_missing_clones(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COLUMNS", "250")
+    _make_oob_project(tmp_path, ["mypackage", "dep1"])
+    assert _run_init(tmp_path, monkeypatch).exit_code == 0
+    builder_mypackage = tmp_path / "builder" / "mypackage"
+    _git(["checkout", "-b", "feat/w"], cwd=builder_mypackage)
+    (builder_mypackage / "w.txt").write_text("w\n", encoding="utf-8")
+    _git(["add", "."], cwd=builder_mypackage)
+    _git(["commit", "-m", "w"], cwd=builder_mypackage)
+    (builder_mypackage / "README.md").write_text("dirty\n", encoding="utf-8")
+    shutil.rmtree(tmp_path / "reviewer" / "dep1")
+
+    result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "status"])
+
+    assert result.exit_code == 0, result.output
+    assert "feat/w +1/-- *" in result.output  # no bare/feat/w yet: behind is unknown
+    assert "main +0/-0" in result.output
+    assert "missing" in result.output

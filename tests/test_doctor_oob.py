@@ -76,3 +76,41 @@ def test_doctor_flags_a_missing_code_repo_clone(tmp_path: Path, monkeypatch: pyt
 
     assert result.exit_code == 1
     assert _contains(result.output, "missing")
+
+
+def test_doctor_ignores_branch_rules_in_code_repos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Code-repo branches aren't managed by the tool: feature branches and non-main canon are normal."""
+    monkeypatch.setenv("COLUMNS", "250")
+    config_path = _setup_project(tmp_path, monkeypatch)
+    _git(["checkout", "-b", "feature/widget"], cwd=tmp_path / "builder" / "mypackage")
+    _git(["checkout", "-b", "dev"], cwd=tmp_path / "canon" / "dep1")
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "doctor"])
+
+    assert result.exit_code == 0, result.output
+
+
+def test_doctor_ignores_stale_local_main_in_code_repos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bare's main advancing (e.g. after `workflow sync`) leaves agents' local code-repo main behind."""
+    monkeypatch.setenv("COLUMNS", "250")
+    config_path = _setup_project(tmp_path, monkeypatch)
+    canon_mypackage = tmp_path / "canon" / "mypackage"
+    (canon_mypackage / "upstream.txt").write_text("new\n", encoding="utf-8")
+    _git(["add", "."], cwd=canon_mypackage)
+    _git(["commit", "-m", "upstream change"], cwd=canon_mypackage)
+    _git(["push", "bare", "main"], cwd=canon_mypackage)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "doctor"])
+
+    assert result.exit_code == 0, result.output
+
+
+def test_doctor_still_flags_a_stray_docs_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COLUMNS", "250")
+    config_path = _setup_project(tmp_path, monkeypatch)
+    _git(["checkout", "-b", "feature/widget"], cwd=tmp_path / "builder" / "docs")
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "doctor"])
+
+    assert result.exit_code == 1
+    assert _contains(result.output, "stray branch 'feature/widget'")

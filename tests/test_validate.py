@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -65,7 +65,7 @@ def test_infer_target_repo_uses_state_agent_or_canon(tmp_path: Path) -> None:
     ],
 )
 def test_check_file_scope_enforces_repo_rules(target_repo: str, changed_files: list[str], status: str) -> None:
-    result = dc._check_file_scope(changed_files, target_repo)
+    result = dc._check_file_scope(changed_files, target_repo, PurePosixPath("docs/plans"))
     assert result.status == status
 
 
@@ -88,7 +88,7 @@ def test_check_git_hooks_passes_for_managed_symlink(tmp_path: Path) -> None:
     source.write_text("#!/bin/sh\n", encoding="utf-8")
     (hooks_dir / "pre-commit").symlink_to(source)
 
-    result = dc._check_git_hooks(repo_path, config)
+    result = dc._check_git_hooks(repo_path, config.managed_hooks)
     assert result.status == "pass"
 
 
@@ -104,7 +104,7 @@ def test_check_git_hooks_fails_for_unexpected_executable(tmp_path: Path) -> None
     extra.write_text("#!/bin/sh\n", encoding="utf-8")
     extra.chmod(0o755)
 
-    result = dc._check_git_hooks(repo_path, config)
+    result = dc._check_git_hooks(repo_path, config.managed_hooks)
     assert result.status == "fail"
     assert "unexpected executable hook: post-commit" in result.details
 
@@ -174,7 +174,8 @@ def test_check_agents_md_suggests_regeneration_when_config_changed(tmp_path: Pat
     assert "workflow agents_md" in result.message
 
 
-def test_check_agents_md_suggests_regeneration_when_workflow_json_changed(tmp_path: Path) -> None:
+def test_check_agents_md_ignores_workflow_json_in_band(tmp_path: Path) -> None:
+    """In-band AGENTS.md doesn't render .workflow.json, so its hash isn't blamed for drift."""
     repo_path = tmp_path / "planner"
     repo_path.mkdir()
     agents_md = repo_path / "AGENTS.md"
@@ -189,8 +190,7 @@ def test_check_agents_md_suggests_regeneration_when_workflow_json_changed(tmp_pa
 
     result = dc._check_agents_md(repo_path, tmp_path, [])
     assert result.status == "fail"
-    assert "workflow agents_md" in result.message
-    assert ".workflow.json" in result.message
+    assert ".workflow.json" not in result.message
 
 
 def test_check_agents_md_fails_on_non_v2_hash_file(tmp_path: Path) -> None:

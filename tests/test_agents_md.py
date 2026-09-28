@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 from pathlib import Path
@@ -30,7 +31,7 @@ from workflow.agents_md import (
 )
 from workflow.config import WorkflowConfig, load_config
 from workflow.exceptions import AgentsMdGenerationError, WorkflowError
-from workflow.metadata import CodeRepoMeta, ProjectMetadata, ProjectMode, write_metadata
+from workflow.metadata import METADATA_FILENAME, CodeRepoMeta, ProjectMetadata, ProjectMode, write_metadata
 
 # ---------------------------------------------------------------------------
 # normalise
@@ -490,3 +491,17 @@ def test_prepare_agents_md_update_in_band_unaffected_by_oob_changes(tmp_path: Pa
     assert update.write_targets == [tmp_path / "canon" / "AGENTS.md"]
     golden = _GOLDEN_PATH.read_text(encoding="utf-8")
     assert update.new_text == f"{MARKER_BEGIN}\n{golden}{MARKER_END}\n"
+
+
+@pytest.mark.parametrize("oob", [False, True], ids=["in_band", "oob"])
+def test_hash_covers_workflow_json_only_in_oob(tmp_path: Path, *, oob: bool) -> None:
+    """In-band AGENTS.md doesn't render .workflow.json, so its hash must not depend on it."""
+    config = _load_oob_config(tmp_path) if oob else _load_default_config(tmp_path)
+    (tmp_path / "canon").mkdir(exist_ok=True)
+    workflow_json = tmp_path / METADATA_FILENAME
+    workflow_json.write_text('{"any": "content"}', encoding="utf-8")
+
+    workflow_json_sha = parse_hash_file(cm_cmd.prepare_agents_md_update(config).new_hash).workflow_json_sha
+
+    expected = hashlib.sha256(workflow_json.read_bytes() if oob else b"").hexdigest()
+    assert workflow_json_sha == expected

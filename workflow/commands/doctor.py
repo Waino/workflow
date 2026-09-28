@@ -8,8 +8,6 @@ anything; exits non-zero when any anomaly is found.
 
 from __future__ import annotations
 
-import hashlib
-import subprocess
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +28,7 @@ from workflow.git_helpers import (
     BARE_REMOTE,
     LEGACY_BARE_REMOTE,
     git_branch_exists,
+    git_commits_between,
     git_current_branch,
     git_index_lock_present,
     git_is_ancestor,
@@ -38,7 +37,7 @@ from workflow.git_helpers import (
     git_remote_url,
     git_rev_parse,
     git_status_porcelain,
-    resolve_upstream_default_branch,
+    resolve_default_branch,
 )
 from workflow.metadata import LEGACY_ROOT_MARKER, ProjectMode
 from workflow.models import PlanState
@@ -47,6 +46,7 @@ from workflow.plan_resolver import find_all_plans_in_worktree, resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console, error_console
 from workflow.stack import BRANCH_PREFIX, branch_for_plan, read_plan_frontmatter
+from workflow.validate import agents_md_copy_mismatches
 
 if TYPE_CHECKING:
     from workflow.config import WorkflowConfig
@@ -166,6 +166,7 @@ def _check_worktree(
 
     *repo* is ``None`` in-band; a non-``None`` value both labels the row and turns on the
     oob-only single-remote check (the two only ever come as a pair -- see ``doctor()``).
+    Branch-name and staleness rules apply to the docs repo only.
     """
     check = WorktreeCheck(name=worktree.value, exists=repo_path.is_dir(), repo=repo)
     if not check.exists:
@@ -192,6 +193,10 @@ def _check_worktree(
         check.anomalies.append("uncommitted changes")
     elif git_status_porcelain(repo_path):
         check.notes.append("untracked files present")
+
+    if repo not in (None, DOCS_REPO):
+        # The tool doesn't manage code-repo branches, nor refresh their local main.
+        return check
 
     if worktree == WorktreeName.canon and check.branch != "main":
         check.anomalies.append(f"expected 'main', on {check.branch!r}")
@@ -244,7 +249,7 @@ def _bare_staleness_notes(layout: Layout) -> list[str]:
         if not (canon_repo.is_dir() and bare_repo.is_dir()):
             continue
         try:
-            default_branch = resolve_upstream_default_branch(canon_repo)
+            default_branch = resolve_default_branch(canon_repo, "origin")  # upstream remote, not bare (023.5)
         except WorkflowError:
             continue
         origin_tip = git_rev_parse(canon_repo, f"refs/remotes/origin/{default_branch}")
@@ -253,20 +258,9 @@ def _bare_staleness_notes(layout: Layout) -> list[str]:
             continue
         if not git_is_ancestor(canon_repo, bare_tip, origin_tip):
             continue  # bare holds commits origin doesn't -- not the "behind upstream" case this note covers
-        behind = _commits_between(canon_repo, bare_tip, origin_tip)
+        behind = git_commits_between(canon_repo, bare_tip, origin_tip)
         notes.append(f"{repo}: bare is {behind} commit(s) behind upstream ({default_branch}); run workflow sync")
     return notes
-
-
-def _commits_between(repo_path: Path, old: str, new: str) -> int:
-    """Return ``git rev-list --count old..new`` in *repo_path*. Read-only guard query."""
-    result = subprocess.run(  # noqa: S603
-        ["git", "rev-list", "--count", f"{old}..{new}"],  # noqa: S607
-        cwd=repo_path,
-        capture_output=True,
-        check=True,
-    )
-    return int(result.stdout.decode().strip())
 
 
 def _agents_md_hash_anomalies(layout: Layout) -> list[str]:
@@ -287,16 +281,7 @@ def _agents_md_hash_anomalies(layout: Layout) -> list[str]:
     except AgentsMdGenerationError as exc:
         return [f"trusted hash file invalid: {exc}"]
 
-    anomalies: list[str] = []
-    for worktree in WorktreeName:
-        agents_md = layout.worktree_root(worktree) / "AGENTS.md"
-        if not agents_md.exists():
-            anomalies.append(f"{worktree}: AGENTS.md not found")
-            continue
-        actual_hash = hashlib.sha256(agents_md.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
-        if actual_hash != trusted.agents_md_sha:
-            anomalies.append(f"{worktree}: AGENTS.md hash does not match trusted value; run workflow agents_md")
-    return anomalies
+    return [f"{mismatch}; run workflow agents_md" for mismatch in agents_md_copy_mismatches(layout, trusted)]
 
 
 def _legacy_marker_anomalies(project_dir: Path) -> list[str]:

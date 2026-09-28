@@ -45,7 +45,7 @@ class HashFileV2(BaseModel):
     agents_md_sha: str
     config_yaml_sha: str
     workflow_json_sha: str
-    """Covers ``.workflow.json`` so e.g. ``add-repo`` invalidates the trusted hash too."""
+    """Hash of ``.workflow.json`` in oob (its code-repo list feeds AGENTS.md); ``sha256(b"")`` in-band."""
 
 
 # ---------------------------------------------------------------------------

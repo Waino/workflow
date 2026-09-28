@@ -128,8 +128,8 @@ def _last_audit_entry_for_plan(entries: list[AuditLogEntry], plan: Plan) -> Audi
 def _git_status_matrix(layout: Layout) -> Table:
     """Build the oob git-status matrix.
 
-    Rows = worktrees, columns = repos: `branch` plus ahead/behind-bare counts and a
-    tracked-dirty marker per cell. Denser than a linear per-worktree block once there's
+    Rows = worktrees, columns = repos: `branch` plus ahead-of-bare and behind-its-bare-branch
+    counts and a tracked-dirty marker per cell. Denser than a linear per-worktree block once there's
     more than one repo per worktree.
     """
     repos = layout.repos()
@@ -139,18 +139,20 @@ def _git_status_matrix(layout: Layout) -> Table:
         table.add_column(repo)
     for worktree in WorktreeName:
         row = [worktree.value]
-        for repo in repos:
-            repo_path = layout.git_repo_root(worktree, repo)
-            branch = git_current_branch(repo_path)
-            ahead = git_commits_not_in_bare(repo_path)
-            behind = git_commits_behind_bare(repo_path)
-            dirty = bool(git_status_porcelain(repo_path, untracked=False))
-            cell = f"{branch} +{ahead}/-{behind}"
-            if dirty:
-                cell += " *"
-            row.append(cell)
+        row += [_git_status_cell(layout.git_repo_root(worktree, repo)) for repo in repos]
         table.add_row(*row)
     return table
+
+
+def _git_status_cell(repo_path: Path) -> str:
+    """Render ``branch +ahead/-behind`` (``-`` when there's no bare counterpart), ``*`` if tracked-dirty."""
+    if not repo_path.is_dir():
+        return "missing"
+    behind = git_commits_behind_bare(repo_path)
+    cell = f"{git_current_branch(repo_path)} +{git_commits_not_in_bare(repo_path)}/-{'-' if behind is None else behind}"
+    if git_status_porcelain(repo_path, untracked=False):
+        cell += " *"
+    return cell
 
 
 @register_script("status")

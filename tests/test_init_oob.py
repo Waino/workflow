@@ -455,6 +455,11 @@ class TestAddRepo:
             repo_path = tmp_path / worktree / "dep2"
             assert _remotes(repo_path) == ["bare"]
             assert _hook_symlink(tmp_path, worktree, "dep2").is_symlink()
+        # AGENTS.md lists the code repos agents must cover in `branches` frontmatter.
+        for worktree in ("canon", *_AGENT_WORKTREES):
+            assert "dep2" in (tmp_path / worktree / "AGENTS.md").read_text(encoding="utf-8")
+        check = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "agents_md", "--check"])
+        assert check.exit_code == 0, check.output
 
     def test_skip_hook_is_recorded_and_no_symlink_installed(
         self,

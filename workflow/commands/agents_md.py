@@ -99,7 +99,9 @@ def prepare_agents_md_update(config: WorkflowConfig) -> _AgentsMdUpdate:
         raise AgentsMdGenerationError(msg)
 
     config_yaml_bytes = config_yaml_path.read_bytes() if config_yaml_path.exists() else b""
-    workflow_json_bytes = workflow_json_path.read_bytes() if workflow_json_path.exists() else b""
+    # Only oob renders .workflow.json (the code-repo list) into AGENTS.md, so only oob hashes it.
+    oob = layout.metadata.mode == ProjectMode.oob
+    workflow_json_bytes = workflow_json_path.read_bytes() if oob and workflow_json_path.exists() else b""
     new_hash = compute_hash_file_contents(new_text, config_yaml_bytes, workflow_json_bytes)
 
     existing_hash = hash_file_path.read_text(encoding="utf-8") if hash_file_path.exists() else ""

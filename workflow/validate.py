@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel
@@ -138,11 +138,9 @@ def validate(
 
     try:
         worktree = WorktreeName(target_repo)
-    except ValueError:
-        # Custom agent name with no matching worktree (e.g. a manual-shell-only agent):
-        # fall back to the same single-repo-diff behaviour in-band mode uses, against
-        # whatever directory a plain path join resolves to.
-        return _validate_in_band(layout, config, target_repo)
+    except ValueError as exc:
+        msg = f"{target_repo!r} is not a worktree; oob validate needs one of {[w.value for w in WorktreeName]}."
+        raise WorkflowError(msg) from exc
 
     return _validate_oob(layout, config, plan, worktree)
 
@@ -164,9 +162,9 @@ def _validate_in_band(layout: Layout, config: WorkflowConfig, target_repo: Workt
     changed_files = [line for line in _read_branch_diff(repo_path, "--name-only").splitlines() if line]
 
     return [
-        _check_file_scope(changed_files, target_repo),
+        _check_file_scope(changed_files, target_repo, layout.plans_prefix),
         _check_noqa_nosec(full_diff),
-        _check_git_hooks(repo_path, config),
+        _check_git_hooks(repo_path, config.managed_hooks),
         _check_agents_md(repo_path, layout.project_dir, changed_files),
     ]
 
@@ -180,33 +178,52 @@ def _read_branch_diff(repo_path: Path, *extra_args: str) -> str:
         raise WorkflowError(msg) from exc
 
 
-def _check_file_scope(changed_files: list[str], target_repo: WorktreeName | str) -> CheckResult:
-    violations = [f for f in changed_files if not _is_allowed(f, target_repo)]
+def _check_file_scope(
+    changed_files: list[str],
+    target_repo: WorktreeName | str,
+    plans_prefix: PurePosixPath,
+    *,
+    reserved_files: frozenset[str] = frozenset(),
+    repo: str | None = None,
+) -> CheckResult:
+    violations = [f for f in changed_files if not _is_allowed(f, target_repo, plans_prefix, reserved_files)]
     if violations:
         return CheckResult(
             check_name="file-scope",
+            repo=repo,
             status="fail",
             message=f"{len(violations)} file(s) outside allowed scope for {target_repo!r}",
             details=violations,
         )
-    return CheckResult(check_name="file-scope", status="pass", message="All changed files within scope")
+    return CheckResult(check_name="file-scope", repo=repo, status="pass", message="All changed files within scope")
 
 
-def _is_allowed(file_path: str, target_repo: WorktreeName | str) -> bool:
-    """Return True if *file_path* (relative to repo root) may be changed by *target_repo*."""
+def _is_allowed(
+    file_path: str,
+    target_repo: WorktreeName | str,
+    plans_prefix: PurePosixPath,
+    reserved_files: frozenset[str],
+) -> bool:
+    """Return True if *file_path* (relative to the repo root) may be changed by *target_repo*.
+
+    *reserved_files* may only be touched by planner/canon: builder/reviewer must not edit
+    their own instructions or the script that builds their env.
+    """
     parts = Path(file_path).parts
-    under_plans = parts[:2] == ("docs", "plans")
-    is_intent = under_plans and parts[2:3] == ("intent",)
-    is_review = under_plans and parts[2:3] == ("reviews",)
+    depth = len(plans_prefix.parts)
+    under_plans = parts[:depth] == plans_prefix.parts
+    is_intent = under_plans and parts[depth : depth + 1] == ("intent",)
+    is_review = under_plans and parts[depth : depth + 1] == ("reviews",)
+    is_reserved = file_path in reserved_files
 
     if target_repo == WorktreeName.canon:
         return True
     if target_repo == WorktreeName.planner:
-        return under_plans and not is_review
+        return (under_plans and not is_review) or is_reserved
     if target_repo == WorktreeName.builder:
-        return not is_intent and not is_review
+        return not is_intent and not is_review and not is_reserved
     if target_repo == WorktreeName.reviewer:
-        return not is_intent
+        return not is_intent and not is_reserved
     return True  # unknown repo: allow
 
 
@@ -227,11 +244,16 @@ def _check_noqa_nosec(diff_text: str) -> CheckResult:
     return CheckResult(check_name="noqa-nosec", status="pass", message="No noqa/nosec comments added")
 
 
-def _managed_hook_issues(repo_path: Path, config: WorkflowConfig) -> list[str]:
+def _installed_managed_hooks(repo_path: Path, config: WorkflowConfig) -> dict[str, str]:
+    """Oob: the managed hooks whose source ships in *repo_path*; only those get symlinked by init."""
+    return {name: source for name, source in config.managed_hooks.items() if (repo_path / source).is_file()}
+
+
+def _managed_hook_issues(repo_path: Path, managed_hooks: dict[str, str]) -> list[str]:
     """Return one message per managed hook that is missing or points at the wrong target."""
     hooks_dir = repo_path / ".git" / "hooks"
     issues: list[str] = []
-    for hook_name, hook_source in config.managed_hooks.items():
+    for hook_name, hook_source in managed_hooks.items():
         hook_path = hooks_dir / hook_name
         expected = (repo_path / hook_source).resolve()
         if not hook_path.is_symlink():
@@ -241,14 +263,14 @@ def _managed_hook_issues(repo_path: Path, config: WorkflowConfig) -> list[str]:
     return issues
 
 
-def _unexpected_hook_issues(repo_path: Path, config: WorkflowConfig) -> list[str]:
-    """Return one message per executable hook file not accounted for by ``config.managed_hooks``."""
+def _unexpected_hook_issues(repo_path: Path, managed_hooks: dict[str, str]) -> list[str]:
+    """Return one message per executable hook file not accounted for by *managed_hooks*."""
     hooks_dir = repo_path / ".git" / "hooks"
     if not hooks_dir.is_dir():
         return []
     issues = []
     for hook_file in sorted(hooks_dir.iterdir()):
-        if hook_file.suffix == ".sample" or hook_file.name in config.managed_hooks:
+        if hook_file.suffix == ".sample" or hook_file.name in managed_hooks:
             continue
         if hook_file.is_file() and os.access(hook_file, os.X_OK):
             issues.append(f"unexpected executable hook: {hook_file.name}")
@@ -257,7 +279,7 @@ def _unexpected_hook_issues(repo_path: Path, config: WorkflowConfig) -> list[str
 
 def _check_git_hooks(
     repo_path: Path,
-    config: WorkflowConfig,
+    managed_hooks: dict[str, str],
     *,
     repo: str | None = None,
     downgrade_unexpected: bool = False,
@@ -267,8 +289,8 @@ def _check_git_hooks(
     An unexpected executable hook is a hard failure unless *downgrade_unexpected*
     (used for code repos, where a husky/pre-commit-framework hook is routine).
     """
-    fail_issues = _managed_hook_issues(repo_path, config)
-    unexpected_issues = _unexpected_hook_issues(repo_path, config)
+    fail_issues = _managed_hook_issues(repo_path, managed_hooks)
+    unexpected_issues = _unexpected_hook_issues(repo_path, managed_hooks)
     warn_issues: list[str] = []
     if downgrade_unexpected:
         warn_issues = unexpected_issues
@@ -294,17 +316,18 @@ def _check_git_hooks(
     return CheckResult(check_name="git-hooks", repo=repo, status="pass", message="Git hooks correctly configured")
 
 
-def _stale_hash_inputs(project_dir: Path, trusted: HashFileV2) -> list[str]:
-    """Return which of config.yaml/.workflow.json no longer match *trusted*'s recorded hashes."""
+def _stale_hash_inputs(project_dir: Path, trusted: HashFileV2, *, oob: bool) -> list[str]:
+    """Return which of config.yaml/.workflow.json (oob only) no longer match *trusted*'s recorded hashes."""
     config_yaml = project_dir / "config.yaml"
     config_yaml_sha = hashlib.sha256(config_yaml.read_bytes()).hexdigest() if config_yaml.exists() else ""
-    workflow_json = project_dir / METADATA_FILENAME
-    workflow_json_sha = hashlib.sha256(workflow_json.read_bytes()).hexdigest() if workflow_json.exists() else ""
     stale: list[str] = []
     if config_yaml_sha != trusted.config_yaml_sha:
         stale.append("config.yaml")
-    if workflow_json_sha != trusted.workflow_json_sha:
-        stale.append(f"{METADATA_FILENAME} (e.g. add-repo)")
+    if oob:
+        workflow_json = project_dir / METADATA_FILENAME
+        workflow_json_sha = hashlib.sha256(workflow_json.read_bytes()).hexdigest() if workflow_json.exists() else ""
+        if workflow_json_sha != trusted.workflow_json_sha:
+            stale.append(METADATA_FILENAME)
     return stale
 
 
@@ -331,7 +354,7 @@ def _check_agents_md(repo_path: Path, project_dir: Path, changed_files: list[str
     agents_md_modified = "AGENTS.md" in changed_files
 
     if actual_hash != trusted.agents_md_sha:
-        stale_inputs = _stale_hash_inputs(project_dir, trusted)
+        stale_inputs = _stale_hash_inputs(project_dir, trusted, oob=False)
         if stale_inputs:
             verb = "has" if len(stale_inputs) == 1 else "have"
             message = (
@@ -362,6 +385,9 @@ def _validate_oob(layout: Layout, config: WorkflowConfig, plan: Plan, worktree: 
 
     for repo in layout.repos():
         repo_path = layout.git_repo_root(worktree, repo)
+        if not repo_path.is_dir():
+            msg = f"{repo_path} is missing; run `workflow doctor`."
+            raise WorkflowError(msg)
         try:
             git_fetch(repo_path)
         except subprocess.CalledProcessError as exc:
@@ -376,9 +402,16 @@ def _validate_oob(layout: Layout, config: WorkflowConfig, plan: Plan, worktree: 
             changed_files = git_changed_files_not_in_bare(repo_path)
         all_diffs.append(full_diff)
 
-        results.append(_check_file_scope_oob(changed_files, worktree, repo))
-        if _repo_runs_hook(layout, repo):
-            results.append(_check_git_hooks(repo_path, config, repo=repo, downgrade_unexpected=repo != DOCS_REPO))
+        results.append(_check_file_scope_oob(changed_files, worktree, repo, layout.plans_prefix))
+        if layout.metadata.runs_hook(repo):
+            results.append(
+                _check_git_hooks(
+                    repo_path,
+                    _installed_managed_hooks(repo_path, config),
+                    repo=repo,
+                    downgrade_unexpected=repo != DOCS_REPO,
+                ),
+            )
 
     results.append(_check_noqa_nosec("\n".join(all_diffs)))
     results.append(_check_agents_md_oob(layout))
@@ -387,56 +420,19 @@ def _validate_oob(layout: Layout, config: WorkflowConfig, plan: Plan, worktree: 
     return results
 
 
-def _repo_runs_hook(layout: Layout, repo: str) -> bool:
-    """Return whether *repo* has the pre-commit hook installed (docs always does)."""
-    if repo == DOCS_REPO:
-        return True
-    return next((r.run_hook for r in layout.metadata.code_repos if r.name == repo), True)
-
-
-def _check_file_scope_oob(changed_files: list[str], worktree: WorktreeName, repo: str) -> CheckResult:
+def _check_file_scope_oob(
+    changed_files: list[str],
+    worktree: WorktreeName,
+    repo: str,
+    plans_prefix: PurePosixPath,
+) -> CheckResult:
     if repo != DOCS_REPO:
         # Unrestricted: the tool cannot know a third-party repo's layout. The plan's
         # frontmatter and human review are the scope guard here (see Risk 2); a planner
         # commit specifically is instead caught by planner-code-commits.
         return CheckResult(check_name="file-scope", repo=repo, status="pass", message="Unrestricted for code repos")
 
-    violations = [f for f in changed_files if not _is_allowed_oob_docs(f, worktree)]
-    if violations:
-        return CheckResult(
-            check_name="file-scope",
-            repo=repo,
-            status="fail",
-            message=f"{len(violations)} file(s) outside allowed scope for {worktree!r}",
-            details=violations,
-        )
-    return CheckResult(check_name="file-scope", repo=repo, status="pass", message="All changed files within scope")
-
-
-def _is_allowed_oob_docs(file_path: str, worktree: WorktreeName) -> bool:
-    """Return True if *file_path* (relative to the oob docs repo root) may be changed by *worktree*.
-
-    The oob counterpart to :func:`_is_allowed`: plans live at ``plans/...`` (not
-    ``docs/plans/...``, since the repo root here already is the ``docs`` subdirectory),
-    and ``body_of_agents.md``/``bootstrap_venv.sh`` at the repo root are reserved for
-    planner/canon -- builder/reviewer must not edit their own instructions or the script
-    that builds their env.
-    """
-    parts = Path(file_path).parts
-    under_plans = parts[:1] == ("plans",)
-    is_intent = under_plans and parts[1:2] == ("intent",)
-    is_review = under_plans and parts[1:2] == ("reviews",)
-    is_reserved_root_file = file_path in _OOB_DOCS_ROOT_FILES
-
-    if worktree == WorktreeName.canon:
-        return True
-    if worktree == WorktreeName.planner:
-        return (under_plans and not is_review) or is_reserved_root_file
-    if worktree == WorktreeName.builder:
-        return not is_intent and not is_review and not is_reserved_root_file
-    if worktree == WorktreeName.reviewer:
-        return not is_intent and not is_reserved_root_file
-    return True  # unknown worktree: allow
+    return _check_file_scope(changed_files, worktree, plans_prefix, reserved_files=_OOB_DOCS_ROOT_FILES, repo=repo)
 
 
 def _check_agents_md_oob(layout: Layout) -> CheckResult:
@@ -460,18 +456,9 @@ def _check_agents_md_oob(layout: Layout) -> CheckResult:
             message=f"Hash file invalid: {exc} Run `workflow agents_md` to regenerate it.",
         )
 
-    mismatched: list[str] = []
-    for worktree in WorktreeName:
-        agents_md = layout.worktree_root(worktree) / "AGENTS.md"
-        if not agents_md.exists():
-            mismatched.append(f"{worktree}: AGENTS.md not found")
-            continue
-        actual_hash = hashlib.sha256(agents_md.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
-        if actual_hash != trusted.agents_md_sha:
-            mismatched.append(f"{worktree}: hash does not match trusted value")
-
+    mismatched = agents_md_copy_mismatches(layout, trusted)
     if mismatched:
-        stale_inputs = _stale_hash_inputs(layout.project_dir, trusted)
+        stale_inputs = _stale_hash_inputs(layout.project_dir, trusted, oob=True)
         hint = f" ({' and '.join(stale_inputs)} changed since it was last generated)" if stale_inputs else ""
         return CheckResult(
             check_name="agents-md",
@@ -481,6 +468,20 @@ def _check_agents_md_oob(layout: Layout) -> CheckResult:
             details=mismatched,
         )
     return CheckResult(check_name="agents-md", status="pass", message="AGENTS.md integrity verified in every worktree")
+
+
+def agents_md_copy_mismatches(layout: Layout, trusted: HashFileV2) -> list[str]:
+    """Oob: one message per worktree-root AGENTS.md copy that is missing or doesn't match *trusted*."""
+    mismatched: list[str] = []
+    for worktree in WorktreeName:
+        agents_md = layout.worktree_root(worktree) / "AGENTS.md"
+        if not agents_md.exists():
+            mismatched.append(f"{worktree}: AGENTS.md not found")
+            continue
+        actual_hash = hashlib.sha256(agents_md.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
+        if actual_hash != trusted.agents_md_sha:
+            mismatched.append(f"{worktree}: AGENTS.md hash does not match trusted value")
+    return mismatched
 
 
 def _check_planner_code_commits(layout: Layout) -> CheckResult:
@@ -539,6 +540,7 @@ def _check_branches_frontmatter(layout: Layout, plan: Plan) -> CheckResult:
         )
 
     issues = [f"missing entry for {repo!r}" for repo in layout.code_repos() if repo not in fm.branches]
+    issues += [f"unknown repo {repo!r}" for repo in fm.branches if repo not in layout.repos()]
     for repo, repo_branch in fm.branches.items():
         if repo_branch is not None and not git_check_ref_format(repo_branch.branch):
             issues.append(f"{repo}: {repo_branch.branch!r} is not a valid branch name")

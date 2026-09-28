@@ -66,15 +66,22 @@ def _advance_upstream(upstream: Path, tmp_path: Path, name: str, *, branch: str 
     return _git(["rev-parse", branch], cwd=pusher).stdout.decode().strip()
 
 
-def _make_project(tmp_path: Path, repos: list[str]) -> None:
+def _make_project(
+    tmp_path: Path,
+    repos: list[str],
+    *,
+    mode: ProjectMode = ProjectMode.oob,
+    init_docs: bool = True,
+) -> None:
     """Minimal project scaffold for the ``sync`` CLI command: env.list, config.yaml, .workflow.json."""
     (tmp_path / "env.list").touch()
     shutil.copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
     script = tmp_path / "run_agent_in_docker.sh"
     script.write_text("#!/bin/bash\n", encoding="utf-8")
     script.chmod(0o755)
-    _init_repo(tmp_path / "canon" / DOCS_REPO)
-    write_metadata(tmp_path, ProjectMetadata(mode=ProjectMode.oob, code_repos=[CodeRepoMeta(name=r) for r in repos]))
+    if init_docs:
+        _init_repo(tmp_path / "canon" / DOCS_REPO)
+    write_metadata(tmp_path, ProjectMetadata(mode=mode, code_repos=[CodeRepoMeta(name=r) for r in repos]))
 
 
 def _run_sync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *extra_args: str) -> Result:
@@ -137,10 +144,10 @@ def test_sync_fails_when_default_branch_unresolvable(tmp_path: Path, monkeypatch
     result = _run_sync(tmp_path, monkeypatch)
 
     assert result.exit_code != 0
-    assert "cannot resolve upstream default branch" in result.output
+    assert "cannot resolve origin's default branch" in result.output
 
 
-def test_sync_dry_run_mutates_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sync_dry_run_leaves_bare_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _make_project(tmp_path, ["mypackage"])
     canon_repo, bare_repo, upstream = _make_code_repo(tmp_path, "mypackage")
     _advance_upstream(upstream, tmp_path, "mypackage")
@@ -220,3 +227,41 @@ def test_sync_unknown_repo_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
     assert result.exit_code != 0
     assert "unknown repo" in result.output
+
+
+def test_sync_is_rejected_in_band(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _make_project(tmp_path, [], mode=ProjectMode.in_band)
+
+    result = _run_sync(tmp_path, monkeypatch)
+
+    assert result.exit_code != 0
+    assert _contains(result.output, "only valid for out-of-band projects")
+
+
+def test_sync_excludes_docs_unless_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bare is docs' source of truth, normally ahead of origin: never synced (let alone forced) by default."""
+    _make_project(tmp_path, ["mypackage"], init_docs=False)
+    _make_code_repo(tmp_path, "mypackage")
+    _docs_canon, docs_bare, docs_upstream = _make_code_repo(tmp_path, DOCS_REPO)
+    new_docs_sha = _advance_upstream(docs_upstream, tmp_path, DOCS_REPO)
+    before = _git(["rev-parse", "refs/heads/main"], cwd=docs_bare).stdout.decode().strip()
+
+    result = _run_sync(tmp_path, monkeypatch, "--force")
+
+    assert result.exit_code == 0, result.output
+    assert _git(["rev-parse", "refs/heads/main"], cwd=docs_bare).stdout.decode().strip() == before
+
+    result = _run_sync(tmp_path, monkeypatch, "--repo", DOCS_REPO)
+
+    assert result.exit_code == 0, result.output
+    assert _git(["rev-parse", "refs/heads/main"], cwd=docs_bare).stdout.decode().strip() == new_docs_sha
+
+
+def test_sync_warns_about_a_branch_missing_on_origin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _make_project(tmp_path, ["mypackage"])
+    _make_code_repo(tmp_path, "mypackage")
+
+    result = _run_sync(tmp_path, monkeypatch, "--branch", "nosuch")
+
+    assert result.exit_code == 0, result.output
+    assert _contains(result.output, "'nosuch' not found on origin")

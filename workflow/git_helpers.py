@@ -25,6 +25,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from pathlib import Path
 
+    from workflow.layout import Layout
+    from workflow.names import WorktreeName
+
 from workflow.exceptions import WorkflowError
 from workflow.shell import console, error_console, run_command, run_condition_command
 from workflow.steps import require
@@ -94,6 +97,22 @@ def git_push(repo_path: Path, *, dry_run: bool = False) -> None:
 def git_fetch(repo_path: Path, *, dry_run: bool = False) -> None:
     """Run ``git fetch bare`` in *repo_path*."""
     run_command(["git", "fetch", BARE_REMOTE], cwd=repo_path, dry_run=dry_run)
+
+
+def fetch_code_repos_best_effort(layout: Layout, worktree: WorktreeName, *, dry_run: bool) -> None:
+    """``git fetch bare`` in every code repo of *worktree*; missing clones are skipped, failures only warn.
+
+    Code-repo branches are not managed by the tool, so a fetch is all they get -- and a
+    failed one must not fail a command whose main work (a handoff, a dispatch) succeeded.
+    """
+    for repo in layout.code_repos():
+        repo_path = layout.git_repo_root(worktree, repo)
+        if not repo_path.is_dir():
+            continue
+        try:
+            git_fetch(repo_path, dry_run=dry_run)
+        except subprocess.CalledProcessError as exc:
+            error_console.print(f"[yellow]fetch skipped in {repo_path}: {exc}[/yellow]")
 
 
 def git_fetch_remote(repo_path: Path, remote: str, *, prune: bool = False, dry_run: bool = False) -> None:
@@ -173,20 +192,30 @@ def git_commits_not_in_bare(repo_path: Path) -> int:
     return int(result.stdout.decode().strip())
 
 
-def git_commits_behind_bare(repo_path: Path) -> int:
-    """Return how many commits reachable from any ``bare`` ref are not reachable from HEAD.
-
-    The mirror image of :func:`git_commits_not_in_bare`, for the `info` status matrix: what
-    a `workflow sync` would bring in. Assumes the caller has already fetched ``bare``.
-    Read-only guard query: always runs for real, even in dry-run.
-    """
-    result = subprocess.run(
-        ["git", "rev-list", "--count", "--remotes=bare", "--not", "HEAD"],  # noqa: S607
+def git_commits_between(repo_path: Path, old: str, new: str) -> int:
+    """Return ``git rev-list --count old..new`` in *repo_path*. Read-only guard query."""
+    result = subprocess.run(  # noqa: S603
+        ["git", "rev-list", "--count", f"{old}..{new}"],  # noqa: S607
         cwd=repo_path,
         capture_output=True,
         check=True,
     )
     return int(result.stdout.decode().strip())
+
+
+def git_commits_behind_bare(repo_path: Path) -> int | None:
+    """Return how many commits ``bare/<current branch>`` has that HEAD lacks.
+
+    ``None`` when HEAD is detached or the branch has no ``bare`` counterpart yet: only
+    the branch's own counterpart says whether this checkout is stale -- other bare
+    branches are unrelated parallel work. Assumes the caller has already fetched ``bare``.
+    Read-only guard query: always runs for real, even in dry-run.
+    """
+    branch = git_current_branch(repo_path)
+    bare_ref = f"refs/remotes/{BARE_REMOTE}/{branch}"
+    if branch == "HEAD" or git_rev_parse(repo_path, bare_ref) is None:
+        return None
+    return git_commits_between(repo_path, "HEAD", bare_ref)
 
 
 def git_changed_files_not_in_bare(repo_path: Path) -> list[str]:
@@ -225,15 +254,15 @@ def git_diff_text_not_in_bare(repo_path: Path) -> str:
 def git_check_ref_format(branch: str) -> bool:
     """Return whether *branch* is a valid git branch name (``git check-ref-format --branch``).
 
-    Delegates name validity to git rather than a hand-rolled regex. Needs no repo, so no
-    ``cwd`` -- runs in the current process directory, which is irrelevant to the check.
+    Delegates name validity to git rather than a hand-rolled regex. ``--branch`` expands
+    ``@{-N}`` shorthands, so the name is only valid if git echoes it back unchanged.
     """
     result = subprocess.run(  # noqa: S603
         ["git", "check-ref-format", "--branch", branch],  # noqa: S607
         capture_output=True,
         check=False,
     )
-    return result.returncode == 0
+    return result.returncode == 0 and result.stdout.decode().strip() == branch
 
 
 def git_branch_exists(repo_path: Path, branch: str) -> bool:
@@ -428,30 +457,29 @@ def git_file_mode_at_ref(repo_path: Path, ref: str, rel_path: str) -> str | None
     return fields[0] if result.returncode == 0 and fields else None
 
 
-def resolve_upstream_default_branch(repo_path: Path) -> str:
-    """Return *repo_path*'s ``origin``'s default branch name.
+def resolve_default_branch(repo_path: Path, remote: str) -> str:
+    """Return the default branch name of *remote* as seen from *repo_path*.
 
-    Prefers ``refs/remotes/origin/HEAD`` (set by ``git clone``/``git remote set-head``);
+    Prefers ``refs/remotes/<remote>/HEAD`` (set by ``git clone``/``git remote set-head``);
     falls back to ``main``, then ``master``, whichever exists as a remote-tracking ref.
-    Does not itself fetch -- relies on whatever ``origin`` state the caller already has
-    locally, so it is safe to use from a fetch-free context (e.g. ``doctor``) as well as
-    right after a fresh fetch (e.g. ``workflow sync``). Read-only guard query: always
-    runs for real, even in dry-run.
+    Does not itself fetch, so it is safe from a fetch-free context (e.g. ``doctor``).
+    Read-only guard query: always runs for real, even in dry-run.
 
     Raises :class:`WorkflowError` if none of the three resolve.
     """
-    result = subprocess.run(
-        ["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],  # noqa: S607
+    prefix = f"refs/remotes/{remote}/"
+    result = subprocess.run(  # noqa: S603
+        ["git", "symbolic-ref", "--quiet", f"{prefix}HEAD"],  # noqa: S607
         cwd=repo_path,
         capture_output=True,
         check=False,
     )
     if result.returncode == 0:
-        return result.stdout.decode().strip().rsplit("/", 1)[-1]
+        return result.stdout.decode().strip().removeprefix(prefix)
     for candidate in ("main", "master"):
-        if git_rev_parse(repo_path, f"refs/remotes/origin/{candidate}") is not None:
+        if git_rev_parse(repo_path, f"{prefix}{candidate}") is not None:
             return candidate
-    msg = f"{repo_path}: cannot resolve upstream default branch (no origin/HEAD, 'main', or 'master')."
+    msg = f"{repo_path}: cannot resolve {remote}'s default branch (no {remote}/HEAD, 'main', or 'master')."
     raise WorkflowError(msg)
 
 
