@@ -244,20 +244,24 @@ Directory structure:
     - Use color: distinguish by markers, fade out table delimiters to gray.
 - Markers, `-` for script, `@` for prompt shorthand, `( ... )` for other, `>` for transition
 ```
-                                              Command cheatsheet
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┓
-┃ planner                   ┃               ┃ builder      ┃ reviewer      ┃                ┃ reviewer        ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━┩
-│ intent         planning   │ todo          │ implementing │ checking      │ done  rejected │ review          │
-│ ─────────────  ────────── │ ───────────── │ ──────────── │ ───────────── │ ────  ──────── │ ─────────────── │
-│ @ ask          ( adjust ) │ - implement > │ @ ask        │ ( review )    │                │ @ full review   │
-│ ( answer )     @ critique │ - push        │ ( answer )   │ @ pr          │                │ @ followthrough │
-│ @ critique     ( revise ) │               │ @ build      │ ( adjust )    │                │ @ refresh       │
-│ ( revise )     - todo >   │               │ - check >    │ @ fix         │                │                 │
-│ @ plan >                  │               │              │ - validate    │                │                 │
-│ @ subdivide >             │               │              │ - accept >    │                │                 │
-│ - push                    │               │              │ - reject >    │                │                 │
-└───────────────────────────┴───────────────┴──────────────┴───────────────┴────────────────┴─────────────────┘
+                                             Command cheatsheet
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┓
+┃ planner                    ┃               ┃ builder      ┃ reviewer   ┃                ┃ reviewer        ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━┩
+│ intent          planning   │ todo          │ implementing │ checking   │ done  rejected │ review          │
+│ ──────────────  ────────── │ ───────────── │ ──────────── │ ────────── │ ────  ──────── │ ─────────────── │
+│ - new           ( adjust ) │ - implement > │ @ ask        │ ( review ) │                │ @ full review   │
+│ - push          @ critique │ - push        │ ( answer )   │ @ pr       │                │ @ followthrough │
+│ @ architecture  ( revise ) │               │ @ build      │ ( adjust ) │                │ @ refresh       │
+│ @ mvp           @ rebase   │               │ - check >    │ @ fix      │                │                 │
+│ @ ask           - todo >   │               │              │ @ rebase   │                │                 │
+│ ( answer )                 │               │              │ - validate │                │                 │
+│ @ critique                 │               │              │ - accept > │                │                 │
+│ ( revise )                 │               │              │ - reject > │                │                 │
+│ @ plan >                   │               │              │            │                │                 │
+│ @ subdivide >              │               │              │            │                │                 │
+└────────────────────────────┴───────────────┴──────────────┴────────────┴────────────────┴─────────────────┘
+
 ```
 
 
@@ -285,80 +289,21 @@ Directory structure after:
     - Pass in the model that the agent should be using (configurable per agent)
 - Also open a window named `builder-shell` with a docker exec bash in the builder sandbox
 
-### @ Ask
+### Prompt commands:
 
-- prompt: workflow ask {path_to_plan}
-- agent: any
-- plan can be in any state, but typically intent or implementing
-- "Ask any questions until you have a clear understanding."
+Ask, Critique, Plan, Subdivide, Rebase, Build, Pr, Fix, Rebase, Full review, Followthrough, Refresh
 
-### @ Critique
+### Todo: Approve a ticket for implementation
 
-- prompt: workflow critique {path_to_plan}
-- agent: planner
-- plan can be in any state, but typically intent or planning
-"""
-Critique the idea/plan.
-Please be honest, even harsh if necessary.
-Point out any flaws or weak points in the design.
-Point out any decisions that have a high risk of becoming technical debt.
-Propose additional features, to improve the effectiveness, robustness, and usability of the system.
-"""
-
-### @ Plan
-
-- prompt: workflow plan {path_to_plan}
-- agent: planner
-- Input plan should be `intent`
-- Agent creates a new ticket in state `planning` in its own repo.
-- Planning (plan & subdivide) may benefit from being a skill
-
-### @ Subdivide
-
-- prompt: workflow subdivide {path_to_plan}
-- agent: planner
-- input plan can be in any state, but typically intent or planning
-- Agent creates several new tickets in state `planning`
-
-### Todo: Approve a ticket
-
-- script: workflow todo {path_to_plan}
-- Ticket must be in state `planning` in a branch on the `planner` repo.
-- Run validate.
-- Push from `planner` to `bare`.
-- Pull to `canon`.
-- Transition the ticket to `todo`. Commit.
-- Merge to `main` branch.
-- Push from `canon` to `bare`.
-- Print workflow reminder: "next step is: workflow implement {new_path_to_plan}"
+Transitions the ticket from `planning` to `todo`.
 
 ### Implement: Schedule a ticket for implementation
 
-- script: workflow implement {path_to_plan}
-- Ticket must be in state `planning` or `todo` on the `main` branch of the `canon` repo.
-- If ticket is in `planning`, first perform the same push-pull-merge sequence as `todo`.
-- Transition the ticket to `implementing`. Commit. Push.
-- Fetch in builder.
-- Create a new branch `feat/{plan_name}` from main in builder.
-- Print workflow reminder: "next step is: workflow ask {new_path_to_plan}". Pause briefly so it can be seen.
-- Switch to the builder's tmux window via libtmux
+- Transition the ticket to `implementing`.
 
-### @ Build
+### Check: Hand-off implementation to reviewer
 
-- prompt: workflow build
-- `workflow ask {path_to_plan}` should be visible in the session history. If not: start by asking.
-- Ticket must be in state `implementing`.
-- Make one or more commits (depending on the feature complexity). Do not push.
-
-### Check
-
-- script: workflow check {path_to_plan}
-- Ticket must be in state `implementing` on a branch in the `builder` repo.
-- Rerun the pre-commit-hook inside the sandbox.
-- Run validate.
-- Transition the ticket to `checking`. Commit.
-- Push the branch.
-- Fetch in `reviewer`.
+- Transition the ticket from `implementing` to `checking`.
 
 ### Push
 
@@ -369,40 +314,6 @@ Propose additional features, to improve the effectiveness, robustness, and usabi
     - Push a manually modified plan in the `todo` state. No pull (no agent owns the todo state).
 - Source repo is usually `canon`, but not a hard constraint (see `repo_override` in configuration).
 - Git history is authoritative for locating the latest change to push.
-
-### @ PR Review
-
-- prompt: workflow pr {path_to_plan}
-- May benefit from being a skill
-"""
-Perform a thorough code review of the changes on the `feat/{plan_name}` branch.
-Focus on aspects such as
-software architecture,
-logic errors,
-missing or only partially implemented requirements,
-fit with existing architecture and conventions in the codebase,
-unit test quality and coverage,
-security,
-and any other relevant aspects.
-
-Also consider integration-style tests:
-are they worth the cost for this feature,
-and is the codebase ready for them (or should they be postponed to a later phase).
-
-Write a report on the results into `docs/plans/reviews/pr/{plan_name}_{commit}.md`.
-Commit your changes. Do not modify the code.
-"""
-
-### @ Fix
-
-- prompt: workflow fix [{path_to_review}]
-- agent: reviewer
-- Path to plan may be omitted, if the review is in the session history. In that case, fix what was most recently reviewed.
-- Reviewer implements the fixes on the `feat/{plan_name}` branch.
-- Outcomes after fix:
-    1. Human runs `validate` + `accept` if satisfied.
-    2. Human runs `reject` if the branch is unrecoverably off-track, re-specs with lessons learned.
-    3. Human continues iterating in chat, potentially with another `pr` + `fix` cycle.
 
 ### Validate
 
@@ -423,47 +334,13 @@ Commit your changes. Do not modify the code.
 
 ### Accept
 
-- script: workflow accept {path_to_plan}
-- Push the branch from `reviewer`
-- Pull to `canon`
-- Transitions ticket into `done`. Commit.
-- Merge to main
-- Push
+- Transition the ticket from `checking` to `done`.
 
 ### Reject
 
-- script: workflow reject {path_to_plan}
-- Transitions the ticket into `rejected` **in canon on `main`**. Commit. Push.
+- Transitions the ticket into `rejected` **in canon on `main`**.
 - The feature branch is *not* merged: rejection means the work is unwanted, and an `--ff-only` merge
   would drag the whole abandoned implementation into `main`. The branch is left unmerged (see 024).
-
-### Full review
-
-- prompt: workflow full review
-- Most likely to benefit from being a skill
-- Specialized substeps
-    - Search for dead code: run vulture, analyze the results
-    - Propose integration tests:
-      considering the software as a whole, which critical paths should be covered by integration-style tests?
-
-### Plan followthrough
-
-- prompt: workflow followthrough
-- Go through all plans in the states `intent`, `checking`, and `done`.
-- Compare features against the codebase. List unimplemented and only partially implemented features.
-
-### Ticket refresh
-
-- prompt: workflow refresh
-- Go through all tickets in the states `planning` and `todo`.
-- For each target ticket, check against any tickets in the `done` state that have been modified after the target ticket.
-- When needed, check against the implementation of the features in the codebase.
-- List all specifications that need updating due to decisions made after the target ticket was written.
-    - Decisions that have since been contradicted.
-    - Decisions that were initially left open, but have since been made. Remove obsolete branches.
-    - Features that can be specified in more detail as dependencies have taken shape.
-    - Specifications that seem suboptimal in the new context.
-    - Any other necessary updates.
 
 ### New: Create a new intent
 
@@ -587,7 +464,8 @@ def implement(command: ScriptCommand, canonical_path_to_plan: Plan, ...) -> int:
 - Common operations extracted into helpers that scripts can call.
 
 
-## TODO: future work
+## TODO: potential future work
+- fourth "freeform" agent
 - additional validate actions
     - in the future: custom bandit rules
         - check that tests only read from project dir or /tmp, and only write to /tmp
@@ -595,12 +473,3 @@ def implement(command: ScriptCommand, canonical_path_to_plan: Plan, ...) -> int:
         - check that tests mock sleep, to avoid unnecessarily slow tests
     - maybe in the future: if doing TDD, check that test and build only touch appropriate files
 - MCP to allow agents to perform some selected git operations outside the sandbox, e.g. `workflow check`
-- **Stretch goal: advanced tmux layout management**
-    - Side-by-side split: the human's workflow shell always on the left;
-      the right pane rotates to show different agents on demand.
-    - Dispatching any workflow command (e.g. `workflow implement 002`, `workflow ask 002`) automatically brings up
-      the target agent in the right pane using `join-pane` / `break-pane`.
-    - This improves ergonomics but adds significant complexity and fragility
-      (pane IDs change on session restart; terminal dimensions matter).
-      Implement only after the core libtmux dispatch is stable and proven.
-    - See docs/plans/intent/011_tmux_pane_rotation.md
