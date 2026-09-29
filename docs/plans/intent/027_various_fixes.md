@@ -26,17 +26,31 @@ Maybe `rebase` should be copied to `builder` as well.
 - Root cause: `_resolve_plan_target` (`workflow/tmux_dispatch.py`) resolves the plan to `builder/...`,
   finds no `rebase` target for the builder worktree, and falls back to the first target (planner).
   The `{{ branch }}`/git metadata is then also taken from the planner worktree.
+- The silent fallback to the first target in `_resolve_plan_target` is removed.
 - Recipient rule: the prompt goes to the agent owning the worktree the plan resolved to.
-  If that agent's state does not define the command, reuse the prompt text of the first definition of the command.
+  The definition is picked in this order: the plan's own state; another state owned by the same agent;
+  otherwise the command is *borrowed* from another agent.
   Git metadata (`{{ branch }}` etc.) comes from the actual target worktree.
   A plan resolving to `canon` (no agent) is an error.
+- Borrowing requires `--edit`: going outside the defined workflow, the user should adapt the prompt.
+  Without `--edit`, fail with an error listing the owning states/agents and pointing at `--edit`.
+  Borrowing a prompt with a `transition` (`plan`, `subdivide`) is refused even with `--edit`:
+  its audit entry would map the plan to the wrong worktree/state in the resolver's audit source.
+- `also_valid_in_states` is not reused for borrowing (borrowing is ad-hoc, not declared in config),
+  nor for 1.2: a plain second definition keeps cheatsheet, AGENTS.md, resolver and audit mapping untouched.
+- Every dispatch prints the resolved plan path and the recipient, not only on blind sends.
   Consequence: an unprefixed `rebase 023.1` may also go to builder if the active tmux window steers resolution there;
   acceptable given the warning below.
 - Blind-send check: compare the target with the active window of the tmux session
   (reuse `_active_tmux_repo` from `workflow/plan_resolver.py`).
-  The warning is printed on both dry-run and real sends; real sends additionally ask for confirmation.
+  The warning is printed on both dry-run and real sends. No confirmation dialog:
+  a blind real send instead waits an extra `tmux.prompt_send_delay`, giving time to Ctrl-C.
+- A blind send does not rotate the control pane (`go`). Fix the `send_prompt_to_agent` docstring,
+  which claims the window is selected.
 - `rebase` is added to the `implementing` state (builder) in `docs/default_config.yaml`,
-  using a YAML anchor so the prompt is defined once. No migration step for existing project configs.
+  using a YAML anchor on the prompt text so it is defined once. No migration step for existing project configs.
+- `doctor` reports audit entries that are impossible under the current config:
+  unknown commands, and transition prompts logged by an agent that doesn't own them.
 - Out of scope: whether `resolve_plan` always respects explicitly specified fields of the fuzzy input
   (separate intent).
 
@@ -62,8 +76,14 @@ Remove any now obsolete functions introduced only to support the old way of dedu
 
 Decisions:
 - `next_step` holds the plain text exactly as displayed (e.g. `workflow todo 027_foo`).
+  Nothing may ever parse it.
+- `status` displays it with the `workflow ` prefix and the plan name stripped, to keep the column narrow.
 - Prompt dispatch also prints its next step (from the command's reminder) and records it in the audit log.
-- `validate` writes an audit entry (it prints a next step but currently logs nothing).
+- `validate` writes an audit entry, only on success.
+  Its next step comes from a configured `reminder` (free text such as `accept or reject`),
+  replacing the hardcoded `_print_validate_next_step`.
+- Reminders are explicit: every command with a sensible next step gets a `reminder` in the default config,
+  and the implicit fallback ("first command of the transition target state") is removed.
 - Entries without `next_step` (old entries, commands without a reminder): `status` shows nothing, no fallback.
 
 ## 4) Bug: AGENTS.md dryrun
@@ -89,8 +109,8 @@ Decision: "resuming" means at least one step is already satisfied or needs `--co
 `--dry-run` doesn't say which worktree is targetted (e.g says just "would run: git pull").
 Add the worktree, e.g. "would run in reviewer: git pull".
 
-Decision: print `cwd` relative to the project directory; in oob mode this yields e.g.
-"would run in reviewer/docs: git pull", which is preferred over just the worktree name.
+Decision: print `cwd` relative to the current directory, falling back to the absolute path;
+run from the project directory in oob mode this yields e.g. "would run in reviewer/docs: git pull".
 
 ## 6) Bug: Incorrect stack anomalies
 
@@ -114,8 +134,15 @@ find -iname "023.2_layout_and_vocabulary*"
 
 `workflow status --all` also shows the plans as `done`
 
-Cause: `_stack_anomalies` (`workflow/commands/doctor.py`) checks `onto` via `resolve_plan`, which applies
-routing constraints and fails for done plans. Use `find_stack_member` (`workflow/stack.py`), which is not state-filtered.
+Cause (replicated with the project's audit log): `_name_matches_seq` in `workflow/plan_resolver.py` uses
+`Path(name).stem`, which truncates `023.1_project_metadata_file` to `023`. The audit source is therefore silent
+for every subdivided plan, so the done copies in several worktrees make `resolve_plan` ambiguous.
+Non-subdivided stacks (the existing test) are unaffected, which is why the test passed.
+`_top_level_number_from_name` has the same `.stem` bug.
+
+Decision: fix both name parsers, and have `_stack_anomalies` (`workflow/commands/doctor.py`) look up `onto`
+with `find_stack_member` (`workflow/stack.py`): `onto` is an exact name, fuzzy resolution is the wrong tool.
+Add a regression test with dotted sequence numbers.
 
 
 ## 7) Trim stack column
@@ -130,11 +157,18 @@ fall back to the raw `onto` value if it does not resolve.
 
 Check for repetitive tests that could be made DRY using `pytest.mark.parametrize`.
 
-Decision: covers the whole test suite, as a separate sub-plan.
+Decision: conservative, separate sub-plan. Only the worst offenders, chosen during planning.
+No coverage drop, no assertion dropped without a parametrized equivalent.
+
+## 9) Additions from critique
+
+- `Plan.worktree` property (raises on a path without worktree prefix) next to `path_in_worktree`;
+  replaces the hand-rolled `path.parts[0]` parsing.
+- A dry-run safety test: every registered script command run with `--dry-run` leaves files and git refs unchanged.
 
 ## Sequencing
 
 Decision: three sub-plans.
-- 027.1: prompt dispatch (items 1, 1.1, 1.2, 2)
-- 027.2: small fixes (items 3, 4, 5, 6, 7)
-- 027.3: test parametrization across the whole suite (item 8)
+- 027.1: prompt dispatch (items 1, 1.1, 1.2, 2; `Plan.worktree`; doctor audit check)
+- 027.2: small fixes (items 3, 4, 5, 6, 7; dry-run safety test)
+- 027.3: conservative test parametrization (item 8)
