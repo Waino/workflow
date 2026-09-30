@@ -92,25 +92,17 @@ def _make_config(tmp_path: Path) -> WorkflowConfig:
 
 
 class TestParsePlanFilename:
-    def test_simple(self) -> None:
-        seq, slug = parse_plan_filename("002_pydantic_models")
-        assert seq == [2]
-        assert slug == "pydantic_models"
-
-    def test_slug_with_underscores(self) -> None:
-        seq, slug = parse_plan_filename("003_foo_bar_baz")
-        assert seq == [3]
-        assert slug == "foo_bar_baz"
-
-    def test_hierarchical_sequence_number(self) -> None:
-        seq, slug = parse_plan_filename("012.1_impl")
-        assert seq == [12, 1]
-        assert slug == "impl"
-
-    def test_zero_padded_sequence_number(self) -> None:
-        seq, slug = parse_plan_filename("001_idea")
-        assert seq == [1]
-        assert slug == "idea"
+    @pytest.mark.parametrize(
+        ("filename", "seq", "slug"),
+        [
+            pytest.param("002_pydantic_models", [2], "pydantic_models", id="simple"),
+            pytest.param("003_foo_bar_baz", [3], "foo_bar_baz", id="slug_with_underscores"),
+            pytest.param("012.1_impl", [12, 1], "impl", id="hierarchical_sequence_number"),
+            pytest.param("001_idea", [1], "idea", id="zero_padded_sequence_number"),
+        ],
+    )
+    def test_valid(self, filename: str, seq: list[int], slug: str) -> None:
+        assert parse_plan_filename(filename) == (seq, slug)
 
     def test_missing_underscore_raises(self) -> None:
         with pytest.raises(ValueError, match="not enough values to unpack"):
@@ -126,47 +118,62 @@ class TestParseReviewFilename:
     _ts = datetime(2026, 3, 18, 14, 30, tzinfo=UTC)
     _ts_str = "2026-03-18T14-30-00Z"
 
-    def test_critique_simple(self) -> None:
-        seq, slug, ts, commit = parse_review_filename(f"002_pydantic_models_{self._ts_str}", ReviewSubState.CRITIQUE)
-        assert seq == [2]
-        assert slug == "pydantic_models"
-        assert ts == self._ts
-        assert commit is None
+    @pytest.mark.parametrize(
+        ("stem", "sub_state", "expected"),
+        [
+            pytest.param(
+                f"002_pydantic_models_{_ts_str}",
+                ReviewSubState.CRITIQUE,
+                ([2], "pydantic_models", _ts, None),
+                id="critique_simple",
+            ),
+            pytest.param(
+                f"003_foo_bar_{_ts_str}",
+                ReviewSubState.CRITIQUE,
+                ([3], "foo_bar", _ts, None),
+                id="critique_slug_with_underscores",
+            ),
+            pytest.param(
+                "002_pydantic_models_0e6baa9",
+                ReviewSubState.PR,
+                ([2], "pydantic_models", None, "0e6baa9"),
+                id="pr_simple",
+            ),
+            pytest.param(
+                "003_foo_bar_0e6baa9",
+                ReviewSubState.PR,
+                ([3], "foo_bar", None, "0e6baa9"),
+                id="pr_slug_with_underscores",
+            ),
+        ],
+    )
+    def test_valid(
+        self,
+        stem: str,
+        sub_state: ReviewSubState,
+        expected: tuple[list[int], str, datetime | None, str | None],
+    ) -> None:
+        """`expected` is (seq, slug, ts, commit)."""
+        assert parse_review_filename(stem, sub_state) == expected
 
-    def test_critique_slug_with_underscores(self) -> None:
-        seq, slug, ts, _commit = parse_review_filename(f"003_foo_bar_{self._ts_str}", ReviewSubState.CRITIQUE)
-        assert seq == [3]
-        assert slug == "foo_bar"
-        assert ts == self._ts
-
-    def test_pr_simple(self) -> None:
-        seq, slug, ts, commit = parse_review_filename("002_pydantic_models_0e6baa9", ReviewSubState.PR)
-        assert seq == [2]
-        assert slug == "pydantic_models"
-        assert ts is None
-        assert commit == "0e6baa9"
-
-    def test_pr_slug_with_underscores(self) -> None:
-        seq, slug, _ts, commit = parse_review_filename("003_foo_bar_0e6baa9", ReviewSubState.PR)
-        assert seq == [3]
-        assert slug == "foo_bar"
-        assert commit == "0e6baa9"
-
-    def test_critique_invalid_timestamp_raises(self) -> None:
-        with pytest.raises(ValueError, match="Invalid critique timestamp"):
-            parse_review_filename("002_plan_NOTADATE", ReviewSubState.CRITIQUE)
-
-    def test_pr_invalid_commit_raises(self) -> None:
-        with pytest.raises(ValueError, match="Invalid PR commit hash"):
-            parse_review_filename("002_plan_ZZZZZZZZ", ReviewSubState.PR)
-
-    def test_full_raises(self) -> None:
-        with pytest.raises(ValueError, match="Full reviews"):
-            parse_review_filename("2026-03-18T14-30-00Z_0e6baa9", ReviewSubState.FULL)
+    @pytest.mark.parametrize(
+        ("stem", "sub_state", "match"),
+        [
+            pytest.param(
+                "002_plan_NOTADATE",
+                ReviewSubState.CRITIQUE,
+                "Invalid critique timestamp",
+                id="critique_invalid_timestamp",
+            ),
+            pytest.param("002_plan_ZZZZZZZZ", ReviewSubState.PR, "Invalid PR commit hash", id="pr_invalid_commit"),
+            pytest.param("2026-03-18T14-30-00Z_0e6baa9", ReviewSubState.FULL, "Full reviews", id="full"),
+        ],
+    )
+    def test_raises(self, stem: str, sub_state: ReviewSubState, match: str) -> None:
+        with pytest.raises(ValueError, match=match):
+            parse_review_filename(stem, sub_state)
 
 
-# ---------------------------------------------------------------------------
-# find_all_plans_in_worktree
 # ---------------------------------------------------------------------------
 
 
@@ -361,54 +368,72 @@ class TestResolvePlan:
 
     # --- fuzzy name forms ---
 
-    def test_seq_only(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("plan_file", "reference", "expected"),
+        [
+            pytest.param(
+                ("canon", PlanState.PLANNING, "002_pydantic_models.md"),
+                "002",
+                {"slug": "pydantic_models"},
+                id="seq_only",
+            ),
+            pytest.param(
+                ("canon", PlanState.PLANNING, "002_pydantic_models.md"),
+                "002_pydantic_models",
+                {"slug": "pydantic_models"},
+                id="name_only",
+            ),
+            pytest.param(
+                ("canon", PlanState.PLANNING, "002_pydantic_models.md"),
+                "002_pydantic_models.md",
+                {"slug": "pydantic_models"},
+                id="name_with_md_suffix",
+            ),
+            pytest.param(
+                ("canon", PlanState.PLANNING, "002_pydantic_models.md"),
+                "planning/002_pydantic_models",
+                {"state": PlanState.PLANNING},
+                id="state_and_name",
+            ),
+            pytest.param(
+                ("canon", PlanState.INTENT, "001_idea.md"),
+                "intent/001",
+                {"slug": "idea"},
+                id="state_and_seq",
+            ),
+            pytest.param(
+                ("canon", PlanState.PLANNING, "002_pydantic_models.md"),
+                "docs/plans/planning/002_pydantic_models",
+                {"slug": "pydantic_models"},
+                id="docs_plans_prefix",
+            ),
+            pytest.param(
+                ("planner", PlanState.PLANNING, "002_foo.md"),
+                "planner/docs/plans/planning/002_foo",
+                {"slug": "foo"},
+                id="repo_prefix_in_path",
+            ),
+            pytest.param(
+                ("canon", PlanState.TODO, "003.1_subtask.md"),
+                "003.1",
+                {"slug": "subtask", "sequence_number": [3, 1]},
+                id="hierarchical_seq",
+            ),
+        ],
+    )
+    def test_fuzzy_name_forms(
+        self,
+        tmp_path: Path,
+        plan_file: tuple[str, PlanState, str],
+        reference: str,
+        expected: dict[str, object],
+    ) -> None:
+        """`plan_file` is (repo, state, filename); `expected` maps Plan attributes to the values asserted."""
         config = _make_config(tmp_path)
-        _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("002", config=config)
-        assert plan.slug == "pydantic_models"
-
-    def test_name_only(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path)
-        _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("002_pydantic_models", config=config)
-        assert plan.slug == "pydantic_models"
-
-    def test_name_with_md_suffix(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path)
-        _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("002_pydantic_models.md", config=config)
-        assert plan.slug == "pydantic_models"
-
-    def test_state_and_name(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path)
-        _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("planning/002_pydantic_models", config=config)
-        assert plan.state == PlanState.PLANNING
-
-    def test_state_and_seq(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path)
-        _make_plan(tmp_path, "canon", PlanState.INTENT, "001_idea.md")
-        plan = resolve_plan("intent/001", config=config)
-        assert plan.slug == "idea"
-
-    def test_docs_plans_prefix(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path)
-        _make_plan(tmp_path, "canon", PlanState.PLANNING, "002_pydantic_models.md")
-        plan = resolve_plan("docs/plans/planning/002_pydantic_models", config=config)
-        assert plan.slug == "pydantic_models"
-
-    def test_repo_prefix_in_path(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path)
-        _make_plan(tmp_path, "planner", PlanState.PLANNING, "002_foo.md")
-        plan = resolve_plan("planner/docs/plans/planning/002_foo", config=config)
-        assert plan.slug == "foo"
-
-    def test_hierarchical_seq(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path)
-        _make_plan(tmp_path, "canon", PlanState.TODO, "003.1_subtask.md")
-        plan = resolve_plan("003.1", config=config)
-        assert plan.slug == "subtask"
-        assert plan.sequence_number == [3, 1]
+        _make_plan(tmp_path, *plan_file)
+        plan = resolve_plan(reference, config=config)
+        for attr, value in expected.items():
+            assert getattr(plan, attr) == value
 
     # --- subcommand constraint ---
 
@@ -637,39 +662,51 @@ class TestAuditCheckMapping:
 
 
 class TestParseGitLogOutput:
-    def test_rename_line_returns_new_path_state(self) -> None:
-        output = "abc123 1700000000\nR100\tdocs/plans/planning/005_foo.md\tdocs/plans/implementing/005_foo.md"
+    @pytest.mark.parametrize(
+        ("output", "timestamp", "state"),
+        [
+            pytest.param(
+                "abc123 1700000000\nR100\tdocs/plans/planning/005_foo.md\tdocs/plans/implementing/005_foo.md",
+                1700000000,
+                PlanState.IMPLEMENTING,
+                id="rename_line_returns_new_path_state",
+            ),
+            pytest.param(
+                "abc123 1700000001\nA\tdocs/plans/todo/005_foo.md",
+                1700000001,
+                PlanState.TODO,
+                id="add_line_returns_state",
+            ),
+            pytest.param(
+                "abc123 1700000002\nM\tdocs/plans/checking/005_foo.md",
+                1700000002,
+                PlanState.CHECKING,
+                id="modify_line_returns_state",
+            ),
+            pytest.param(
+                "abc123 1700000003\nD\tdocs/plans/planning/005_foo.md\nA\tdocs/plans/implementing/005_foo.md",
+                1700000003,
+                PlanState.IMPLEMENTING,
+                id="delete_then_add_same_basename_returns_add_path",
+            ),
+        ],
+    )
+    def test_returns_state(self, output: str, timestamp: int, state: PlanState) -> None:
         result = _parse_git_log_output(output, PurePosixPath("docs", "plans"))
         assert result is not None
-        assert result.timestamp == 1700000000
-        assert result.state == PlanState.IMPLEMENTING
+        assert result.timestamp == timestamp
+        assert result.state == state
 
-    def test_add_line_returns_state(self) -> None:
-        output = "abc123 1700000001\nA\tdocs/plans/todo/005_foo.md"
-        result = _parse_git_log_output(output, PurePosixPath("docs", "plans"))
-        assert result is not None
-        assert result.state == PlanState.TODO
-
-    def test_modify_line_returns_state(self) -> None:
-        output = "abc123 1700000002\nM\tdocs/plans/checking/005_foo.md"
-        result = _parse_git_log_output(output, PurePosixPath("docs", "plans"))
-        assert result is not None
-        assert result.state == PlanState.CHECKING
-
-    def test_delete_then_add_same_basename_returns_add_path(self) -> None:
-        output = "abc123 1700000003\nD\tdocs/plans/planning/005_foo.md\nA\tdocs/plans/implementing/005_foo.md"
-        result = _parse_git_log_output(output, PurePosixPath("docs", "plans"))
-        assert result is not None
-        assert result.state == PlanState.IMPLEMENTING
-
-    def test_malformed_header_returns_none(self) -> None:
-        output = "not-a-hash-no-timestamp\nA\tdocs/plans/todo/005_foo.md"
-        result = _parse_git_log_output(output, PurePosixPath("docs", "plans"))
-        assert result is None
-
-    def test_empty_output_returns_none(self) -> None:
-        assert _parse_git_log_output("", PurePosixPath("docs", "plans")) is None
-        assert _parse_git_log_output("   \n  ", PurePosixPath("docs", "plans")) is None
+    @pytest.mark.parametrize(
+        "output",
+        [
+            pytest.param("not-a-hash-no-timestamp\nA\tdocs/plans/todo/005_foo.md", id="malformed_header"),
+            pytest.param("", id="empty_output"),
+            pytest.param("   \n  ", id="blank_output"),
+        ],
+    )
+    def test_returns_none(self, output: str) -> None:
+        assert _parse_git_log_output(output, PurePosixPath("docs", "plans")) is None
 
     @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
     def test_integration_real_git_repo(self, tmp_path: Path) -> None:
@@ -727,59 +764,42 @@ class TestTmuxSource:
         session.active_window = window
         return session
 
-    def test_server_not_alive_returns_none(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("alive", "window_name", "expected"),
+        [
+            pytest.param(False, None, None, id="server_not_alive"),
+            pytest.param(True, None, None, id="session_not_found"),
+            pytest.param(True, "random-window", None, id="window_name_not_a_repo"),
+            pytest.param(True, "builder", frozenset({WorktreeName.builder, WorktreeName.canon}), id="builder_window"),
+            pytest.param(True, "canon", frozenset({WorktreeName.canon}), id="canon_window"),
+        ],
+    )
+    def test_server_mock(
+        self,
+        tmp_path: Path,
+        *,
+        alive: bool,
+        window_name: str | None,
+        expected: frozenset[WorktreeName] | None,
+    ) -> None:
         config = _make_config(tmp_path)
         server = MagicMock()
-        server.is_alive.return_value = False
+        server.is_alive.return_value = alive
+        server.sessions.get.return_value = None if window_name is None else self._make_session(window_name)
         with patch("workflow.plan_resolver.libtmux.Server", return_value=server):
             constraint = _from_tmux(config)
-        assert constraint.repos is None
+        assert constraint.repos == expected
 
-    def test_session_not_found_returns_none(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(OSError("no server"), id="oserror"),
+            pytest.param(libtmux.exc.LibTmuxException("err"), id="libtmux_exception"),
+        ],
+    )
+    def test_server_raises_returns_none(self, tmp_path: Path, error: Exception) -> None:
         config = _make_config(tmp_path)
-        server = MagicMock()
-        server.is_alive.return_value = True
-        server.sessions.get.return_value = None
-        with patch("workflow.plan_resolver.libtmux.Server", return_value=server):
-            constraint = _from_tmux(config)
-        assert constraint.repos is None
-
-    def test_window_name_not_a_repo_returns_none(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path)
-        server = MagicMock()
-        server.is_alive.return_value = True
-        server.sessions.get.return_value = self._make_session("random-window")
-        with patch("workflow.plan_resolver.libtmux.Server", return_value=server):
-            constraint = _from_tmux(config)
-        assert constraint.repos is None
-
-    def test_builder_window_returns_builder_and_canon(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path)
-        server = MagicMock()
-        server.is_alive.return_value = True
-        server.sessions.get.return_value = self._make_session("builder")
-        with patch("workflow.plan_resolver.libtmux.Server", return_value=server):
-            constraint = _from_tmux(config)
-        assert constraint.repos == frozenset({WorktreeName.builder, WorktreeName.canon})
-
-    def test_canon_window_returns_canon_only(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path)
-        server = MagicMock()
-        server.is_alive.return_value = True
-        server.sessions.get.return_value = self._make_session("canon")
-        with patch("workflow.plan_resolver.libtmux.Server", return_value=server):
-            constraint = _from_tmux(config)
-        assert constraint.repos == frozenset({WorktreeName.canon})
-
-    def test_server_raises_oserror_returns_none(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path)
-        with patch("workflow.plan_resolver.libtmux.Server", side_effect=OSError("no server")):
-            constraint = _from_tmux(config)
-        assert constraint.repos is None
-
-    def test_server_raises_libtmux_exception_returns_none(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path)
-        with patch("workflow.plan_resolver.libtmux.Server", side_effect=libtmux.exc.LibTmuxException("err")):
+        with patch("workflow.plan_resolver.libtmux.Server", side_effect=error):
             constraint = _from_tmux(config)
         assert constraint.repos is None
 
