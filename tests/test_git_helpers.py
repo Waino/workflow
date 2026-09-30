@@ -858,7 +858,11 @@ def test_git_push_refspec_dry_run_does_not_mutate(tmp_path: Path) -> None:
     ],
 )
 def test_resolve_default_branch(
-    tmp_path: Path, upstream_branch: str, *, delete_origin_head: bool, expected: str,
+    tmp_path: Path,
+    upstream_branch: str,
+    *,
+    delete_origin_head: bool,
+    expected: str,
 ) -> None:
     upstream = _init_repo(tmp_path / "upstream")
     _git(["branch", "-m", upstream_branch], cwd=upstream)
