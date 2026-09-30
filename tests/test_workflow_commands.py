@@ -899,54 +899,37 @@ def test_log_no_filter_shows_all_entries(tmp_path: Path, monkeypatch: pytest.Mon
     assert "003_baz" in result.output
 
 
-def test_log_filter_by_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("args", "present", "absent"),
+    [
+        pytest.param(["--agent", "planner"], ("plan",), ("todo",), id="by_agent"),
+        pytest.param(["--command", "new"], ("001_foo", "003_baz"), ("todo",), id="by_command"),
+        # 2026-03-02 excluded
+        pytest.param(["--since", "2026-03-03"], ("002_bar", "003_baz"), ("todo",), id="by_since"),
+        # 2026-03-03 excluded
+        pytest.param(["--until", "2026-03-02"], ("001_foo", "todo"), ("002_bar",), id="by_until"),
+        # no plan files exist, so resolve_plan fails and the filter falls back to a substring match
+        pytest.param(["--plan", "baz"], ("003_baz",), ("001_foo",), id="by_plan_substring"),
+    ],
+)
+def test_log_filter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    args: list[str],
+    present: tuple[str, ...],
+    absent: tuple[str, ...],
+) -> None:
     config_path = _make_project(tmp_path)
     _write_entries(tmp_path)
     monkeypatch.chdir(tmp_path)
 
-    result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--agent", "planner"])
+    result = CliRunner().invoke(main, ["--config", str(config_path), "log", *args])
 
     assert result.exit_code == 0
-    assert "plan" in result.output
-    assert "todo" not in result.output
-
-
-def test_log_filter_by_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_path = _make_project(tmp_path)
-    _write_entries(tmp_path)
-    monkeypatch.chdir(tmp_path)
-
-    result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--command", "new"])
-
-    assert result.exit_code == 0
-    assert "001_foo" in result.output
-    assert "003_baz" in result.output
-    assert "todo" not in result.output
-
-
-def test_log_filter_by_since(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_path = _make_project(tmp_path)
-    _write_entries(tmp_path)
-    monkeypatch.chdir(tmp_path)
-
-    result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--since", "2026-03-03"])
-
-    assert result.exit_code == 0
-    assert "002_bar" in result.output
-    assert "003_baz" in result.output
-    assert "todo" not in result.output  # 2026-03-02 excluded
-
-
-def test_log_filter_by_plan_substring(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_path = _make_project(tmp_path)
-    _write_entries(tmp_path)
-    monkeypatch.chdir(tmp_path)
-    # "001" matches 001_foo but resolve_plan will fail (no actual plan files) → substring fallback
-    result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--plan", "baz"])
-
-    assert result.exit_code == 0
-    assert "003_baz" in result.output
-    assert "001_foo" not in result.output
+    for text in present:
+        assert text in result.output
+    for text in absent:
+        assert text not in result.output
 
 
 def test_log_since_invalid_value_exits_with_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -956,19 +939,6 @@ def test_log_since_invalid_value_exits_with_error(tmp_path: Path, monkeypatch: p
     result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--since", "not-a-date"])
 
     assert result.exit_code != 0
-
-
-def test_log_filter_by_until(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_path = _make_project(tmp_path)
-    _write_entries(tmp_path)
-    monkeypatch.chdir(tmp_path)
-
-    result = CliRunner().invoke(main, ["--config", str(config_path), "log", "--until", "2026-03-02"])
-
-    assert result.exit_code == 0
-    assert "001_foo" in result.output
-    assert "todo" in result.output
-    assert "002_bar" not in result.output  # 2026-03-03 excluded
 
 
 def test_log_filter_by_plan_strict_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
