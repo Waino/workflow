@@ -452,14 +452,12 @@ def test_git_is_valid_repo_true_for_bare_clone(tmp_path: Path) -> None:
     assert git_is_valid_repo(bare, bare=False) is False
 
 
-def test_git_is_valid_repo_false_for_non_repo(tmp_path: Path) -> None:
-    not_a_repo = tmp_path / "not_a_repo"
-    not_a_repo.mkdir()
-    assert git_is_valid_repo(not_a_repo) is False
-
-
-def test_git_is_valid_repo_false_for_missing_dir(tmp_path: Path) -> None:
-    assert git_is_valid_repo(tmp_path / "missing") is False
+@pytest.mark.parametrize("mkdir", [pytest.param(True, id="non_repo"), pytest.param(False, id="missing_dir")])
+def test_git_is_valid_repo_false(tmp_path: Path, *, mkdir: bool) -> None:
+    path = tmp_path / "not_a_repo"
+    if mkdir:
+        path.mkdir()
+    assert git_is_valid_repo(path) is False
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
@@ -849,35 +847,27 @@ def test_git_push_refspec_dry_run_does_not_mutate(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-def test_resolve_default_branch_prefers_origin_head(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("upstream_branch", "delete_origin_head", "expected"),
+    [
+        pytest.param("trunk", False, "trunk", id="prefers_origin_head"),
+        # A clone that never got origin/HEAD set (e.g. a shallow/partial mirror).
+        pytest.param("main", True, "main", id="falls_back_to_main"),
+        pytest.param("master", True, "master", id="falls_back_to_master"),
+        pytest.param("release/2.x", False, "release/2.x", id="keeps_slashes_in_branch_name"),
+    ],
+)
+def test_resolve_default_branch(
+    tmp_path: Path, upstream_branch: str, *, delete_origin_head: bool, expected: str,
+) -> None:
     upstream = _init_repo(tmp_path / "upstream")
-    _git(["branch", "-m", "trunk"], cwd=upstream)
+    _git(["branch", "-m", upstream_branch], cwd=upstream)
     clone = tmp_path / "clone"
     _git(["clone", str(upstream), str(clone)], cwd=tmp_path)
+    if delete_origin_head:
+        _git(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], cwd=clone)
 
-    assert resolve_default_branch(clone, "origin") == "trunk"
-
-
-@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-def test_resolve_default_branch_falls_back_to_main(tmp_path: Path) -> None:
-    upstream = _init_repo(tmp_path / "upstream")
-    clone = tmp_path / "clone"
-    _git(["clone", str(upstream), str(clone)], cwd=tmp_path)
-    # Simulate a clone that never got origin/HEAD set (e.g. a shallow/partial mirror).
-    _git(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], cwd=clone)
-
-    assert resolve_default_branch(clone, "origin") == "main"
-
-
-@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-def test_resolve_default_branch_falls_back_to_master(tmp_path: Path) -> None:
-    upstream = _init_repo(tmp_path / "upstream")
-    _git(["branch", "-m", "master"], cwd=upstream)
-    clone = tmp_path / "clone"
-    _git(["clone", str(upstream), str(clone)], cwd=tmp_path)
-    _git(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], cwd=clone)
-
-    assert resolve_default_branch(clone, "origin") == "master"
+    assert resolve_default_branch(clone, "origin") == expected
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
@@ -896,16 +886,6 @@ def _commit_file(repo: Path, name: str, message: str) -> None:
     (repo / name).write_text(f"{name}\n", encoding="utf-8")
     _git(["add", "."], cwd=repo)
     _git(["-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-m", message], cwd=repo)
-
-
-@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-def test_resolve_default_branch_keeps_slashes_in_branch_name(tmp_path: Path) -> None:
-    upstream = _init_repo(tmp_path / "upstream")
-    _git(["branch", "-m", "release/2.x"], cwd=upstream)
-    clone = tmp_path / "clone"
-    _git(["clone", str(upstream), str(clone)], cwd=tmp_path)
-
-    assert resolve_default_branch(clone, "origin") == "release/2.x"
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
