@@ -156,7 +156,7 @@ def _display_next_step(entry: AuditLogEntry | None) -> str:
     """Return the recorded next step, minus the redundant ``workflow`` prefix and plan name."""
     if entry is None or entry.next_step is None:
         return ""
-    text = entry.next_step.replace("workflow ", "")
+    text = entry.next_step.removeprefix("workflow ")
     return text.replace(f" {entry.input_plan}", "") if entry.input_plan else text
 
 
@@ -195,7 +195,7 @@ def status(ctx: click.Context, show_all: bool) -> None:  # noqa: FBT001
         fm = read_plan_frontmatter(layout, plan)
         stack_cell = ""
         if fm is not None and fm.onto is not None:
-            base = find_stack_member(layout, fm.onto)
+            base = find_stack_member(layout, fm.onto, prefer_repo=plan.worktree)
             stack_cell = base.sequence_number_str if base is not None else fm.onto
         table.add_row(
             plan.sequence_number_str,

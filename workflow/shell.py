@@ -37,8 +37,8 @@ def print_next_step(next_step: str | None) -> None:
 
 def _display_cwd(cwd: str | Path) -> str:
     """Return *cwd* relative to the current directory when below it (``.`` when equal), else absolute."""
-    path = Path(cwd).absolute()
-    here = Path.cwd()
+    path = Path(cwd).resolve()
+    here = Path.cwd().resolve()
     return str(path.relative_to(here)) if path.is_relative_to(here) else str(path)
 
 

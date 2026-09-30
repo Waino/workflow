@@ -809,6 +809,7 @@ def test_status_last_action_and_next_step_from_audit_log(tmp_path: Path, monkeyp
         ("workflow check 001_foo", "001_foo", "check"),
         ("accept or reject", "001_foo", "accept or reject"),
         ("workflow push", None, "push"),
+        ("git commit, then workflow push", None, "git commit, then workflow push"),
     ],
 )
 def test_display_next_step(next_step: str | None, input_plan: str | None, expected: str) -> None:
@@ -823,10 +824,22 @@ def test_display_next_step(next_step: str | None, input_plan: str | None, expect
     assert wi._display_next_step(None) == ""
 
 
-def test_status_stack_cell_shows_the_base_sequence_number(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("repo", "state"),
+    [
+        pytest.param("canon", "implementing", id="canon"),
+        pytest.param("planner", "planning", id="base_only_in_planner"),
+    ],
+)
+def test_status_stack_cell_shows_the_base_sequence_number(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    repo: str,
+    state: str,
+) -> None:
     config_path = _make_project(tmp_path)
-    _make_plan(tmp_path, "canon", "implementing", "005_foo.md")
-    stacked = tmp_path / "canon" / "docs" / "plans" / "implementing" / "006_bar.md"
+    _make_plan(tmp_path, repo, state, "005_foo.md")
+    stacked = tmp_path / repo / "docs" / "plans" / state / "006_bar.md"
     stacked.write_text(render_frontmatter(PlanFrontmatter(onto="005_foo")) + "# plan\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(wi, "git_status", MagicMock(return_value=""))

@@ -45,4 +45,19 @@ def test_dry_run_shows_absolute_cwd_outside_current_directory(
 
     run_command(["git", "status"], dry_run=True, cwd=there)
 
-    assert "".join(capsys.readouterr().out.split()) == f"wouldrunin{there}:gitstatus"
+    assert "".join(capsys.readouterr().out.split()) == f"wouldrunin{there.resolve()}:gitstatus"
+
+
+def test_dry_run_shows_relative_cwd_when_entered_through_a_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "real").mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(tmp_path / "real")
+    monkeypatch.chdir(link)
+
+    run_command(["git", "status"], dry_run=True, cwd=link / "planner")
+
+    assert capsys.readouterr().out.strip() == "would run in planner: git status"
