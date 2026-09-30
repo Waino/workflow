@@ -16,6 +16,7 @@ from workflow.cli import main
 from workflow.commands.doctor import (
     _active_branches,
     _audit_anomalies,
+    _audit_notes,
     _bare_staleness_notes,
     _check_bare,
     _check_worktree,
@@ -463,27 +464,63 @@ def test_doctor_cli_prints_bare_staleness_section(tmp_path: Path, monkeypatch: p
     assert "run workflow sync" in result.output
 
 
-def _audit(tmp_path: Path, *entries: tuple[str, str]) -> list[str]:
+def _write_audit(tmp_path: Path, *entries: tuple[str, str, str | None]) -> WorkflowConfig:
     config = _config_for(tmp_path)
     lines = [
-        AuditLogEntry(timestamp=datetime(2026, 1, 1, tzinfo=UTC), actor=actor, command=command, input_plan="005_foo")
-        for actor, command in entries
+        AuditLogEntry(timestamp=datetime(2026, 1, 1, tzinfo=UTC), actor=actor, command=command, input_plan=plan)
+        for actor, command, plan in entries
     ]
     (tmp_path / AUDIT_LOG_FILENAME).write_text("".join(e.model_dump_json() + "\n" for e in lines), encoding="utf-8")
+    return config
+
+
+def _audit(tmp_path: Path, *entries: tuple[str, str]) -> list[str]:
+    config = _write_audit(tmp_path, *((actor, command, "005_foo") for actor, command in entries))
     return _audit_anomalies(config, tmp_path)
 
 
-def test_audit_anomalies_flags_unknown_command_and_foreign_transition(tmp_path: Path) -> None:
-    anomalies = _audit(tmp_path, ("planner", "bogus"), ("builder", "plan"))
+def test_audit_anomalies_flags_foreign_transition(tmp_path: Path) -> None:
+    anomalies = _audit(tmp_path, ("builder", "plan"))
 
-    assert len(anomalies) == 2
-    assert "planner bogus 005_foo: unknown command" in anomalies[0]
-    assert "builder plan 005_foo" in anomalies[1]
+    assert len(anomalies) == 1
+    assert "builder plan 005_foo: state-changing prompt sent to an agent that does not own it" in anomalies[0]
 
 
 @pytest.mark.parametrize(
     ("actor", "command"),
-    [("planner", "plan"), ("builder", "critique"), ("human", "start"), ("human", "todo"), ("builder", "rebase")],
+    [
+        ("planner", "plan"),
+        ("builder", "critique"),
+        ("human", "start"),
+        ("human", "todo"),
+        ("builder", "rebase"),
+        ("planner", "bogus"),
+    ],
 )
 def test_audit_anomalies_accepts_legitimate_entries(tmp_path: Path, actor: str, command: str) -> None:
     assert _audit(tmp_path, (actor, command)) == []
+
+
+@pytest.mark.parametrize(
+    ("state", "plan", "noted"),
+    [
+        pytest.param("planning", "005_foo", True, id="active_plan"),
+        pytest.param("done", "005_foo", False, id="done_plan"),
+        pytest.param("rejected", "005_foo", False, id="rejected_plan"),
+        pytest.param("planning", "006_gone", False, id="missing_plan"),
+        pytest.param("planning", None, False, id="stateless"),
+    ],
+)
+def test_audit_notes_list_unknown_commands_only_for_active_plans(
+    tmp_path: Path,
+    state: str,
+    plan: str | None,
+    *,
+    noted: bool,
+) -> None:
+    config = _write_audit(tmp_path, ("planner", "bogus", plan), ("planner", "critique", plan))
+    _make_plan(tmp_path / "canon", state)
+
+    notes = _audit_notes(config, config.layout())
+
+    assert notes == (["2026-01-01T00:00:00+00:00 planner bogus 005_foo: unknown command"] if noted else [])

@@ -42,7 +42,7 @@ from workflow.git_helpers import (
 from workflow.metadata import LEGACY_ROOT_MARKER, ProjectMode
 from workflow.models import PlanState
 from workflow.names import DOCS_REPO, WorktreeName
-from workflow.plan_resolver import find_all_plans_in_worktree
+from workflow.plan_resolver import find_all_plans, find_all_plans_in_worktree
 from workflow.registry import _SCRIPT_REGISTRY, register_script
 from workflow.shell import console, error_console
 from workflow.stack import BRANCH_PREFIX, branch_for_plan, find_stack_member, read_plan_frontmatter
@@ -51,7 +51,7 @@ from workflow.validate import agents_md_copy_mismatches
 if TYPE_CHECKING:
     from workflow.config import WorkflowConfig
     from workflow.layout import Layout
-    from workflow.models import Plan
+    from workflow.models import AuditLogEntry, Plan
 
 _ACTIVE_FEATURE_BRANCH_STATES = (PlanState.IMPLEMENTING, PlanState.CHECKING)
 
@@ -345,25 +345,39 @@ def _stack_anomalies(layout: Layout) -> list[str]:
     return anomalies
 
 
+def _audit_line(entry: AuditLogEntry, reason: str) -> str:
+    return f"{entry.timestamp.isoformat()} {entry.actor} {entry.command} {entry.input_plan}: {reason}"
+
+
 def _audit_anomalies(config: WorkflowConfig, project_dir: Path) -> list[str]:
-    """Flag audit entries no current command could have written (they corrupt the resolver's audit source)."""
-    known = set(_SCRIPT_REGISTRY)
+    """Flag state-changing prompts sent to a foreign agent (they corrupt the resolver's audit source)."""
     transition_agents: dict[str, set[str | None]] = defaultdict(set)
     for state_config in config.states.values():
         for cmd in state_config.commands:
-            known.add(cmd.name)
             if isinstance(cmd, PromptCommand) and cmd.transition is not None:
                 transition_agents[cmd.name].add(state_config.agent)
-    anomalies: list[str] = []
-    for entry in read_audit_log(project_dir):
-        if entry.command not in known:
-            reason = "unknown command"
-        elif entry.command in transition_agents and entry.actor not in transition_agents[entry.command]:
-            reason = "state-changing prompt sent by an agent that does not own it"
-        else:
-            continue
-        anomalies.append(f"{entry.timestamp.isoformat()} {entry.actor} {entry.command} {entry.input_plan}: {reason}")
-    return anomalies
+    return [
+        _audit_line(entry, "state-changing prompt sent to an agent that does not own it")
+        for entry in read_audit_log(project_dir)
+        if entry.command in transition_agents and entry.actor not in transition_agents[entry.command]
+    ]
+
+
+def _audit_notes(config: WorkflowConfig, layout: Layout) -> list[str]:
+    """Note entries for active plans whose command no longer exists (e.g. renamed in config.yaml).
+
+    Non-failing: the log is append-only, so a hard anomaly could never be cleared.
+    """
+    known = set(_SCRIPT_REGISTRY) | {cmd.name for state in config.states.values() for cmd in state.commands}
+    try:
+        active = {p.name for p in find_all_plans(layout) if p.state not in (PlanState.DONE, PlanState.REJECTED)}
+    except PlanCollisionError:
+        return []  # already reported by _duplicate_plan_anomalies
+    return [
+        _audit_line(entry, "unknown command")
+        for entry in read_audit_log(layout.project_dir)
+        if entry.command not in known and entry.input_plan in active
+    ]
 
 
 def _print_anomaly_section(title: str, messages: list[str]) -> None:
@@ -452,6 +466,7 @@ def doctor(ctx: click.Context) -> None:
 
     audit_anomalies = _audit_anomalies(config, project_dir)
     _print_anomaly_section("Audit log anomalies", audit_anomalies)
+    _print_anomaly_section("Audit log notes", _audit_notes(config, layout))
 
     any_anomaly = (
         any(c.anomalies for c in checks)

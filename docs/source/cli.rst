@@ -87,8 +87,10 @@ Setup and session management
     ``main`` matches the bare repo) and flag plan-file anomalies (e.g. duplicate
     sequence numbers) and stack anomalies (a broken ``onto``, a stack branch whose
     plans are all ``done``/``rejected``, or a recorded branch that exists nowhere),
-    and impossible audit-log entries (a command that no longer exists, or a
-    state-changing prompt logged by an agent that does not own it).
+    and impossible audit-log entries (a state-changing prompt logged by an agent
+    that does not own it). Audit entries for active plans whose command no longer
+    exists (e.g. renamed in ``config.yaml``) are listed as non-failing *Audit log
+    notes*.
     Exits non-zero if any anomaly is found; the separate *notes* column carries
     observations that are normal during parallel work (e.g. a branch that still
     needs rebasing) and never affects the exit code. Out-of-band: one ``bare``/
