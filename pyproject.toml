@@ -42,6 +42,7 @@ target-version = ['py311']
 
 [tool.pytest.ini_options]
 addopts = "-v --cov=workflow --cov-report html --ignore-glob docs/**"
+markers = ["slow: low-value or redundant tests skipped by the pre-commit hook; plain `pytest` runs them"]
 
 [tool.ruff]
 line-length = 120
@@ -90,6 +91,7 @@ dev = [
     "mypy-extensions>=1.1.0",
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.15.6",
     "sphinx>=8.1.3",
     "types-pyyaml>=6.0.12.20250915",

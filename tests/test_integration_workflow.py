@@ -1098,6 +1098,7 @@ def test_reject_tip_before_check_then_accept_base(tmp_path: Path, monkeypatch: p
     assert (canon / "docs" / "plans" / "done" / "005_foo.md").exists()
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_implement_onto_refused_when_base_already_has_a_child(
     tmp_path: Path,
@@ -1163,6 +1164,7 @@ def test_implement_onto_infers_base_from_builder_branch(tmp_path: Path, monkeypa
     assert "onto: 005_foo" in (canon / "docs" / "plans" / "implementing" / "006_bar.md").read_text(encoding="utf-8")
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_implement_onto_dry_run_mutates_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = setup_stacked_project(tmp_path, monkeypatch)
@@ -1188,6 +1190,7 @@ def test_implement_onto_dry_run_mutates_nothing(tmp_path: Path, monkeypatch: pyt
     assert (tmp_path / "canon" / "docs" / "plans" / "todo" / "006_bar.md").exists()
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_stacked_accept_rebases_when_main_advanced_after_onto(
     tmp_path: Path,
@@ -1254,6 +1257,7 @@ def test_implement_onto_refused_when_reviewer_has_unpushed_commits(
     assert run_workflow(config_path, "implement", "006_bar", "--onto", "005_foo").exit_code == 0
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_implement_onto_refused_when_base_was_rejected(
     tmp_path: Path,
@@ -1325,7 +1329,10 @@ def test_reject_stacked_plan_prints_branch_reset_that_spares_main(
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
-@pytest.mark.parametrize(("base", "tip"), [("005_foo", "006_bar"), ("005.1_foo", "005.2_bar")])
+@pytest.mark.parametrize(
+    ("base", "tip"),
+    [pytest.param("005_foo", "006_bar", marks=pytest.mark.slow), ("005.1_foo", "005.2_bar")],
+)
 def test_doctor_is_clean_after_an_accepted_stack(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

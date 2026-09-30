@@ -97,6 +97,10 @@ development. Please note this documentation assumes you already have
         $ mypy --install-types
         $ python -m pytest
 
+   The pre-commit hook runs ``pytest -m "not slow" -n auto`` (parallel, via
+   pytest-xdist). Tests marked ``slow`` run only with plain ``pytest``, so run the
+   full suite before handing off a change.
+
 
 6. If your contribution is a bug fix or new feature, you may want to add a test
    to the existing test suite. See section Add a New Test below for details.

@@ -8,7 +8,7 @@ black --skip-string-normalization workflow tests/* scripts
 ruff check --fix
 
 # Unit tests
-python -m pytest -m "not slow"
+python -m pytest -m "not slow" -n auto
 
 # Type checking
 mypy workflow tests scripts
