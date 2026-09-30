@@ -38,20 +38,17 @@ from workflow.metadata import METADATA_FILENAME, CodeRepoMeta, ProjectMetadata, 
 # ---------------------------------------------------------------------------
 
 
-def test_normalise_strips_trailing_whitespace() -> None:
-    assert normalise("foo   \nbar\n") == "foo\nbar\n"
-
-
-def test_normalise_converts_crlf() -> None:
-    assert normalise("a\r\nb\r\n") == "a\nb\n"
-
-
-def test_normalise_adds_trailing_newline() -> None:
-    assert normalise("hello") == "hello\n"
-
-
-def test_normalise_drops_trailing_blank_lines() -> None:
-    assert normalise("a\n\n\n") == "a\n"
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("foo   \nbar\n", "foo\nbar\n", id="strips_trailing_whitespace"),
+        pytest.param("a\r\nb\r\n", "a\nb\n", id="converts_crlf"),
+        pytest.param("hello", "hello\n", id="adds_trailing_newline"),
+        pytest.param("a\n\n\n", "a\n", id="drops_trailing_blank_lines"),
+    ],
+)
+def test_normalise(text: str, expected: str) -> None:
+    assert normalise(text) == expected
 
 
 def test_normalise_idempotent() -> None:
