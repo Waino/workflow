@@ -200,7 +200,7 @@ def test_init_rerun_without_continue_aborts_and_prints_preview(
     second = CliRunner().invoke(main, ["--config", str(config_path), "init"])
 
     assert second.exit_code == 1
-    assert "Resume plan for `init`:" in second.output
+    assert second.output.count("Resume plan for `init`:") == 1
     assert "--continue" in second.output
     # Nothing should have been mutated by the aborted rerun.
     assert run_git(["rev-parse", "HEAD"], cwd=tmp_path / "bare").stdout == bare_head_before
@@ -897,6 +897,7 @@ def test_implement_needs_continue_for_leftover_branch(tmp_path: Path, monkeypatc
 
     assert result.exit_code == 1
     assert "pass --continue" in result.output
+    assert result.output.count("Resume plan for `implement`:") == 1
     assert (tmp_path / "canon" / "docs" / "plans" / "todo" / "005_foo.md").exists()
 
     result = CliRunner().invoke(main, ["--config", str(config_path), "implement", "005_foo", "--continue"])
