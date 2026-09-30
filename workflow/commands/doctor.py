@@ -21,9 +21,7 @@ from workflow.audit import read_audit_log
 from workflow.config import PromptCommand
 from workflow.exceptions import (
     AgentsMdGenerationError,
-    AmbiguousPlanError,
     PlanCollisionError,
-    PlanNotFoundError,
     WorkflowError,
 )
 from workflow.git_helpers import (
@@ -44,10 +42,10 @@ from workflow.git_helpers import (
 from workflow.metadata import LEGACY_ROOT_MARKER, ProjectMode
 from workflow.models import PlanState
 from workflow.names import DOCS_REPO, WorktreeName
-from workflow.plan_resolver import find_all_plans_in_worktree, resolve_plan
+from workflow.plan_resolver import find_all_plans_in_worktree
 from workflow.registry import _SCRIPT_REGISTRY, register_script
 from workflow.shell import console, error_console
-from workflow.stack import BRANCH_PREFIX, branch_for_plan, read_plan_frontmatter
+from workflow.stack import BRANCH_PREFIX, branch_for_plan, find_stack_member, read_plan_frontmatter
 from workflow.validate import agents_md_copy_mismatches
 
 if TYPE_CHECKING:
@@ -309,7 +307,7 @@ def _branch_exists_anywhere(layout: Layout, branch: str) -> bool:
     )
 
 
-def _stack_anomalies(layout: Layout, config: WorkflowConfig) -> list[str]:
+def _stack_anomalies(layout: Layout) -> list[str]:
     """Return one message per stack-related anomaly.
 
     Covers a broken `onto`, an orphaned stack branch, or a `branches` entry pointing at a
@@ -327,11 +325,8 @@ def _stack_anomalies(layout: Layout, config: WorkflowConfig) -> list[str]:
         branch_members[branch_for_plan(layout, plan)].append(plan)
         if fm is None:
             continue
-        if fm.onto is not None:
-            try:
-                resolve_plan(fm.onto, config=config)
-            except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError, WorkflowError):
-                anomalies.append(f"{plan.name}: onto={fm.onto!r} does not resolve to a plan")
+        if fm.onto is not None and find_stack_member(layout, fm.onto) is None:
+            anomalies.append(f"{plan.name}: onto={fm.onto!r} does not resolve to a plan")
         repo_branch = fm.branches.get(DOCS_REPO)
         # Only while the plan is in flight: `accept` deletes the shared branch but leaves
         # the frontmatter naming it, which is a record, not an anomaly.
@@ -443,7 +438,7 @@ def doctor(ctx: click.Context) -> None:
     duplicate_anomalies = _duplicate_plan_anomalies(layout)
     _print_anomaly_section("Duplicated plan files", duplicate_anomalies)
 
-    stack_anomalies = _stack_anomalies(layout, config)
+    stack_anomalies = _stack_anomalies(layout)
     _print_anomaly_section("Stack anomalies", stack_anomalies)
 
     agents_md_anomalies = _agents_md_hash_anomalies(layout)

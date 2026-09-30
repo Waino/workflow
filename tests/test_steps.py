@@ -64,7 +64,7 @@ def test_abort_unless_continue_true_when_rough_and_not_continue(capsys: pytest.C
     plan.needs_continue("c", "rough")
 
     assert plan.abort_unless_continue(cont=False) is True
-    assert "Resume plan for `init`:" in capsys.readouterr().out
+    assert capsys.readouterr().out == ""
 
 
 def test_abort_unless_continue_false_when_rough_and_continue_given() -> None:
@@ -72,3 +72,24 @@ def test_abort_unless_continue_false_when_rough_and_continue_given() -> None:
     plan.needs_continue("c", "rough")
 
     assert plan.abort_unless_continue(cont=True) is False
+
+
+@pytest.mark.parametrize(
+    ("marks", "title"),
+    [
+        (("will_run", "will_run"), "Execution plan for `init`:"),
+        (("will_run", "satisfied"), "Resume plan for `init`:"),
+        (("will_run", "needs_continue"), "Resume plan for `init`:"),
+    ],
+)
+def test_render_title_depends_on_decisions(
+    capsys: pytest.CaptureFixture[str],
+    marks: tuple[str, ...],
+    title: str,
+) -> None:
+    plan = ResumePlan(title="init")
+    for index, mark in enumerate(marks):
+        getattr(plan, mark)(f"step{index}", *(["why"] if mark != "will_run" else []))
+    plan.render()
+
+    assert capsys.readouterr().out.startswith(title)

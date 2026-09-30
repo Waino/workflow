@@ -46,6 +46,7 @@ states:
 
           Once ambiguities have been cleared up and decisions have been made,
           write the fleshed out architecture document into `docs/plans/planning/002_architecture.md`.
+        reminder: mvp
       - command_type: prompt
         name: mvp
         description: Create a plan sequence for the MVP slice
@@ -60,12 +61,14 @@ states:
           Use running numbers starting from 3, e.g. `docs/plans/planning/003_foo.md` and docs/plans/planning/004_bar.md`
 
           Commit your changes.
+        reminder: critique
       - command_type: prompt
         name: ask
         description: Read the plan; ask clarifying questions.
         prompt: |
           Read the plan at {{ plan.path_in_worktree }}.
           Ask any questions until you have a clear understanding.
+        reminder: answer
       - command_type: manual
         name: answer
         description: Human answers questions in chat.
@@ -79,6 +82,7 @@ states:
           Point out any flaws or weak points in the design.
           Point out any decisions that have a high risk of becoming technical debt.
           Propose additional features, to improve the effectiveness, robustness, and usability of the system.
+        reminder: plan or subdivide
       - command_type: manual
         name: revise
         description: Human revises the plan.
@@ -102,6 +106,7 @@ states:
           e.g. `docs/plans/planning/{{ plan.sequence_number_str }}.1_foo.md` and `docs/plans/planning/{{ plan.sequence_number_str }}.2_bar.md`
           Commit your changes.
         transition: planning
+        reminder: critique
 
   planning:
     description: Plans being drafted.
@@ -120,6 +125,7 @@ states:
           Point out any flaws or weak points in the design.
           Point out any decisions that have a high risk of becoming technical debt.
           Is this plan well scoped to proceed to building, or should it be subdivided?
+        reminder: todo
       - command_type: manual
         name: revise
         description: Human revises the plan.
@@ -135,10 +141,16 @@ states:
           Do not push: you have no write access to the shared repository.
         reminder: validate
       - command_type: script
+        name: validate
+        description: Run verification checks.
+        script: validate
+        reminder: todo or reject
+      - command_type: script
         name: todo
         description: Approve for implementation.
         script: todo
         transition: todo
+        reminder: implement
 
   todo:
     description: Plans approved for implementation.
@@ -168,6 +180,7 @@ states:
           Read the plan at {{ plan.path_in_worktree }}.
           Ask any questions until you have a clear understanding.
           Do not write code yet.
+        reminder: build
       - command_type: manual
         name: answer
         description: Human answers questions in chat.
@@ -245,6 +258,7 @@ states:
         name: validate
         description: Run verification checks.
         script: validate
+        reminder: accept or reject
       - command_type: script
         name: accept
         description: Accept and merge to main.

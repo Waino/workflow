@@ -80,10 +80,10 @@ from workflow.metadata import (
 )
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import DOCS_REPO, AgentName, WorktreeName
-from workflow.next_step import find_command, find_next_step, find_reminder_name, format_next_step_invocation
+from workflow.next_step import find_command, format_next_step
 from workflow.plan_resolver import next_intent_number, resolve_plan
 from workflow.registry import register_script
-from workflow.shell import console, error_console, print_workflow_error, run_command
+from workflow.shell import console, error_console, print_next_step, print_workflow_error, run_command
 from workflow.stack import (
     BRANCH_PREFIX,
     branch_for_plan,
@@ -140,6 +140,7 @@ def _write_script_audit_log(  # noqa: PLR0913
     input_plan: str | None = None,
     output_plans: list[str] | None = None,
     stacked_on: list[str] | None = None,
+    next_step: str | None = None,
 ) -> None:
     if dry_run:
         return
@@ -153,6 +154,7 @@ def _write_script_audit_log(  # noqa: PLR0913
             input_plan=input_plan,
             output_plans=output_plans or [],
             stacked_on=stacked_on or [],
+            next_step=next_step,
         ),
         dry_run=dry_run,
     )
@@ -220,13 +222,10 @@ def _print_stack_note(branch: str, stack: list[Plan]) -> None:
     console.print(f"[bold]Stack on {branch}:[/bold] {names}")
 
 
-def _print_command_reminder(config: WorkflowConfig, state: PlanState, command_name: str, plan_name: str) -> None:
-    reminder = find_reminder_name(config, state, command_name)
-    if reminder is None:
-        return
-    next_step = find_next_step(config, state, command_name)
-    formatted = format_next_step_invocation(reminder, plan_name, command=next_step)
-    console.print(f"Next step: [bold]{formatted}[/bold]")
+def _command_next_step(config: WorkflowConfig, state: PlanState, command_name: str, plan_name: str) -> str | None:
+    """Return the next-step text configured for *command_name* in *state*, or ``None``."""
+    command = find_command(config, state, command_name)
+    return None if command is None else format_next_step(config, command, plan_name)
 
 
 def _open_in_editor(path: Path) -> None:
@@ -1214,8 +1213,9 @@ def new(ctx: click.Context, slug: str) -> None:
             intent_path.relative_to(canon_repo),
             dry_run=dry_run,
         )
-        _write_script_audit_log(config, "new", dry_run=dry_run, output_plans=[intent_path.stem])
-        _print_command_reminder(config, PlanState.INTENT, "new", intent_path.name)
+        next_step = _command_next_step(config, PlanState.INTENT, "new", intent_path.name)
+        _write_script_audit_log(config, "new", dry_run=dry_run, output_plans=[intent_path.stem], next_step=next_step)
+        print_next_step(next_step)
     except (subprocess.CalledProcessError, WorkflowError) as exc:
         print_workflow_error(exc)
         ctx.exit(1)
@@ -1307,8 +1307,9 @@ def todo(ctx: click.Context, plan_path: str, *, force_validation: bool, force_pu
         )
         git_push(canon_repo, dry_run=dry_run)
         _sync_repos_best_effort(layout, park=WorktreeName.planner, dry_run=dry_run)
-        _write_script_audit_log(config, "todo", dry_run=dry_run, input_plan=plan.name)
-        _print_command_reminder(config, PlanState.PLANNING, "todo", new_plan.name)
+        next_step = _command_next_step(config, PlanState.PLANNING, "todo", new_plan.name)
+        _write_script_audit_log(config, "todo", dry_run=dry_run, input_plan=plan.name, next_step=next_step)
+        print_next_step(next_step)
     except (
         subprocess.CalledProcessError,
         PlanNotFoundError,
@@ -2054,12 +2055,14 @@ def implement(ctx: click.Context, plan_path: str, *, cont: bool, force_push: boo
                 force_push=force_push,
                 dry_run=dry_run,
             )
+            next_step = _command_next_step(config, PlanState.TODO, "implement", new_plan.name)
             _write_script_audit_log(
                 config,
                 "implement",
                 dry_run=dry_run,
                 input_plan=new_plan.name,
                 stacked_on=[member.name for member in prior_stack],
+                next_step=next_step,
             )
             _print_stack_note(feature_branch, [*prior_stack, new_plan])
         else:
@@ -2083,9 +2086,10 @@ def implement(ctx: click.Context, plan_path: str, *, cont: bool, force_push: boo
                 force_push=force_push,
                 dry_run=dry_run,
             )
-            _write_script_audit_log(config, "implement", dry_run=dry_run, input_plan=new_plan.name)
+            next_step = _command_next_step(config, PlanState.TODO, "implement", new_plan.name)
+            _write_script_audit_log(config, "implement", dry_run=dry_run, input_plan=new_plan.name, next_step=next_step)
 
-        _print_command_reminder(config, PlanState.TODO, "implement", new_plan.name)
+        print_next_step(next_step)
         if not dry_run:
             time.sleep(config.tmux.prompt_send_delay)
         _rotate_best_effort(config, AgentName.builder, dry_run=dry_run)
@@ -2150,7 +2154,9 @@ def validate(
     _print_results(results)
     has_failures = any(result.status == "fail" for result in results)
     if not has_failures:
-        _print_validate_next_step(plan)
+        next_step = _command_next_step(config, plan.state, "validate", plan.name)
+        print_next_step(next_step)
+        _write_script_audit_log(config, "validate", dry_run=dry_run, input_plan=plan.name, next_step=next_step)
     ctx.exit(1 if has_failures else 0)
 
 
@@ -2167,19 +2173,6 @@ def _print_results(results: list[CheckResult]) -> None:
             console.print(f"[red][✗][/red] {label}: {result.message}")
             for detail in result.details:
                 console.print(f"    {detail}")
-
-
-def _print_validate_next_step(plan: object) -> None:
-    if not isinstance(plan, Plan):
-        return
-    if plan.state == PlanState.PLANNING:
-        console.print(
-            f"\nNext step: [bold]workflow todo {plan.name}[/bold] or [bold]workflow reject {plan.name}[/bold]",
-        )
-    elif plan.state == PlanState.CHECKING:
-        console.print(
-            f"\nNext step: [bold]workflow accept {plan.name}[/bold] or [bold]workflow reject {plan.name}[/bold]",
-        )
 
 
 # Step-name constants: the join key between _classify_check_steps and check()'s run phase.
@@ -2347,15 +2340,17 @@ def check(ctx: click.Context, plan_path: str, target_repo: AgentName, *, force_v
             push_set,
             dry_run=dry_run,
         )
+        next_step = _command_next_step(config, PlanState.IMPLEMENTING, "check", new_plan.name)
         _write_script_audit_log(
             config,
             "check",
             dry_run=dry_run,
             input_plan=new_plan.name,
             output_plans=[member.name for member in new_stack[:-1]],
+            next_step=next_step,
         )
         _print_stack_note(branch, new_stack)
-        _print_command_reminder(config, PlanState.IMPLEMENTING, "check", new_plan.name)
+        print_next_step(next_step)
         if not dry_run:
             time.sleep(config.tmux.prompt_send_delay)
         _rotate_best_effort(config, AgentName.reviewer, dry_run=dry_run)
@@ -2408,8 +2403,9 @@ def push(ctx: click.Context, plan_path: str) -> None:
             # typically on a feature branch (e.g. planner mid-plan), where 'git pull'
             # advances that branch rather than 'main'.
             _sync_repos_best_effort(layout, dry_run=dry_run)
-        _write_script_audit_log(config, "push", dry_run=dry_run, input_plan=plan.name)
-        _print_command_reminder(config, plan.state, "push", plan.name)
+        next_step = _command_next_step(config, plan.state, "push", plan.name)
+        _write_script_audit_log(config, "push", dry_run=dry_run, input_plan=plan.name, next_step=next_step)
+        print_next_step(next_step)
     except (
         subprocess.CalledProcessError,
         PlanNotFoundError,
@@ -2563,15 +2559,17 @@ def accept(ctx: click.Context, plan_path: str, *, force_push: bool) -> None:
         _sync_repos_best_effort(layout, park=WorktreeName.reviewer, dry_run=dry_run)
         builder_repo = layout.git_repo_root(WorktreeName.builder)
         delete_merged_branch(canon_repo, reviewer_repo, builder_repo, branch, dry_run=dry_run)
+        next_step = _command_next_step(config, PlanState.CHECKING, "accept", new_plan.name)
         _write_script_audit_log(
             config,
             "accept",
             dry_run=dry_run,
             input_plan=new_plan.name,
             output_plans=[member.name for member in new_stack[:-1]],
+            next_step=next_step,
         )
         _print_stack_note(branch, new_stack)
-        _print_command_reminder(config, PlanState.CHECKING, "accept", new_plan.name)
+        print_next_step(next_step)
     except (
         subprocess.CalledProcessError,
         PlanNotFoundError,

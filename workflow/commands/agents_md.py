@@ -174,6 +174,12 @@ def agents_md(ctx: click.Context, check: bool) -> None:  # noqa: FBT001
             ctx.exit(1)
             return
 
+        if ctx.obj["dry_run"]:
+            for path in [*update.write_targets, update.hash_file_path]:
+                click.echo(f"would write: {path}")
+            ctx.exit(0)
+            return
+
         _write_update(update)
         if config.layout().metadata.mode == ProjectMode.oob:
             click.echo(

@@ -213,12 +213,17 @@ def find_plan_file_in_worktree(layout: Layout, worktree: WorktreeName, plan_file
     return layout.project_dir / matches[0].path if matches else None
 
 
+def _bare_plan_name(plan_name: str) -> str:
+    """Strip any directory part and a trailing ``.md`` (``Path.stem`` would also eat ``.1`` of ``005.1_foo``)."""
+    return plan_name.rsplit("/", 1)[-1].removesuffix(".md")
+
+
 def _top_level_number_from_name(plan_name: str) -> int | None:
     """Extract the top-level sequence number from a plan name like '003_foo'.
 
     Returns ``None`` when the name does not match the ``NNN_slug`` pattern.
     """
-    candidate = Path(plan_name).stem.split("/")[-1]
+    candidate = _bare_plan_name(plan_name)
     if "_" not in candidate:
         return None
     try:
@@ -718,7 +723,7 @@ def _from_git_history(
 
 def _name_matches_seq(plan_name: str, seq_str: str) -> bool:
     """Return True when *plan_name* references the same sequence number as *seq_str*."""
-    candidate = Path(plan_name).stem.split("/")[-1]
+    candidate = _bare_plan_name(plan_name)
     if "_" not in candidate:
         return candidate == seq_str
     num_part, _ = candidate.split("_", maxsplit=1)

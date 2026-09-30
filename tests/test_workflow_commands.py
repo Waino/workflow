@@ -18,6 +18,7 @@ from workflow import git_helpers, main
 from workflow.audit import read_audit_log, write_audit_log
 from workflow.commands.info import _parse_datetime
 from workflow.exceptions import WorkflowError
+from workflow.frontmatter import PlanFrontmatter, render_frontmatter
 from workflow.git_helpers import CommitResult
 from workflow.metadata import METADATA_FILENAME, ProjectMetadata, write_metadata
 from workflow.models import AuditLogEntry, Plan, PlanState
@@ -785,6 +786,7 @@ def test_status_last_action_and_next_step_from_audit_log(tmp_path: Path, monkeyp
             actor="builder",
             command="build",
             input_plan="001_foo",
+            next_step="workflow check 001_foo",
         ),
     )
     monkeypatch.chdir(tmp_path)
@@ -793,18 +795,52 @@ def test_status_last_action_and_next_step_from_audit_log(tmp_path: Path, monkeyp
     result = CliRunner().invoke(main, ["--config", str(config_path), "status"])
 
     assert result.exit_code == 0
-    # last-action column shows the executed command; next step is the configured reminder.
+    # last-action column shows the executed command; next step is the recorded text, minus prefix and plan.
     assert "build" in result.output
     assert "check" in result.output
+    assert "workflow check" not in result.output
+    assert "001_foo check" not in result.output
+
+
+@pytest.mark.parametrize(
+    ("next_step", "input_plan", "expected"),
+    [
+        (None, "001_foo", ""),
+        ("workflow check 001_foo", "001_foo", "check"),
+        ("accept or reject", "001_foo", "accept or reject"),
+        ("workflow push", None, "push"),
+    ],
+)
+def test_display_next_step(next_step: str | None, input_plan: str | None, expected: str) -> None:
+    entry = AuditLogEntry(
+        timestamp=datetime(2026, 3, 18, tzinfo=UTC),
+        actor="builder",
+        command="x",
+        input_plan=input_plan,
+        next_step=next_step,
+    )
+    assert wi._display_next_step(entry) == expected
+    assert wi._display_next_step(None) == ""
+
+
+def test_status_stack_cell_shows_the_base_sequence_number(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "canon", "implementing", "005_foo.md")
+    stacked = tmp_path / "canon" / "docs" / "plans" / "implementing" / "006_bar.md"
+    stacked.write_text(render_frontmatter(PlanFrontmatter(onto="005_foo")) + "# plan\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wi, "git_status", MagicMock(return_value=""))
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "status"])
+
+    assert result.exit_code == 0
+    row = next(line for line in result.output.splitlines() if "bar" in line)
+    assert "005" in row
+    assert "005_foo" not in row
 
 
 def test_status_cross_state_next_step_via_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`todo` is defined in PLANNING; running it transitions the plan to TODO.
-
-    For a plan now in TODO with the last logged action ``todo``, the heuristic
-    should locate the source state (PLANNING) and resolve the next step to the
-    first command in TODO ("implement").
-    """
+    """The next step recorded by `todo` is what `status` shows for the plan now in TODO."""
     config_path = _make_project(tmp_path)
     _make_plan(tmp_path, "canon", "todo", "001_foo.md")
     write_audit_log(
@@ -814,6 +850,7 @@ def test_status_cross_state_next_step_via_transition(tmp_path: Path, monkeypatch
             actor="planner",
             command="todo",
             input_plan="001_foo",
+            next_step="workflow implement 001_foo",
         ),
     )
     monkeypatch.chdir(tmp_path)

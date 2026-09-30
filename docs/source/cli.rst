@@ -12,7 +12,12 @@ Global options
 --------------
 
 * ``-n``, ``--dry-run`` — print the shell commands (git, docker, tmux, ...) that a
-  script command would run, without executing them.
+  script command would run, without executing them. A command run in another
+  directory prints as ``would run in <dir>: <cmd>``, with ``<dir>`` relative to the
+  current directory when below it (``.`` when equal) and absolute otherwise. Resumable
+  commands (``init``, ``implement``, ...) print their step list first: titled
+  ``Resume plan`` when a step is already done or needs ``--continue``, otherwise
+  ``Execution plan``. ``agents_md`` prints the files it would write.
 * ``--config PATH`` — use an explicit config file instead of the default resolution
   order (explicit path → ``{project_dir}/config.yaml`` → ``~/.config/workflow/config.yaml``).
 
@@ -150,7 +155,8 @@ operations (push/pull/merge) needed at each handoff.
     overrides the repo the checks run against. Out-of-band: ``file-scope`` and
     ``git-hooks`` run once per repo, and two repo-scoped checks are added --
     ``planner-code-commits`` and ``branches-frontmatter`` (see :ref:`Multi-repo
-    validate, doctor, and status`).
+    validate, doctor, and status`). A successful run prints the next step and writes
+    an audit-log entry carrying it; a failing run writes nothing.
 
 ``accept PLAN_PATH``
     Accept a reviewed plan: push from reviewer, pull to canon, transition to
@@ -269,8 +275,12 @@ Information
 ------------
 
 ``status``
-    Show every plan's current state and its likely next step(s), plus a ``stack``
-    column naming the plan it is stacked onto (blank when unstacked). Omits ``done``
+    Show every plan's current state, the last action, and the next step recorded when
+    that action ran (blank for entries logged before next steps were recorded), plus a
+    ``stack`` column with the sequence number of the plan it is stacked onto (blank
+    when unstacked). The next step is the command's ``reminder`` from the config; it
+    is no longer inferred, so a custom config needs an explicit ``reminder`` on every
+    command that should suggest one. Omits ``done``
     and ``rejected`` plans unless ``--all`` is given. Followed by each worktree's git
     status; out-of-band, this is a worktree × repo matrix instead of a linear list
     (see :ref:`Multi-repo validate, doctor, and status`).

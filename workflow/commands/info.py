@@ -21,16 +21,13 @@ from workflow.git_helpers import (
 from workflow.metadata import ProjectMode
 from workflow.models import PlanState
 from workflow.names import WorktreeName
-from workflow.next_step import find_next_step, find_source_state_for_command
 from workflow.plan_resolver import find_all_plans, next_intent_number, resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console, error_console
-from workflow.stack import read_plan_frontmatter
+from workflow.stack import find_stack_member, read_plan_frontmatter
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from rich.text import Text
 
     from workflow.layout import Layout
     from workflow.models import AuditLogEntry, Plan
@@ -155,6 +152,14 @@ def _git_status_cell(repo_path: Path) -> str:
     return cell
 
 
+def _display_next_step(entry: AuditLogEntry | None) -> str:
+    """Return the recorded next step, minus the redundant ``workflow`` prefix and plan name."""
+    if entry is None or entry.next_step is None:
+        return ""
+    text = entry.next_step.replace("workflow ", "")
+    return text.replace(f" {entry.input_plan}", "") if entry.input_plan else text
+
+
 @register_script("status")
 @click.option("--all", "show_all", is_flag=True, default=False, help="Include done and rejected plans.")
 @click.pass_context
@@ -186,22 +191,19 @@ def status(ctx: click.Context, show_all: bool) -> None:  # noqa: FBT001
     for plan in visible:
         last_entry = _last_audit_entry_for_plan(entries, plan)
         last_action = last_entry.command if last_entry is not None else ""
-        next_step_renderable: str | Text = ""
-        if last_entry is not None:
-            source_state = find_source_state_for_command(config, plan.state, last_entry.command)
-            if source_state is not None:
-                next_step = find_next_step(config, source_state, last_entry.command)
-                if next_step is not None:
-                    next_step_renderable = next_step.render()
+        next_step = _display_next_step(last_entry)
         fm = read_plan_frontmatter(layout, plan)
-        stack_cell = fm.onto if fm is not None and fm.onto is not None else ""
+        stack_cell = ""
+        if fm is not None and fm.onto is not None:
+            base = find_stack_member(layout, fm.onto)
+            stack_cell = base.sequence_number_str if base is not None else fm.onto
         table.add_row(
             plan.sequence_number_str,
             plan.slug,
             plan.state.value,
             stack_cell,
             last_action,
-            next_step_renderable,
+            next_step,
         )
 
     console.print(table)

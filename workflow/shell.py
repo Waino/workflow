@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console
@@ -28,6 +29,19 @@ def print_workflow_error(exc: BaseException) -> None:
         error_console.print(f"[red]{exc}[/red]")
 
 
+def print_next_step(next_step: str | None) -> None:
+    """Print the ``Next step:`` line; nothing when there is none."""
+    if next_step is not None:
+        console.print(f"Next step: [bold]{next_step}[/bold]")
+
+
+def _display_cwd(cwd: str | Path) -> str:
+    """Return *cwd* relative to the current directory when below it (``.`` when equal), else absolute."""
+    path = Path(cwd).absolute()
+    here = Path.cwd()
+    return str(path.relative_to(here)) if path.is_relative_to(here) else str(path)
+
+
 def run_command(
     args: list[str],
     *,
@@ -46,7 +60,8 @@ def run_command(
     (``check=True`` is always set).
     """
     if dry_run:
-        console.print(f"[dim]would run:[/dim] {shlex.join(args)}")
+        where = f" in {_display_cwd(kwargs['cwd'])}" if kwargs.get("cwd") is not None else ""
+        console.print(f"[dim]would run{where}:[/dim] {shlex.join(args)}")
         return None
     return subprocess.run(args, check=True, **kwargs)  # noqa: S603
 

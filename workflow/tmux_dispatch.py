@@ -41,8 +41,9 @@ from workflow.git_helpers import (
 )
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import WorktreeName, command_cli_name
+from workflow.next_step import format_next_step
 from workflow.plan_resolver import active_tmux_repo, resolve_plan
-from workflow.shell import console, error_console, print_workflow_error
+from workflow.shell import console, error_console, print_next_step, print_workflow_error
 from workflow.stack import stack_child, stack_entries
 
 _STACK_TIP_EXEMPT_COMMANDS = frozenset({"ask"})
@@ -106,6 +107,7 @@ class _PromptContext(BaseModel):
     prompt: str
     audit_input_plan: str | None = None
     plan_path: Path | None = None
+    next_step: str | None = None
 
 
 def _collect_prompt_targets(config: WorkflowConfig) -> dict[str, list[_PromptTarget]]:
@@ -267,6 +269,7 @@ def _setup_has_plan(
         prompt=rendered,
         audit_input_plan=plan.name,
         plan_path=plan.path,
+        next_step=format_next_step(config, target.command, plan.name),
     )
 
 
@@ -296,7 +299,12 @@ def _setup_stateless(
     except WorkflowError as exc:
         print_workflow_error(exc)
         return None
-    return _PromptContext(agent_name=target.agent_name, worktree_name=target.worktree_name, prompt=rendered)
+    return _PromptContext(
+        agent_name=target.agent_name,
+        worktree_name=target.worktree_name,
+        prompt=rendered,
+        next_step=format_next_step(config, target.command, ""),
+    )
 
 
 def _dispatch_prompt(
@@ -359,6 +367,7 @@ def _dispatch_prompt(
         print_workflow_error(exc)
         return 1
 
+    print_next_step(result.next_step)
     write_audit_log(
         config.project_dir,
         AuditLogEntry(
@@ -366,6 +375,7 @@ def _dispatch_prompt(
             actor=agent_name,
             command=cmd_name,
             input_plan=audit_input_plan,
+            next_step=result.next_step,
         ),
         dry_run=dry_run,
     )

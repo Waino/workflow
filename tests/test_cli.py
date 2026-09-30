@@ -15,6 +15,7 @@ from click.testing import CliRunner
 import workflow.commands.workflow as workflow_commands
 from tests.conftest import create_project_marker
 from workflow import main, registry, tmux_dispatch
+from workflow.audit import read_audit_log
 from workflow.config import load_config
 from workflow.exceptions import WorkflowError
 from workflow.names import WorktreeName
@@ -352,8 +353,13 @@ def test_validate_prints_results_and_next_step(tmp_path: Path, monkeypatch: pyte
     assert "[✓] file-scope: ok" in result.output
     assert "[!] noqa-nosec: 1 found" in result.output
     assert "# noqa" in result.output
-    assert "Next step: workflow todo 005_plan_state_and_git" in result.output
-    assert "workflow reject" in result.output
+    assert "Next step: todo or reject" in result.output
+    [entry] = read_audit_log(tmp_path)
+    assert (entry.command, entry.input_plan, entry.next_step) == (
+        "validate",
+        "005_plan_state_and_git",
+        "todo or reject",
+    )
 
 
 def _load_config(tmp_path: Path) -> WorkflowConfig:
@@ -701,3 +707,15 @@ def test_real_send_sleeps_twice_only_when_blind(monkeypatch: pytest.MonkeyPatch,
 
     assert sleep.call_count == sleeps
     pane.send_keys.assert_called_once()
+
+
+def test_build_dry_run_prints_the_next_step(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "builder", "implementing", "004_x.md")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "build", "004"])
+
+    assert result.exit_code == 0, result.output
+    assert "Next step: workflow check 004_x" in result.output
+    assert '"next_step":"workflowcheck004_x"' in "".join(result.output.split())

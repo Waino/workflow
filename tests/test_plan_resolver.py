@@ -26,7 +26,9 @@ from workflow.plan_resolver import (
     SourcesDisagreeError,
     _from_git_history,
     _from_tmux,
+    _name_matches_seq,
     _parse_git_log_output,
+    _top_level_number_from_name,
     find_all_plans,
     find_all_plans_in_worktree,
     find_plan_file_in_worktree,
@@ -1003,3 +1005,24 @@ class TestAuditCommandRepoStateBuilder:
         mapping = build_audit_command_repo_state(config)
         for cmd in ("new", "push", "ask", "build", "critique", "pr", "validate"):
             assert cmd not in mapping
+
+
+@pytest.mark.parametrize(
+    ("plan_name", "seq_str", "expected"),
+    [
+        ("005_foo", "005", True),
+        ("005.1_foo", "005.1", True),
+        ("005.1_foo", "005", False),
+        ("005.1_foo.md", "005.1", True),
+        ("planner/docs/plans/planning/005.1_foo.md", "005.1", True),
+        ("005.1", "005.1", True),
+        ("005", "005.1", False),
+    ],
+)
+def test_name_matches_seq_handles_dotted_names(plan_name: str, seq_str: str, *, expected: bool) -> None:
+    assert _name_matches_seq(plan_name, seq_str) is expected
+
+
+@pytest.mark.parametrize(("plan_name", "expected"), [("005.1_foo", 5), ("a/b/005.2_foo.md", 5), ("005_foo", 5)])
+def test_top_level_number_from_name_handles_dotted_names(plan_name: str, expected: int) -> None:
+    assert _top_level_number_from_name(plan_name) == expected

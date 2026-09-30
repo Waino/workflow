@@ -324,7 +324,7 @@ def test_stack_anomalies_clean_for_a_live_stack(tmp_path: Path) -> None:
     _make_plan(canon, "implementing", "006_bar.md", onto="005_foo", branch="feat/005_foo")
     _git(["checkout", "-b", "feat/005_foo"], cwd=builder)
 
-    assert _stack_anomalies(make_layout(tmp_path), _config_for(tmp_path)) == []
+    assert _stack_anomalies(make_layout(tmp_path)) == []
 
 
 def test_stack_anomalies_flags_unresolvable_onto(tmp_path: Path) -> None:
@@ -333,7 +333,7 @@ def test_stack_anomalies_flags_unresolvable_onto(tmp_path: Path) -> None:
     _make_plan(canon, "implementing", "006_bar.md", onto="999_missing", branch="feat/005_foo")
     _git(["checkout", "-b", "feat/005_foo"], cwd=builder)
 
-    anomalies = _stack_anomalies(make_layout(tmp_path), _config_for(tmp_path))
+    anomalies = _stack_anomalies(make_layout(tmp_path))
 
     assert anomalies == ["006_bar: onto='999_missing' does not resolve to a plan"]
 
@@ -344,7 +344,7 @@ def test_stack_anomalies_flags_missing_branch_for_an_in_flight_plan(tmp_path: Pa
     _make_plan(canon, "implementing", "005_foo.md")
     _make_plan(canon, "checking", "006_bar.md", onto="005_foo", branch="feat/005_foo")
 
-    anomalies = _stack_anomalies(make_layout(tmp_path), _config_for(tmp_path))
+    anomalies = _stack_anomalies(make_layout(tmp_path))
 
     assert anomalies == ["006_bar: recorded branch 'feat/005_foo' exists nowhere"]
 
@@ -356,7 +356,7 @@ def test_stack_anomalies_ignores_a_deleted_branch_recorded_by_a_done_plan(tmp_pa
     _make_plan(canon, "done", "005_foo.md")
     _make_plan(canon, "done", "006_bar.md", onto="005_foo", branch="feat/005_foo")
 
-    assert _stack_anomalies(make_layout(tmp_path), _config_for(tmp_path)) == []
+    assert _stack_anomalies(make_layout(tmp_path)) == []
 
 
 def test_stack_anomalies_flags_a_branch_whose_plans_are_all_finished(tmp_path: Path) -> None:
@@ -365,7 +365,7 @@ def test_stack_anomalies_flags_a_branch_whose_plans_are_all_finished(tmp_path: P
     _make_plan(canon, "done", "005_foo.md")
     _git(["checkout", "-b", "feat/005_foo"], cwd=builder)
 
-    anomalies = _stack_anomalies(make_layout(tmp_path), _config_for(tmp_path))
+    anomalies = _stack_anomalies(make_layout(tmp_path))
 
     assert anomalies == ["feat/005_foo: exists but every plan on it is done/rejected"]
 

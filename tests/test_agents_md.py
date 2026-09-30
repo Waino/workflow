@@ -505,3 +505,16 @@ def test_hash_covers_workflow_json_only_in_oob(tmp_path: Path, *, oob: bool) -> 
 
     expected = hashlib.sha256(workflow_json.read_bytes() if oob else b"").hexdigest()
     assert workflow_json_sha == expected
+
+
+def test_agents_md_dry_run_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "agents_md"])
+
+    assert result.exit_code == 0
+    assert f"would write: {tmp_path / 'canon' / 'AGENTS.md'}" in result.output
+    assert ".agents_md_hash" in result.output
+    assert not (tmp_path / "canon" / "AGENTS.md").exists()
+    assert not list(tmp_path.rglob(".agents_md_hash"))

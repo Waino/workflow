@@ -163,3 +163,6 @@ class AuditLogEntry(BaseModel):
     output_plans: list[str] = []
     stacked_on: list[str] = []
     """The full resolved stack, base-first, excluding the plan itself."""
+
+    next_step: str | None = None
+    """Display text of the suggested next step, recorded at command time; never parse it."""

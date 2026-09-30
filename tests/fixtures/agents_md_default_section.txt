@@ -43,6 +43,7 @@ Commands:
 - [prompt] critique — Critique the plan.
 - [manual] revise — Human revises the plan.
 - [prompt] rebase — Rebase the working branch onto current main.
+- [script] validate — Run verification checks.
 - [script] todo -> todo — Approve for implementation.
 
 ### todo (agent: human operator)

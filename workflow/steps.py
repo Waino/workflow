@@ -73,8 +73,12 @@ class ResumePlan:
         self._decisions.append(_StepDecision(name, StepStatus.NEEDS_CONTINUE, reason))
 
     def render(self) -> None:
-        """Print the resume preview: one ``[skip]``/``[run]``/``[!!]`` line per step."""
-        console.print(f"Resume plan for `{self.title}`:", markup=False)
+        """Print the preview: one ``[skip]``/``[run]``/``[!!]`` line per step.
+
+        Titled "Resume plan" only when a step is already done or needs ``--continue``.
+        """
+        resuming = any(decision.status != StepStatus.WILL_RUN for decision in self._decisions)
+        console.print(f"{'Resume' if resuming else 'Execution'} plan for `{self.title}`:", markup=False)
         for decision in self._decisions:
             marker = _STATUS_MARKER[decision.status]
             line = f"  {marker} {decision.name}"
@@ -91,9 +95,6 @@ class ResumePlan:
         raise WorkflowError(msg)
 
     def abort_unless_continue(self, *, cont: bool) -> bool:
-        """Render + return True (caller must exit) if a NEEDS_CONTINUE step exists and cont is False."""
+        """Return True (caller must exit) if a NEEDS_CONTINUE step exists and cont is False; callers render first."""
         has_rough = any(decision.status == StepStatus.NEEDS_CONTINUE for decision in self._decisions)
-        if has_rough and not cont:
-            self.render()
-            return True
-        return False
+        return has_rough and not cont
