@@ -80,24 +80,22 @@ class TestPlan:
 class TestReview:
     _ts = datetime(2026, 3, 18, 14, 30, tzinfo=UTC)
 
-    def _pr(self, **kwargs: object) -> Review:
+    def _pr(self) -> Review:
         return Review(
             sequence_number=[2],
             slug="pydantic_models",
             path=Path("reviewer/docs/plans/reviews/pr/002_pydantic_models_0e6baa9.md"),
             review_sub_state=ReviewSubState.PR,
             review_commit="0e6baa9",
-            **kwargs,  # type: ignore[arg-type]
         )
 
-    def _critique(self, **kwargs: object) -> Review:
+    def _critique(self) -> Review:
         return Review(
             sequence_number=[2],
             slug="pydantic_models",
             path=Path("reviewer/docs/plans/reviews/critique/002_pydantic_models_2026-03-18T14-30-00Z.md"),
             review_sub_state=ReviewSubState.CRITIQUE,
             review_timestamp=self._ts,
-            **kwargs,  # type: ignore[arg-type]
         )
 
     def test_pr_review_valid(self) -> None:
@@ -125,7 +123,7 @@ class TestReview:
     def test_review_state_defaults_to_review(self) -> None:
         assert self._pr().state == PlanState.REVIEW
 
-    def _full(self, **kwargs: object) -> Review:
+    def _full(self) -> Review:
         return Review(
             sequence_number=[0],
             slug="",
@@ -133,7 +131,6 @@ class TestReview:
             review_sub_state=ReviewSubState.FULL,
             review_timestamp=self._ts,
             review_commit="0e6baa9",
-            **kwargs,  # type: ignore[arg-type]
         )
 
     def test_full_review_valid(self) -> None:

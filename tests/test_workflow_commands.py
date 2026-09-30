@@ -915,7 +915,7 @@ def test_log_no_filter_shows_all_entries(tmp_path: Path, monkeypatch: pytest.Mon
 @pytest.mark.parametrize(
     ("args", "present", "absent"),
     [
-        pytest.param(["--agent", "planner"], ("plan",), ("todo",), id="by_agent"),
+        pytest.param(["--agent", "planner"], ("002_bar",), ("todo", "003_baz"), id="by_agent"),
         pytest.param(["--command", "new"], ("001_foo", "003_baz"), ("todo",), id="by_command"),
         # 2026-03-02 excluded
         pytest.param(["--since", "2026-03-03"], ("002_bar", "003_baz"), ("todo",), id="by_since"),

@@ -175,6 +175,8 @@ class TestParseReviewFilename:
 
 
 # ---------------------------------------------------------------------------
+# find_all_plans_in_worktree
+# ---------------------------------------------------------------------------
 
 
 class TestFindAllPlansInRepo:
