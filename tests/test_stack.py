@@ -195,40 +195,21 @@ def test_resolve_stack_depth_cap_raises(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_find_stack_member_matches_canonical_name(tmp_path: Path) -> None:
-    plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
-
-    result = find_stack_member(make_layout(tmp_path), "001_base")
-
-    assert result is not None
-    assert result.name == plan.name
-
-
-@pytest.mark.parametrize("reference", ["001", "1", "01"])
-def test_find_stack_member_matches_padded_or_unpadded_sequence_number(tmp_path: Path, reference: str) -> None:
-    plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
-
-    result = find_stack_member(make_layout(tmp_path), reference)
-
-    assert result is not None
-    assert result.name == plan.name
-
-
-def test_find_stack_member_matches_unpadded_hierarchical_sequence_number(tmp_path: Path) -> None:
-    plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "023.1_sub.md")
-
-    result = find_stack_member(make_layout(tmp_path), "23.1")
-
-    assert result is not None
-    assert result.name == plan.name
-
-
 @pytest.mark.parametrize(
-    "reference",
-    ["001_base", "implementing/001_base", "implementing/001_base.md", "001_base.md"],
+    ("filename", "reference"),
+    [
+        pytest.param("001_base.md", "001_base", id="canonical_name"),
+        pytest.param("001_base.md", "001", id="padded_sequence_number"),
+        pytest.param("001_base.md", "1", id="unpadded_sequence_number"),
+        pytest.param("001_base.md", "01", id="partly_padded_sequence_number"),
+        pytest.param("023.1_sub.md", "23.1", id="unpadded_hierarchical_sequence_number"),
+        pytest.param("001_base.md", "implementing/001_base", id="state_prefix"),
+        pytest.param("001_base.md", "implementing/001_base.md", id="state_prefix_md_suffix"),
+        pytest.param("001_base.md", "001_base.md", id="md_suffix"),
+    ],
 )
-def test_find_stack_member_normalizes_reference_forms(tmp_path: Path, reference: str) -> None:
-    plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, "001_base.md")
+def test_find_stack_member_matches_reference(tmp_path: Path, filename: str, reference: str) -> None:
+    plan = _make_plan(tmp_path, "canon", PlanState.IMPLEMENTING, filename)
 
     result = find_stack_member(make_layout(tmp_path), reference)
 
