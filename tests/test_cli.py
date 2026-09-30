@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from shutil import copyfile
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,6 +17,7 @@ from tests.conftest import create_project_marker
 from workflow import main, registry, tmux_dispatch
 from workflow.config import load_config
 from workflow.exceptions import WorkflowError
+from workflow.names import WorktreeName
 from workflow.validate import CheckResult
 
 if TYPE_CHECKING:
@@ -93,11 +94,11 @@ def test_ask_resolves_planner_plan_and_dispatches_prompt(tmp_path: Path, monkeyp
     def fake_pull(repo_path: Path, *, dry_run: bool = False, skip_if_no_upstream: bool = False) -> None:
         pulls.append((repo_path, dry_run, skip_if_no_upstream))
 
-    def fake_send(agent_name: str, prompt: str, _config: object, *, dry_run: bool = False) -> None:
+    def fake_send(agent_name: str, prompt: str, _config: object, *, dry_run: bool = False, **_kwargs: object) -> None:
         sends.append((agent_name, prompt, dry_run))
 
     expected_prompt = (
-        "Read the plan at planner/docs/plans/planning/004_cli_framework.md.\n"
+        "Read the plan at docs/plans/planning/004_cli_framework.md.\n"
         "Ask any questions until you have a clear understanding."
     )
 
@@ -130,8 +131,12 @@ def test_pr_uses_reviewer_repo_and_renders_branch_commit_and_plan(
     def fake_pull(repo_path: Path, *, dry_run: bool = False, skip_if_no_upstream: bool = False) -> None:
         pulls.append((repo_path, dry_run, skip_if_no_upstream))
 
-    def fake_send(_agent_name: str, prompt: str, _config: object, *, dry_run: bool = False) -> None:
-        del dry_run
+    def fake_send(
+        _agent_name: str,
+        prompt: str,
+        _config: object,
+        **_kwargs: object,
+    ) -> None:
         prompts.append(prompt)
 
     monkeypatch.setattr(tmux_dispatch, "git_pull", fake_pull)
@@ -147,7 +152,7 @@ def test_pr_uses_reviewer_repo_and_renders_branch_commit_and_plan(
     assert result.exit_code == 0
     assert pulls == [(tmp_path / "reviewer", False, True)]
     assert "feat/004_cli_framework" in prompts[0]
-    assert "reviewer/docs/plans/checking/004_cli_framework.md" in prompts[0]
+    assert "docs/plans/checking/004_cli_framework.md" in prompts[0]
     assert "docs/plans/reviews/pr/004_cli_framework_1e84d3a.md" in prompts[0]
 
 
@@ -167,8 +172,12 @@ def test_rebase_prompt_renders_target_repo_branch(
     monkeypatch.chdir(tmp_path)
     prompts: list[str] = []
 
-    def fake_send(_agent_name: str, prompt: str, _config: object, *, dry_run: bool = False) -> None:
-        del dry_run
+    def fake_send(
+        _agent_name: str,
+        prompt: str,
+        _config: object,
+        **_kwargs: object,
+    ) -> None:
         prompts.append(prompt)
 
     monkeypatch.setattr(tmux_dispatch, "git_pull", MagicMock())
@@ -190,8 +199,12 @@ def test_full_review_works_without_plan_argument(tmp_path: Path, monkeypatch: py
     monkeypatch.chdir(tmp_path)
     prompts: list[str] = []
 
-    def fake_send(_agent_name: str, prompt: str, _config: object, *, dry_run: bool = False) -> None:
-        del dry_run
+    def fake_send(
+        _agent_name: str,
+        prompt: str,
+        _config: object,
+        **_kwargs: object,
+    ) -> None:
         prompts.append(prompt)
 
     monkeypatch.setattr(tmux_dispatch, "git_pull", MagicMock())
@@ -218,8 +231,12 @@ def test_edit_cancellation_skips_dispatch_and_audit(tmp_path: Path, monkeypatch:
     sends: list[str] = []
     audits: list[str] = []
 
-    def fake_send(_agent_name: str, prompt: str, _config: object, *, dry_run: bool = False) -> None:
-        del dry_run
+    def fake_send(
+        _agent_name: str,
+        prompt: str,
+        _config: object,
+        **_kwargs: object,
+    ) -> None:
         sends.append(prompt)
 
     def fake_audit(_project_dir: Path, entry: AuditLogEntry) -> None:
@@ -247,8 +264,12 @@ def test_tmux_failures_are_reported_without_traceback(tmp_path: Path, monkeypatc
     _make_plan(tmp_path, "planner", "planning", "004_cli_framework.md")
     monkeypatch.chdir(tmp_path)
 
-    def raise_tmux(_agent_name: str, _prompt: str, _config: object, *, dry_run: bool = False) -> None:
-        del dry_run
+    def raise_tmux(
+        _agent_name: str,
+        _prompt: str,
+        _config: object,
+        **_kwargs: object,
+    ) -> None:
         message = "tmux session missing"
         raise WorkflowError(message)
 
@@ -451,8 +472,12 @@ def _make_stacked_checking_pair(tmp_path: Path) -> None:
 
 
 def _patch_dispatch_git(monkeypatch: pytest.MonkeyPatch, prompts: list[str]) -> None:
-    def fake_send(_agent_name: str, prompt: str, _config: object, *, dry_run: bool = False) -> None:
-        del dry_run
+    def fake_send(
+        _agent_name: str,
+        prompt: str,
+        _config: object,
+        **_kwargs: object,
+    ) -> None:
         prompts.append(prompt)
 
     monkeypatch.setattr(tmux_dispatch, "git_pull", MagicMock())
@@ -513,6 +538,166 @@ def test_pr_on_the_stack_tip_lists_every_member(tmp_path: Path, monkeypatch: pyt
     if result.exit_code != 0:
         print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
-    assert "004_cli_framework (reviewer/docs/plans/checking/004_cli_framework.md" in prompts[0]
+    assert "004_cli_framework (docs/plans/checking/004_cli_framework.md" in prompts[0]
     assert "bare/main..abc1234" in prompts[0]
     assert "abc1234..HEAD" in prompts[0]
+
+
+def _route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    args: list[str],
+    *,
+    plans: tuple[tuple[str, str, str], ...],
+    edit: bool = False,
+) -> tuple[Any, list[tuple[str, str]]]:
+    config_path = _make_project(tmp_path)
+    for repo, state, filename in plans:
+        _make_plan(tmp_path, repo, state, filename)
+    monkeypatch.chdir(tmp_path)
+    if edit:
+        monkeypatch.setenv("EDITOR", "true")
+    sends: list[tuple[str, str]] = []
+
+    def fake_send(agent_name: str, prompt: str, _config: object, **_kwargs: object) -> None:
+        sends.append((agent_name, prompt))
+
+    _patch_dispatch_git(monkeypatch, [])
+    monkeypatch.setattr(tmux_dispatch, "send_prompt_to_agent", fake_send)
+    return CliRunner().invoke(main, ["--config", str(config_path), *args]), sends
+
+
+def test_rebase_routes_to_builder_using_the_implementing_definition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, sends = _route(
+        tmp_path,
+        monkeypatch,
+        ["rebase", "builder/docs/plans/implementing/023.1_meta.md"],
+        plans=(("builder", "implementing", "023.1_meta.md"),),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [agent for agent, _ in sends] == ["builder"]
+    assert "Plan resolved to: builder/docs/plans/implementing/023.1_meta.md" in result.output
+
+
+def test_critique_on_a_planning_plan_uses_the_planning_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    result, sends = _route(
+        tmp_path,
+        monkeypatch,
+        ["critique", "planner/docs/plans/planning/004_x.md"],
+        plans=(("planner", "planning", "004_x.md"),),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert sends[0][0] == "planner"
+    assert "Critique the plan" in sends[0][1]
+    assert "planner/docs" not in sends[0][1]
+
+
+def test_critique_for_builder_needs_edit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plans = (("builder", "implementing", "004_x.md"),)
+    args = ["critique", "builder/docs/plans/implementing/004_x.md"]
+
+    result, sends = _route(tmp_path, monkeypatch, args, plans=plans)
+
+    assert result.exit_code == 1
+    output = " ".join(result.output.split())
+    assert "not defined for builder (defined in: intent (planner), planning (planner))" in output
+    assert "--edit" in output
+    assert sends == []
+
+
+def test_critique_for_builder_with_edit_is_sent_to_builder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    result, sends = _route(
+        tmp_path,
+        monkeypatch,
+        ["critique", "builder/docs/plans/implementing/004_x.md", "--edit"],
+        plans=(("builder", "implementing", "004_x.md"),),
+        edit=True,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert sends[0][0] == "builder"
+    assert "docs/plans/implementing/004_x.md" in sends[0][1]
+
+
+def test_state_changing_prompt_is_never_borrowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    result, sends = _route(
+        tmp_path,
+        monkeypatch,
+        ["plan", "builder/docs/plans/implementing/004_x.md", "--edit"],
+        plans=(("builder", "implementing", "004_x.md"),),
+        edit=True,
+    )
+
+    assert result.exit_code == 1
+    assert "can only be sent to planner (defined in: intent)" in result.output
+    assert sends == []
+
+
+def test_plan_in_canon_is_not_routed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    result, sends = _route(
+        tmp_path,
+        monkeypatch,
+        ["ask", "canon/docs/plans/todo/004_x.md"],
+        plans=(("canon", "todo", "004_x.md"),),
+    )
+
+    assert result.exit_code == 1
+    assert "canon" in result.output
+    assert "planner/<path>" in result.output
+    assert sends == []
+
+
+def test_explicit_agent_worktree_routes_a_todo_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    result, sends = _route(
+        tmp_path,
+        monkeypatch,
+        ["ask", "planner/docs/plans/todo/004_x.md"],
+        plans=(("planner", "todo", "004_x.md"),),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert sends[0][0] == "planner"
+
+
+@pytest.mark.parametrize(("active", "blind"), [("planner", False), ("builder", True), (None, True)])
+def test_dry_run_flags_blind_sends(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    active: str | None,
+    *,
+    blind: bool,
+) -> None:
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "planner", "planning", "004_x.md")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tmux_dispatch, "active_tmux_repo", lambda _session: WorktreeName(active) if active else None)
+    result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", "ask", "004"])
+
+    assert result.exit_code == 0, result.output
+    assert "Plan resolved to: planner/docs/plans/planning/004_x.md" in result.output
+    assert "would send to 'planner'" in result.output
+    assert ("Not the active agent in tmux!" in result.output) is blind
+
+
+@pytest.mark.parametrize(("blind", "sleeps"), [(False, 1), (True, 2)])
+def test_real_send_sleeps_twice_only_when_blind(monkeypatch: pytest.MonkeyPatch, *, blind: bool, sleeps: int) -> None:
+    config = MagicMock()
+    config.tmux.prompt_send_delay = 0.5
+    pane = MagicMock()
+    pane.window.name = "planner"
+    session = MagicMock()
+    session.show_option.return_value = "%1"
+    session.server.panes.get.return_value = pane
+    monkeypatch.setattr(tmux_dispatch, "_resolve_session", lambda _config: session)
+    sleep = MagicMock()
+    monkeypatch.setattr(tmux_dispatch.time, "sleep", sleep)
+
+    tmux_dispatch.send_prompt_to_agent("planner", "hello", config, blind=blind)
+
+    assert sleep.call_count == sleeps
+    pane.send_keys.assert_called_once()

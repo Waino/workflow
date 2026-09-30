@@ -9,6 +9,7 @@ import workflow.commands.info
 import workflow.commands.workflow  # noqa: F401  — populates script registry
 from tests.conftest import create_project_marker
 from workflow.config import (
+    PromptCommand,
     TmuxConfig,
     find_legacy_project_root,
     find_project_root,
@@ -296,3 +297,15 @@ class TestDefaultConfig:
         assert len(config.agents) == 3
         assert PlanState.INTENT in config.states
         assert PlanState.REVIEW in config.states
+
+
+def test_default_config_rebase_prompts_are_identical() -> None:
+    config = load_config(Path(__file__).parents[1] / "docs" / "default_config.yaml", project_dir=None)
+    prompts = {
+        state: cmd.prompt
+        for state, state_config in config.states.items()
+        for cmd in state_config.commands
+        if isinstance(cmd, PromptCommand) and cmd.name == "rebase"
+    }
+    assert set(prompts) == {PlanState.PLANNING, PlanState.IMPLEMENTING, PlanState.CHECKING}
+    assert len(set(prompts.values())) == 1

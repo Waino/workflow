@@ -41,7 +41,7 @@ from workflow.git_helpers import (
 )
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import WorktreeName, command_cli_name
-from workflow.plan_resolver import resolve_plan
+from workflow.plan_resolver import active_tmux_repo, resolve_plan
 from workflow.shell import console, error_console, print_workflow_error
 from workflow.stack import stack_child, stack_entries
 
@@ -50,6 +50,8 @@ _STACK_TIP_EXEMPT_COMMANDS = frozenset({"ask"})
 
 CONTROL_PANE_OPTION = "@workflow_control_pane"
 """Session user option holding the stable pane id of the docked control pane."""
+
+_BLIND_SUFFIX = " [red](Not the active agent in tmux!)[/red]"
 
 _TMUX_HINT = "Run 'workflow start' to create the tmux session."
 
@@ -85,6 +87,15 @@ class _PromptTarget(BaseModel):
     has_plan: bool
 
 
+class _ResolvedTarget(BaseModel):
+    """The plan, the target to send, and every definition of the command (for borrow checks)."""
+
+    target: _PromptTarget
+    plan: Plan
+    definitions: list[_PromptTarget]
+    borrowed: bool
+
+
 class _PromptContext(BaseModel):
     """Resolved context shared between the setup helpers and _dispatch_prompt."""
 
@@ -94,6 +105,7 @@ class _PromptContext(BaseModel):
     worktree_name: WorktreeName
     prompt: str
     audit_input_plan: str | None = None
+    plan_path: Path | None = None
 
 
 def _collect_prompt_targets(config: WorkflowConfig) -> dict[str, list[_PromptTarget]]:
@@ -149,20 +161,43 @@ def _resolve_plan_target(
     config: WorkflowConfig,
     cmd_name: str,
     plan_path_str: str,
-) -> tuple[_PromptTarget, Plan]:
-    """Resolve the plan and pick the prompt target for *cmd_name* in the plan's worktree."""
-    targets = [target for target in _collect_prompt_targets(config).get(cmd_name, []) if target.has_plan]
-    if not targets:
+) -> _ResolvedTarget:
+    """Resolve the plan and pick the prompt target for *cmd_name* from the plan's worktree."""
+    definitions = [target for target in _collect_prompt_targets(config).get(cmd_name, []) if target.has_plan]
+    if not definitions:
         msg = f"No '{cmd_name}' command found."
         raise WorkflowError(msg)
 
     plan = resolve_plan(plan_path_str, config=config, command_name=cmd_name)
-    plan_worktree = plan.path.parts[0]
-    for target in targets:
-        if target.worktree_name == plan_worktree:
-            return target, plan
-    # Fall back to the first defined target — the resolver already restricted to valid repos.
-    return targets[0], plan
+    recipient = plan.worktree
+    if recipient == WorktreeName.canon:
+        msg = f"{plan.path} is in canon, which has no agent; name an agent worktree explicitly, e.g. planner/<path>."
+        raise WorkflowError(msg)
+    in_worktree = [target for target in definitions if target.worktree_name == recipient]
+    same_state = [target for target in in_worktree if target.state == plan.state]
+    if in_worktree:
+        chosen = (same_state or in_worktree)[0]
+    else:
+        chosen = definitions[0].model_copy(update={"agent_name": recipient.value, "worktree_name": recipient})
+    return _ResolvedTarget(target=chosen, plan=plan, definitions=definitions, borrowed=not in_worktree)
+
+
+def _check_borrow(resolved: _ResolvedTarget, cmd_name: str, recipient: str, *, edit_mode: bool) -> None:
+    """Refuse a borrowed prompt unless it is safe and the user opted in with ``--edit``."""
+    if not resolved.borrowed:
+        return
+    states = ", ".join(target.state.value for target in resolved.definitions)
+    owners = ", ".join(f"{target.state.value} ({target.agent_name})" for target in resolved.definitions)
+    if any(target.command.transition for target in resolved.definitions):
+        agents = ", ".join(dict.fromkeys(str(target.agent_name) for target in resolved.definitions))
+        msg = f"'{cmd_name}' changes plan state and can only be sent to {agents} (defined in: {states})."
+        raise WorkflowError(msg)
+    if not edit_mode:
+        msg = (
+            f"'{cmd_name}' is not defined for {recipient} (defined in: {owners}). "
+            f"Re-run with --edit to adapt the prompt for {recipient}."
+        )
+        raise WorkflowError(msg)
 
 
 def _git_metadata(target: _PromptTarget, config: WorkflowConfig, *, dry_run: bool) -> tuple[str, str]:
@@ -184,6 +219,7 @@ def _setup_has_plan(
     plan_path_str: str,
     *,
     dry_run: bool,
+    edit_mode: bool,
 ) -> _PromptContext | None:
     """Resolve plan and render prompt for commands that take a plan argument.
 
@@ -191,17 +227,19 @@ def _setup_has_plan(
     or ``None`` after printing an error message.
     """
     try:
-        target, plan = _resolve_plan_target(config, cmd_name, plan_path_str)
+        resolved = _resolve_plan_target(config, cmd_name, plan_path_str)
     except (PlanNotFoundError, AmbiguousPlanError, PlanCollisionError, WorkflowError) as exc:
         print_workflow_error(exc)
         return None
+    target, plan = resolved.target, resolved.plan
     if target.agent_name is None:
         error_console.print(f"Plan resolved to: {plan.path}")
         error_console.print(f"[red]No agent configured for state '{plan.state.value}'.[/red]")
         return None
     layout = config.layout()
     try:
-        if target.state == PlanState.CHECKING and cmd_name not in _STACK_TIP_EXEMPT_COMMANDS:
+        _check_borrow(resolved, cmd_name, target.agent_name, edit_mode=edit_mode)
+        if plan.state == PlanState.CHECKING and cmd_name not in _STACK_TIP_EXEMPT_COMMANDS:
             child = stack_child(layout, plan)
             if child is not None:
                 msg = f"{plan.name} has {child.name} stacked on it; run this command on {child.name} instead."
@@ -228,6 +266,7 @@ def _setup_has_plan(
         worktree_name=target.worktree_name,
         prompt=rendered,
         audit_input_plan=plan.name,
+        plan_path=plan.path,
     )
 
 
@@ -278,7 +317,7 @@ def _dispatch_prompt(
 
     if has_plan:
         assert plan_path_str is not None  # Click enforces required=True when has_plan
-        result = _setup_has_plan(config, cmd_name, plan_path_str, dry_run=dry_run)
+        result = _setup_has_plan(config, cmd_name, plan_path_str, dry_run=dry_run, edit_mode=edit_mode)
     else:
         result = _setup_stateless(config, cmd_name, dry_run=dry_run)
 
@@ -289,6 +328,10 @@ def _dispatch_prompt(
     worktree_name = result.worktree_name
     prompt = result.prompt
     audit_input_plan = result.audit_input_plan
+
+    if result.plan_path is not None:
+        console.print(f"Plan resolved to: {result.plan_path}")
+    blind = active_tmux_repo(config.tmux.session_name) != WorktreeName(agent_name)
 
     layout = config.layout()
     repo_path = layout.git_repo_root(worktree_name)
@@ -311,7 +354,7 @@ def _dispatch_prompt(
         prompt = edited
 
     try:
-        send_prompt_to_agent(agent_name, prompt, config, dry_run=dry_run)
+        send_prompt_to_agent(agent_name, prompt, config, dry_run=dry_run, blind=blind)
     except WorkflowError as exc:
         print_workflow_error(exc)
         return 1
@@ -611,20 +654,23 @@ def send_prompt_to_agent(
     config: WorkflowConfig,
     *,
     dry_run: bool = False,
+    blind: bool = False,
 ) -> None:
-    """Send a rendered prompt to the named agent's tmux window.
+    """Send a rendered prompt to the named agent's tmux pane without selecting its window.
 
-    Locates the session by ``config.tmux.session_name``, finds the window whose
-    name matches *agent_name*, selects it, waits ``config.tmux.prompt_send_delay``
-    seconds, then sends the prompt text followed by Enter.
+    Locates the session by ``config.tmux.session_name`` and the agent's recorded pane,
+    waits ``config.tmux.prompt_send_delay`` seconds, then sends the prompt text followed by Enter.
+    A *blind* send (the agent's window is not the active one) is flagged and waits a second
+    delay, leaving time to Ctrl-C.
 
-    In dry-run mode prints the target window and prompt instead of sending.
+    In dry-run mode prints the target agent and prompt instead of sending.
 
     Raises :class:`~workflow.exceptions.WorkflowError` if the tmux server is not
     running, the session does not exist, or no matching window is found.
     """
+    suffix = _BLIND_SUFFIX if blind else ""
     if dry_run:
-        console.print(f"[dim]would send to {agent_name!r}:[/dim]")
+        console.print(f"[dim]would send to {agent_name!r}{suffix}:[/dim]")
         console.print(prompt)
         return
 
@@ -644,5 +690,8 @@ def send_prompt_to_agent(
         msg = f"agent pane {agent_pane_id} is in unexpected window {agent_pane.window.name}. {_TMUX_HINT}"
         raise WorkflowError(msg)
 
+    console.print(f"Sending to {agent_name!r}{suffix}")
+    if blind:
+        time.sleep(config.tmux.prompt_send_delay)
     time.sleep(config.tmux.prompt_send_delay)
     agent_pane.send_keys(prompt, enter=True, suppress_history=False, literal=True)

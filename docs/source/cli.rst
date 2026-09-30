@@ -81,7 +81,9 @@ Setup and session management
     Report the health of every clone (branch, dirty state, remotes, whether its
     ``main`` matches the bare repo) and flag plan-file anomalies (e.g. duplicate
     sequence numbers) and stack anomalies (a broken ``onto``, a stack branch whose
-    plans are all ``done``/``rejected``, or a recorded branch that exists nowhere).
+    plans are all ``done``/``rejected``, or a recorded branch that exists nowhere),
+    and impossible audit-log entries (a command that no longer exists, or a
+    state-changing prompt logged by an agent that does not own it).
     Exits non-zero if any anomaly is found; the separate *notes* column carries
     observations that are normal during parallel work (e.g. a branch that still
     needs rebasing) and never affects the exit code. Out-of-band: one ``bare``/
@@ -203,8 +205,25 @@ agent's clone is parked on it), so the next branch is cut from a current ``main`
 Prompt commands (agent dispatch)
 ----------------------------------
 
-These send a rendered prompt to the agent responsible for the plan's current
-state. All accept ``--edit`` to review/modify the prompt before sending.
+These send a rendered prompt to the agent whose worktree holds the plan (the first
+path component, e.g. ``builder/docs/plans/implementing/...`` goes to the builder).
+All accept ``--edit`` to review/modify the prompt before sending. A plan that
+resolves to ``canon`` has no agent: name the worktree explicitly, e.g.
+``planner/docs/plans/todo/042_foo``.
+
+Prompts refer to plans by their path inside the recipient's worktree
+(``docs/plans/...``), which is what the agent sees from its working directory.
+
+If the recipient has no definition of the command (e.g. ``critique`` for the
+builder), the command is refused and lists the agents that do define it. With
+``--edit`` the first definition's text is offered in the editor for you to adapt
+to the recipient. Commands that change plan state (``plan``, ``subdivide``) are
+never borrowed this way.
+
+Every dispatch prints ``Plan resolved to: <path>`` and the recipient. When the
+recipient's tmux window is not the active one (or there is no tmux session) the
+line is flagged in red as *Not the active agent in tmux!* and a real send waits a
+second ``prompt_send_delay`` before typing, leaving time to press Ctrl-C.
 
 ``ask PLAN_PATH``
     Ask the agent to read the plan and raise clarifying questions.
@@ -231,8 +250,8 @@ state. All accept ``--edit`` to review/modify the prompt before sending.
     be omitted if the review is already in the agent's session history.
 
 ``rebase [PLAN_PATH]``
-    Ask the agent owning the plan's branch (planner in ``planning``, reviewer in
-    ``checking``) to rebase that branch onto current ``bare/main`` and resolve the
+    Ask the agent owning the plan's branch (planner in ``planning``, builder in
+    ``implementing``, reviewer in ``checking``) to rebase that branch onto current ``bare/main`` and resolve the
     conflicts the automatic rebase could not.
 
 ``full-review``

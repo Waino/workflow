@@ -61,6 +61,7 @@ Commands:
 - [prompt] ask — Read the plan; ask clarifying questions.
 - [manual] answer — Human answers questions in chat.
 - [prompt] build — Implement the plan.
+- [prompt] rebase — Rebase the working branch onto current main.
 - [script] check -> checking — Run verification checks and hand off.
 
 ### checking (agent: reviewer)

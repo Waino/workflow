@@ -767,7 +767,7 @@ def _from_audit_log(
     return _Constraint(repos=repos, states=forward)
 
 
-def _active_tmux_repo(session_name: str) -> WorktreeName | None:
+def active_tmux_repo(session_name: str) -> WorktreeName | None:
     """Return the WorktreeName of the active window in the named tmux session, or None."""
     try:
         server = libtmux.Server()
@@ -789,7 +789,7 @@ def _active_tmux_repo(session_name: str) -> WorktreeName | None:
 
 def _from_tmux(config: WorkflowConfig) -> _Constraint:
     """Derive a soft repo constraint from the active tmux window, if any."""
-    repo = _active_tmux_repo(config.tmux.session_name)
+    repo = active_tmux_repo(config.tmux.session_name)
     if repo is None:
         return _Constraint()
     if repo == WorktreeName.canon:

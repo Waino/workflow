@@ -64,7 +64,7 @@ states:
         name: ask
         description: Read the plan; ask clarifying questions.
         prompt: |
-          Read the plan at {{ plan.path }}.
+          Read the plan at {{ plan.path_in_worktree }}.
           Ask any questions until you have a clear understanding.
       - command_type: manual
         name: answer
@@ -73,7 +73,7 @@ states:
         name: critique
         description: Critique the plan.
         prompt: |
-          Read the plan at {{ plan.path }}.
+          Read the plan at {{ plan.path_in_worktree }}.
           Critique the idea.
           Please be honest, even harsh if necessary.
           Point out any flaws or weak points in the design.
@@ -86,7 +86,7 @@ states:
         name: plan
         description: Write a detailed plan from an intent.
         prompt: |
-          Read the intent at {{ plan.path }}.
+          Read the intent at {{ plan.path_in_worktree }}.
           Write a detailed implementation plan into docs/plans/planning/.
           Commit your changes.
         transition: planning
@@ -95,7 +95,7 @@ states:
         name: subdivide
         description: Break the plan into smaller planning documents.
         prompt: |
-          Read the plan at {{ plan.path }}.
+          Read the plan at {{ plan.path_in_worktree }}.
           Break it down into several detailed implementation plans.
           Write each plan into `docs/plans/planning/`.
           Use running numbers in a hierarchy below the input plan,
@@ -114,7 +114,7 @@ states:
         name: critique
         description: Critique the plan.
         prompt: |
-          Read the plan at {{ plan.path }}.
+          Read the plan at {{ plan.path_in_worktree }}.
           Critique the plan.
           Please be honest, even harsh if necessary.
           Point out any flaws or weak points in the design.
@@ -126,7 +126,7 @@ states:
       - command_type: prompt
         name: rebase
         description: Rebase the working branch onto current main.
-        prompt: |
+        prompt: &rebase_prompt |
           The branch {{ branch }} can no longer be fast-forward merged into `main`,
           and the automatic rebase hit conflicts.
           Fetch from bare and rebase {{ branch }} onto `bare/main`.
@@ -165,7 +165,7 @@ states:
         name: ask
         description: Read the plan; ask clarifying questions.
         prompt: |
-          Read the plan at {{ plan.path }}.
+          Read the plan at {{ plan.path_in_worktree }}.
           Ask any questions until you have a clear understanding.
           Do not write code yet.
       - command_type: manual
@@ -175,7 +175,7 @@ states:
         name: build
         description: Implement the plan.
         prompt: |
-          Read the plan at {{ plan.path }}.
+          Read the plan at {{ plan.path_in_worktree }}.
           Work on the feature branch {{ branch }}.
           {%- if stack %}
           The branch already carries finished work for:
@@ -184,11 +184,16 @@ states:
           {% endif -%}
           {%- endfor %}
           Read those plans for context only; do not re-implement or modify them.
-          Implement only {{ plan.path }}.
+          Implement only {{ plan.path_in_worktree }}.
           {%- else %}
           Implement the plan.
           {%- endif %}
           Commit your changes, making sure to run the pre-commit hook.
+        reminder: check
+      - command_type: prompt
+        name: rebase
+        description: Rebase the working branch onto current main.
+        prompt: *rebase_prompt
         reminder: check
       - command_type: script
         name: check
@@ -209,7 +214,7 @@ states:
         description: Write a thorough code review.
         prompt: |
           Perform a thorough code review of the changes on the {{ branch }} branch.
-          The plan is at {{ plan.path }}.
+          The plan is at {{ plan.path_in_worktree }}.
           {%- if plan.sequence_number|length > 1 %}
           The plan is a result of subdivision:
           also read the parent plan to ensure that changes align with the big picture.{%- endif %}
@@ -234,13 +239,7 @@ states:
       - command_type: prompt
         name: rebase
         description: Rebase the working branch onto current main.
-        prompt: |
-          The branch {{ branch }} can no longer be fast-forward merged into `main`,
-          and the automatic rebase hit conflicts.
-          Fetch from bare and rebase {{ branch }} onto `bare/main`.
-          Resolve the conflicts, preserving the intent of both sides; do not drop changes from `main`.
-          Run the pre-commit hook and make sure it passes.
-          Do not push: you have no write access to the shared repository.
+        prompt: *rebase_prompt
         reminder: validate
       - command_type: script
         name: validate

@@ -38,7 +38,7 @@ class StackEntry(BaseModel):
 
     name: str
     path: Path
-    """As resolved, worktree-prefixed, matching the existing ``{{ plan.path }}`` convention."""
+    """Relative to the plan's worktree (``Plan.path_in_worktree``), i.e. what the agent sees from its cwd."""
 
     commit_range: str
     """E.g. 'bare/main..7f3a91c' for the root, '7f3a91c..HEAD' for the tip."""
@@ -148,9 +148,7 @@ def resolve_stack(layout: Layout, plan: Plan) -> list[Plan]:
         if len(chain) >= _MAX_STACK_DEPTH:
             msg = f"stack depth exceeds {_MAX_STACK_DEPTH} while resolving {current.name!r}'s onto; check for a cycle"
             raise WorkflowError(msg)
-        # Plan paths are repo-prefixed; fall back to canon rather than crash on a hand-built path.
-        head = current.path.parts[0] if current.path.parts else ""
-        prefer_repo = WorktreeName(head) if head in WorktreeName.__members__ else WorktreeName.canon
+        prefer_repo = current.worktree
         base_plan = find_stack_member(layout, onto, prefer_repo=prefer_repo)
         if base_plan is None:
             msg = (
@@ -231,6 +229,6 @@ def stack_entries(layout: Layout, plan: Plan) -> list[StackEntry]:
         bases.append(repo_branch.base)
     boundaries = [f"{BARE_REMOTE}/main", *bases, "HEAD"]
     return [
-        StackEntry(name=member.name, path=member.path, commit_range=f"{boundaries[i]}..{boundaries[i + 1]}")
+        StackEntry(name=member.name, path=member.path_in_worktree, commit_range=f"{boundaries[i]}..{boundaries[i + 1]}")
         for i, member in enumerate(chain)
     ]

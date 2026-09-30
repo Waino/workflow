@@ -17,6 +17,8 @@ import click
 from rich.table import Table
 
 from workflow.agents_md import parse_hash_file
+from workflow.audit import read_audit_log
+from workflow.config import PromptCommand
 from workflow.exceptions import (
     AgentsMdGenerationError,
     AmbiguousPlanError,
@@ -43,7 +45,7 @@ from workflow.metadata import LEGACY_ROOT_MARKER, ProjectMode
 from workflow.models import PlanState
 from workflow.names import DOCS_REPO, WorktreeName
 from workflow.plan_resolver import find_all_plans_in_worktree, resolve_plan
-from workflow.registry import register_script
+from workflow.registry import _SCRIPT_REGISTRY, register_script
 from workflow.shell import console, error_console
 from workflow.stack import BRANCH_PREFIX, branch_for_plan, read_plan_frontmatter
 from workflow.validate import agents_md_copy_mismatches
@@ -348,6 +350,27 @@ def _stack_anomalies(layout: Layout, config: WorkflowConfig) -> list[str]:
     return anomalies
 
 
+def _audit_anomalies(config: WorkflowConfig, project_dir: Path) -> list[str]:
+    """Flag audit entries no current command could have written (they corrupt the resolver's audit source)."""
+    known = set(_SCRIPT_REGISTRY)
+    transition_agents: dict[str, set[str | None]] = defaultdict(set)
+    for state_config in config.states.values():
+        for cmd in state_config.commands:
+            known.add(cmd.name)
+            if isinstance(cmd, PromptCommand) and cmd.transition is not None:
+                transition_agents[cmd.name].add(state_config.agent)
+    anomalies: list[str] = []
+    for entry in read_audit_log(project_dir):
+        if entry.command not in known:
+            reason = "unknown command"
+        elif entry.command in transition_agents and entry.actor not in transition_agents[entry.command]:
+            reason = "state-changing prompt sent by an agent that does not own it"
+        else:
+            continue
+        anomalies.append(f"{entry.timestamp.isoformat()} {entry.actor} {entry.command} {entry.input_plan}: {reason}")
+    return anomalies
+
+
 def _print_anomaly_section(title: str, messages: list[str]) -> None:
     if not messages:
         return
@@ -432,11 +455,15 @@ def doctor(ctx: click.Context) -> None:
     legacy_marker_anomalies = _legacy_marker_anomalies(project_dir)
     _print_anomaly_section("Project anomalies", legacy_marker_anomalies)
 
+    audit_anomalies = _audit_anomalies(config, project_dir)
+    _print_anomaly_section("Audit log anomalies", audit_anomalies)
+
     any_anomaly = (
         any(c.anomalies for c in checks)
         or bool(duplicate_anomalies)
         or bool(stack_anomalies)
         or bool(agents_md_anomalies)
         or bool(legacy_marker_anomalies)
+        or bool(audit_anomalies)
     )
     ctx.exit(1 if any_anomaly else 0)

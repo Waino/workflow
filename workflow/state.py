@@ -57,7 +57,7 @@ def transition_plan(
     from a feature branch's ``checking/`` while canon's ``main`` still has it under
     ``implementing/``).
     """
-    worktree = worktree_override or WorktreeName(plan.path.parts[0])
+    worktree = worktree_override or plan.worktree
     repo_root = layout.git_repo_root(worktree)
     source = locate_plan_file(layout, worktree, plan.path.name)
     if source is None:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from workflow.layout import Layout
 from workflow.metadata import CodeRepoMeta, ProjectMetadata, ProjectMode, write_metadata
 
@@ -38,3 +40,9 @@ def make_project(
     metadata = ProjectMetadata(mode=mode, code_repos=[CodeRepoMeta(name=name) for name in code_repos])
     write_metadata(project_dir, metadata)
     return Layout(project_dir=project_dir, metadata=metadata)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_tmux_in_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the blind-send check independent of the tmux server of the machine running the tests."""
+    monkeypatch.setattr("workflow.tmux_dispatch.active_tmux_repo", lambda _session: None)

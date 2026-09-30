@@ -713,7 +713,7 @@ class TestParseGitLogOutput:
 
 
 # ---------------------------------------------------------------------------
-# §3.4 Direct unit tests for _from_tmux / _active_tmux_repo
+# §3.4 Direct unit tests for _from_tmux / active_tmux_repo
 # ---------------------------------------------------------------------------
 
 

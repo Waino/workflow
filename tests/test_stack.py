@@ -396,6 +396,7 @@ def test_stack_entries_commit_ranges_for_three_plan_stack(tmp_path: Path) -> Non
         ("002_middle", "b1..c1"),
         ("003_tip", "c1..HEAD"),
     ]
+    assert entries[0].path == Path("docs/plans/implementing/001_base.md")
 
 
 # ---------------------------------------------------------------------------

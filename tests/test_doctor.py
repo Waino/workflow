@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from tests.conftest import create_project_marker, make_layout
+from workflow.audit import AUDIT_LOG_FILENAME
 from workflow.cli import main
 from workflow.commands.doctor import (
     _active_branches,
+    _audit_anomalies,
     _bare_staleness_notes,
     _check_bare,
     _check_worktree,
@@ -24,6 +27,7 @@ from workflow.config import WorkflowConfig, load_config
 from workflow.frontmatter import PlanFrontmatter, RepoBranch, render_frontmatter
 from workflow.layout import Layout
 from workflow.metadata import LEGACY_ROOT_MARKER, CodeRepoMeta, ProjectMetadata, ProjectMode, write_metadata
+from workflow.models import AuditLogEntry
 from workflow.names import DOCS_REPO, WorktreeName
 
 _GIT = shutil.which("git") or "git"
@@ -457,3 +461,29 @@ def test_doctor_cli_prints_bare_staleness_section(tmp_path: Path, monkeypatch: p
     assert "Bare staleness" in result.output
     assert "mypackage" in result.output
     assert "run workflow sync" in result.output
+
+
+def _audit(tmp_path: Path, *entries: tuple[str, str]) -> list[str]:
+    config = _config_for(tmp_path)
+    lines = [
+        AuditLogEntry(timestamp=datetime(2026, 1, 1, tzinfo=UTC), actor=actor, command=command, input_plan="005_foo")
+        for actor, command in entries
+    ]
+    (tmp_path / AUDIT_LOG_FILENAME).write_text("".join(e.model_dump_json() + "\n" for e in lines), encoding="utf-8")
+    return _audit_anomalies(config, tmp_path)
+
+
+def test_audit_anomalies_flags_unknown_command_and_foreign_transition(tmp_path: Path) -> None:
+    anomalies = _audit(tmp_path, ("planner", "bogus"), ("builder", "plan"))
+
+    assert len(anomalies) == 2
+    assert "planner bogus 005_foo: unknown command" in anomalies[0]
+    assert "builder plan 005_foo" in anomalies[1]
+
+
+@pytest.mark.parametrize(
+    ("actor", "command"),
+    [("planner", "plan"), ("builder", "critique"), ("human", "start"), ("human", "todo"), ("builder", "rebase")],
+)
+def test_audit_anomalies_accepts_legitimate_entries(tmp_path: Path, actor: str, command: str) -> None:
+    assert _audit(tmp_path, (actor, command)) == []

@@ -1550,7 +1550,7 @@ def _transition_if_needed(  # noqa: PLR0913
     :func:`~workflow.git_helpers.git_commit_if_changed` does not ``git add -u``, so an
     unstaged rename would silently no-op the commit.
     """
-    worktree = worktree_override or WorktreeName(plan.path.parts[0])
+    worktree = worktree_override or plan.worktree
     target_rel = _plan_path_in_state(layout, worktree, target_state, plan)
     if (layout.project_dir / target_rel).exists():
         new_plan = plan.model_copy(update={"state": target_state, "path": target_rel})
@@ -2389,7 +2389,7 @@ def push(ctx: click.Context, plan_path: str) -> None:
             command_name="push",
             git_provides_worktree=True,
         )
-        repo = WorktreeName(plan.path.parts[0])
+        repo = plan.worktree
         repo_path = layout.git_repo_root(repo)
         require(not git_index_lock_present(repo_path), f"leftover git lock in {repo_path}; remove it first.")
         if not dry_run and repo != WorktreeName.canon:

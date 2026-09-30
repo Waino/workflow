@@ -231,3 +231,26 @@ class TestAuditLogEntry:
         json_str = entry.model_dump_json()
         restored = AuditLogEntry.model_validate_json(json_str)
         assert restored == entry
+
+
+class TestPlanWorktree:
+    @pytest.mark.parametrize(
+        ("path", "worktree", "in_worktree"),
+        [
+            ("planner/docs/plans/planning/001_a.md", "planner", "docs/plans/planning/001_a.md"),
+            ("canon/foo/docs/plans/todo/001_a.md", "canon", "foo/docs/plans/todo/001_a.md"),
+            ("reviewer/docs/plans/reviews/pr/001_a_x.md", "reviewer", "docs/plans/reviews/pr/001_a_x.md"),
+        ],
+    )
+    def test_splits_path(self, path: str, worktree: str, in_worktree: str) -> None:
+        plan = Plan(sequence_number=[1], slug="a", state=PlanState.PLANNING, path=Path(path))
+        assert plan.worktree == worktree
+        assert plan.path_in_worktree == Path(in_worktree)
+
+    @pytest.mark.parametrize("path", ["", "docs/plans/planning/001_a.md", "nobody/docs/001_a.md"])
+    def test_prefixless_path_raises(self, path: str) -> None:
+        plan = Plan(sequence_number=[1], slug="a", state=PlanState.PLANNING, path=Path(path))
+        with pytest.raises(ValueError, match="worktree"):
+            _ = plan.worktree
+        with pytest.raises(ValueError, match="worktree"):
+            _ = plan.path_in_worktree

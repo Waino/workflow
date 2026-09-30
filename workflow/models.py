@@ -8,6 +8,8 @@ from pathlib import Path  # noqa: TC003 - used at runtime by Pydantic
 
 from pydantic import BaseModel, Field, model_validator
 
+from workflow.names import WorktreeName
+
 
 class PlanState(StrEnum):
     """States in the plan state machine. Values match subdirectory names under docs/plans/."""
@@ -66,6 +68,20 @@ class Plan(BaseModel):
     def name(self) -> str:
         """Full name, e.g. '002_pydantic_models'."""
         return f"{self.sequence_number_str}_{self.slug}"
+
+    @property
+    def worktree(self) -> WorktreeName:
+        """The worktree named by the first component of :attr:`path`."""
+        try:
+            return WorktreeName(self.path.parts[0] if self.path.parts else "")
+        except ValueError as exc:
+            msg = f"plan path {str(self.path)!r} does not start with a worktree name"
+            raise ValueError(msg) from exc
+
+    @property
+    def path_in_worktree(self) -> Path:
+        """:attr:`path` without the leading worktree component."""
+        return self.path.relative_to(self.worktree.value)
 
     def absolute_path(self, project_dir: Path) -> Path:
         """Return the plan path resolved against *project_dir*."""
