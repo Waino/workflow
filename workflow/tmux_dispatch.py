@@ -92,9 +92,16 @@ class _ResolvedTarget(BaseModel):
     """The plan, the target to send, and every definition of the command (for borrow checks)."""
 
     target: _PromptTarget
+    """The target to send: a definition from the plan's worktree, or a borrowed copy re-pointed at it."""
+
     plan: Plan
+    """The resolved plan."""
+
     definitions: list[_PromptTarget]
+    """Every plan-taking definition of the command, across states."""
+
     borrowed: bool
+    """True when no definition belongs to the plan's worktree."""
 
 
 class _PromptContext(BaseModel):
@@ -107,7 +114,10 @@ class _PromptContext(BaseModel):
     prompt: str
     audit_input_plan: str | None = None
     plan_path: Path | None = None
+    """Resolved plan path, echoed before dispatch; None for stateless prompts."""
+
     next_step: str | None = None
+    """Suggested next step; None for borrowed prompts, whose lender's workflow position does not apply."""
 
 
 def _collect_prompt_targets(config: WorkflowConfig) -> dict[str, list[_PromptTarget]]:
@@ -269,7 +279,7 @@ def _setup_has_plan(
         prompt=rendered,
         audit_input_plan=plan.name,
         plan_path=plan.path,
-        next_step=format_next_step(config, target.command, plan.name),
+        next_step=None if resolved.borrowed else format_next_step(config, target.command, plan.name),
     )
 
 
@@ -339,7 +349,6 @@ def _dispatch_prompt(
 
     if result.plan_path is not None:
         console.print(f"Plan resolved to: {result.plan_path}")
-    blind = active_tmux_repo(config.tmux.session_name) != WorktreeName(agent_name)
 
     layout = config.layout()
     repo_path = layout.git_repo_root(worktree_name)
@@ -361,6 +370,8 @@ def _dispatch_prompt(
             return 0
         prompt = edited
 
+    # Decided last: the user may have switched windows during the sync or the editor session.
+    blind = active_tmux_repo(config.tmux.session_name) != worktree_name
     try:
         send_prompt_to_agent(agent_name, prompt, config, dry_run=dry_run, blind=blind)
     except WorkflowError as exc:

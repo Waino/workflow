@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from shutil import copyfile
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -587,6 +587,8 @@ def test_rebase_routes_to_builder_using_the_implementing_definition(
     assert result.exit_code == 0, result.output
     assert [agent for agent, _ in sends] == ["builder"]
     assert "Plan resolved to: builder/docs/plans/implementing/023.1_meta.md" in result.output
+    # The rebase texts are identical; only the implementing definition's reminder is `check`.
+    assert "Next step: workflow check 023.1_meta" in result.output
 
 
 def test_critique_on_a_planning_plan_uses_the_planning_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -628,6 +630,12 @@ def test_critique_for_builder_with_edit_is_sent_to_builder(tmp_path: Path, monke
     assert result.exit_code == 0, result.output
     assert sends[0][0] == "builder"
     assert "docs/plans/implementing/004_x.md" in sends[0][1]
+    branch_lookup = cast("MagicMock", tmux_dispatch.git_current_branch)
+    assert branch_lookup.call_args.args[0] == tmp_path / "builder"
+    # The lender's (planner's) next step does not apply to a borrowed prompt.
+    assert "Next step" not in result.output
+    audit_entry = cast("MagicMock", tmux_dispatch.write_audit_log).call_args.args[1]
+    assert audit_entry.next_step is None
 
 
 def test_state_changing_prompt_is_never_borrowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -691,7 +699,13 @@ def test_dry_run_flags_blind_sends(
 
 
 @pytest.mark.parametrize(("blind", "sleeps"), [(False, 1), (True, 2)])
-def test_real_send_sleeps_twice_only_when_blind(monkeypatch: pytest.MonkeyPatch, *, blind: bool, sleeps: int) -> None:
+def test_real_send_sleeps_twice_only_when_blind(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    blind: bool,
+    sleeps: int,
+) -> None:
     config = MagicMock()
     config.tmux.prompt_send_delay = 0.5
     pane = MagicMock()
@@ -707,6 +721,9 @@ def test_real_send_sleeps_twice_only_when_blind(monkeypatch: pytest.MonkeyPatch,
 
     assert sleep.call_count == sleeps
     pane.send_keys.assert_called_once()
+    output = capsys.readouterr().out
+    assert "Sending to 'planner'" in output
+    assert ("Not the active agent in tmux!" in output) is blind
 
 
 def test_build_dry_run_prints_the_next_step(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

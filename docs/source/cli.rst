@@ -224,9 +224,9 @@ If the recipient has no definition of the command (e.g. ``critique`` for the
 builder), the command is refused and lists the agents that do define it. With
 ``--edit`` the first definition's text is offered in the editor for you to adapt
 to the recipient. Commands that change plan state (``plan``, ``subdivide``) are
-never borrowed this way.
+never borrowed this way. A borrowed prompt suggests no next step.
 
-Every dispatch prints ``Plan resolved to: <path>`` and the recipient. When the
+Every plan dispatch prints ``Plan resolved to: <path>``, and every dispatch prints the recipient. When the
 recipient's tmux window is not the active one (or there is no tmux session) the
 line is flagged in red as *Not the active agent in tmux!* and a real send waits a
 second ``prompt_send_delay`` before typing, leaving time to press Ctrl-C.
