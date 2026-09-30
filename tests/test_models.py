@@ -119,85 +119,95 @@ class TestReview:
     def test_critique_review_name(self) -> None:
         assert self._critique().name == "002_pydantic_models_2026-03-18T14-30-00Z"
 
-    def test_pr_review_requires_commit(self) -> None:
-        with pytest.raises(ValidationError, match="PR review requires review_commit"):
-            Review(
-                sequence_number=[2],
-                slug="pydantic_models",
-                path=Path("reviewer/docs/plans/reviews/pr/002_pydantic_models.md"),
-                review_sub_state=ReviewSubState.PR,
-            )
-
-    def test_critique_review_requires_timestamp(self) -> None:
-        with pytest.raises(ValidationError, match="CRITIQUE review requires review_timestamp"):
-            Review(
-                sequence_number=[2],
-                slug="pydantic_models",
-                path=Path("reviewer/docs/plans/reviews/critique/002_pydantic_models.md"),
-                review_sub_state=ReviewSubState.CRITIQUE,
-            )
-
-    def test_review_rejects_non_review_state(self) -> None:
-        with pytest.raises(ValidationError, match=r"Review\.state must be REVIEW"):
-            Review(
-                sequence_number=[2],
-                slug="pydantic_models",
-                path=Path("reviewer/docs/plans/reviews/pr/002_pydantic_models_0e6baa9.md"),
-                state=PlanState.CHECKING,
-                review_sub_state=ReviewSubState.PR,
-                review_commit="0e6baa9",
-            )
-
     def test_review_is_subclass_of_plan(self) -> None:
         assert isinstance(self._pr(), Plan)
 
     def test_review_state_defaults_to_review(self) -> None:
         assert self._pr().state == PlanState.REVIEW
 
-    def test_full_review_valid(self) -> None:
-        r = Review(
+    def _full(self, **kwargs: object) -> Review:
+        return Review(
             sequence_number=[0],
             slug="",
             path=Path("reviewer/docs/plans/reviews/full/2026-03-18T14-30-00Z_0e6baa9.md"),
             review_sub_state=ReviewSubState.FULL,
             review_timestamp=self._ts,
             review_commit="0e6baa9",
+            **kwargs,  # type: ignore[arg-type]
         )
+
+    def test_full_review_valid(self) -> None:
+        r = self._full()
         assert r.state == PlanState.REVIEW
         assert r.review_sub_state == ReviewSubState.FULL
         assert r.review_timestamp == self._ts
         assert r.review_commit == "0e6baa9"
 
     def test_full_review_name(self) -> None:
-        r = Review(
-            sequence_number=[0],
-            slug="",
-            path=Path("reviewer/docs/plans/reviews/full/2026-03-18T14-30-00Z_0e6baa9.md"),
-            review_sub_state=ReviewSubState.FULL,
-            review_timestamp=self._ts,
-            review_commit="0e6baa9",
-        )
-        assert r.name == "2026-03-18T14-30-00Z_0e6baa9"
+        assert self._full().name == "2026-03-18T14-30-00Z_0e6baa9"
 
-    def test_full_review_requires_timestamp(self) -> None:
-        with pytest.raises(ValidationError, match="FULL review requires review_timestamp"):
-            Review(
-                sequence_number=[0],
-                slug="",
-                path=Path("reviewer/docs/plans/reviews/full/2026-03-18T14-30-00Z_0e6baa9.md"),
-                review_sub_state=ReviewSubState.FULL,
-                review_commit="0e6baa9",
-            )
-
-    def test_full_review_requires_commit(self) -> None:
-        with pytest.raises(ValidationError, match="FULL review requires review_commit"):
-            Review(
-                sequence_number=[0],
-                slug="",
-                path=Path("reviewer/docs/plans/reviews/full/2026-03-18T14-30-00Z_0e6baa9.md"),
-                review_sub_state=ReviewSubState.FULL,
-                review_timestamp=self._ts,
-            )
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            pytest.param(
+                {
+                    "sequence_number": [2],
+                    "slug": "pydantic_models",
+                    "path": Path("reviewer/docs/plans/reviews/pr/002_pydantic_models.md"),
+                    "review_sub_state": ReviewSubState.PR,
+                },
+                "PR review requires review_commit",
+                id="pr_review_requires_commit",
+            ),
+            pytest.param(
+                {
+                    "sequence_number": [2],
+                    "slug": "pydantic_models",
+                    "path": Path("reviewer/docs/plans/reviews/critique/002_pydantic_models.md"),
+                    "review_sub_state": ReviewSubState.CRITIQUE,
+                },
+                "CRITIQUE review requires review_timestamp",
+                id="critique_review_requires_timestamp",
+            ),
+            pytest.param(
+                {
+                    "sequence_number": [0],
+                    "slug": "",
+                    "path": Path("reviewer/docs/plans/reviews/full/2026-03-18T14-30-00Z_0e6baa9.md"),
+                    "review_sub_state": ReviewSubState.FULL,
+                    "review_commit": "0e6baa9",
+                },
+                "FULL review requires review_timestamp",
+                id="full_review_requires_timestamp",
+            ),
+            pytest.param(
+                {
+                    "sequence_number": [0],
+                    "slug": "",
+                    "path": Path("reviewer/docs/plans/reviews/full/2026-03-18T14-30-00Z_0e6baa9.md"),
+                    "review_sub_state": ReviewSubState.FULL,
+                    "review_timestamp": _ts,
+                },
+                "FULL review requires review_commit",
+                id="full_review_requires_commit",
+            ),
+            pytest.param(
+                {
+                    "sequence_number": [2],
+                    "slug": "pydantic_models",
+                    "path": Path("reviewer/docs/plans/reviews/pr/002_pydantic_models_0e6baa9.md"),
+                    "state": PlanState.CHECKING,
+                    "review_sub_state": ReviewSubState.PR,
+                    "review_commit": "0e6baa9",
+                },
+                r"Review\.state must be REVIEW",
+                id="review_rejects_non_review_state",
+            ),
+        ],
+    )
+    def test_invalid_review_raises(self, kwargs: dict[str, object], match: str) -> None:
+        with pytest.raises(ValidationError, match=match):
+            Review(**kwargs)  # type: ignore[arg-type]
 
 
 class TestAuditLogEntry:
