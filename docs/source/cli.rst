@@ -280,9 +280,9 @@ Information
     Show every plan's current state, the last action, and the next step recorded when
     that action ran (blank for entries logged before next steps were recorded), plus a
     ``stack`` column with the sequence number of the plan it is stacked onto (blank
-    when unstacked). The next step is the command's ``reminder`` from the config; it
-    is no longer inferred, so a custom config needs an explicit ``reminder`` on every
-    command that should suggest one. Omits ``done``
+    when unstacked). The next step is the command's ``reminder`` from the config: a
+    non-manual command name is shown as that command, anything else (a manual step or
+    free text) verbatim. Commands without a ``reminder`` suggest nothing. Omits ``done``
     and ``rejected`` plans unless ``--all`` is given. Followed by each worktree's git
     status; out-of-band, this is a worktree × repo matrix instead of a linear list
     (see :ref:`Multi-repo validate, doctor, and status`).

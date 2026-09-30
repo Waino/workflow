@@ -49,6 +49,7 @@ class PromptCommand(WorkflowStep):
     prompt: str
     transition: PlanState | None = None
     reminder: str | None = None
+    """Suggested next step: a non-manual command name renders as ``workflow <cmd> <plan>``, anything else verbatim."""
 
     def render(self) -> Text:
         """Render the cheatsheet representation of the workflow step."""
@@ -65,6 +66,7 @@ class ScriptCommand(WorkflowStep):
     script: str
     transition: PlanState | None = None
     reminder: str | None = None
+    """Suggested next step: a non-manual command name renders as ``workflow <cmd> <plan>``, anything else verbatim."""
     worktree_override: WorktreeName | None = None
     also_valid_in_states: list[PlanState] = []
     pull_target: WorktreeName | None = None
