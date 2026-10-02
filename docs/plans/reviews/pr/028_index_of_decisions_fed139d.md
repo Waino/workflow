@@ -116,3 +116,52 @@ Branch commits: `002ceac` feat, `5de17a9` style, `fed139d` docs.
 - Order: fix findings 1, 3, 4, 5, 8, 9 first; then build the index; then stop for human review.
 - Format proposals are discussed in chat first; agreed changes are written into the intent (spec + Decisions).
 - The final prompt text is written only after the format proposals are decided.
+
+## Reviewer step: index built — format proposals (pending human decision)
+
+Status: findings 1, 3, 4, 5, 8, 9 fixed (`b7fadb4`); index created (`docs/plans/index_of_decisions.md`,
+`e4ef809`): 69 files read, all indexable files appear in Plan summaries, 216 decision entries, 22 deferred items,
+13 terms, ~44 KB. The final `index_decisions` prompt is not written yet (waits on the decisions below).
+
+Learnings and proposals (to be decided, then written into `intent/028_index_of_decisions`):
+
+1. **Legacy count-based numbering is a judgement call, not mechanical.** Decision-list headings vary
+   (Decisions, Design decisions, Key design decisions, Clarified decisions, Clarifications, PR-review decisions,
+   Post-review decisions; 024 has "Post-review fixes" whose text calls them decisions), some headings only
+   *reference* a decision ("Dirty-tree preconditions (decision 17)"), and files carry their own labels that clash
+   with counting (014: an unnumbered list, then D1–D9 and E1–E4; intent/023: two lists both starting at 1, with
+   cross-references like "decision 6" that are themselves ambiguous). The counting rule applied is written in the
+   index header. Proposal: adopt that rule in the intent; keep count + locator.
+2. **Implicit legacy decisions (`D–`).** Plans 002–008, the 012 plan, 016 and parts of 017/021/023.x have no
+   decision sections but hold the most load-bearing choices (relative `Plan.path`, no-verify transitions, trust
+   model of `.agents_md_hash`, soft vs hard resolver constraints, migration-over-compat policy). "Explicit only"
+   would drop them. ~45 entries are indexed as `D–` with a locator only. Proposal: allow `D–` for legacy files
+   only; new files must use the Decisions list.
+3. **Intent and plan restate the same decisions** (intent/020 D1–D10 ≈ 020 plan D1–D10; intent/024 vs plan 024).
+   Proposal: index the earliest statement only; a later file is indexed only where it changes or adds something
+   (e.g. 025 plan §4 supersedes intent/025 D10).
+4. **Entry head for plan summaries.** The head is the top-level plan when one exists (`020_robustness`), else the
+   intent (`intent/023_out_of_band`, whose plans are all subdivided). Proposal: write this rule down.
+5. **Reviews contribute nothing so far.** No legacy review has a Decisions list; fix-time decisions were written
+   into the *plan* ("PR-review decisions" in 023.4, "Post-review decisions" in 023.5/023.6, "Post-review fixes"
+   in 024). Decision 16 says they belong in the review file. Proposal: say so explicitly in the generated
+   AGENTS.md conventions ("decisions made while fixing go into the review's Decisions list") — otherwise
+   reviewers will keep writing into the plan.
+6. **Partial supersession.** Some later decisions narrow rather than replace an earlier one (intent/020 D9 narrows
+   004.4 §6 on dry-run). Proposal: no extra status; keep `current` and say "narrowed by …" in the summary.
+7. **Hash merge-method rule is redundant** (finding 6): with the recorded hash being a `main` commit, squash or
+   rebase of the index branch cannot invalidate it. Proposal: drop "never squashed or rebased" from Decision 21
+   and the docs.
+8. **Stale 001 terminology.** intent/001 defines *repo* as one of canon/planner/builder/reviewer/bare; 023.2
+   renamed that concept to *worktree*. Decision 15 excludes 001 terms from the index, so the stale definition is
+   invisible here. Suggest updating 001 §Terminology (worktree vs git repo) and adding *ticket* and *handoff*.
+9. **Size.** ~44 KB (~11k tokens) read at the start of every planning/review session, and it only grows.
+   Proposal: keep entries to one summary line plus locator (done); revisit with Decision 22 (compression).
+   Alternative: phrase the AGENTS.md instruction as "read the topics relevant to the task".
+10. **"Mentioned in the index" needs a definition** for the candidate rule (Decision 20). Proposal: a file counts
+    as indexed iff it appears in Plan summaries (as head or in Related). The index satisfies this today.
+11. **Deferred work on first creation.** Out-of-scope items already completed by later plans were not added (e.g.
+    the `go` command, `start` placeholders). Proposal: the prompt says the indexer skips items it can see are done;
+    `followthrough` remains the authority for pruning.
+12. **Selectivity.** 216 decisions is many. Candidates for pruning: trivial `D–` entries and 028's own decisions.
+    Ask the human whether to prune before the prompt is written, since the prompt sets the bar for future passes.
