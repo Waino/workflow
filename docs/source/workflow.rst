@@ -272,7 +272,8 @@ so a later plan can easily miss one. ``docs/plans/index_of_decisions.md`` collec
 
 * a summary of each change (intent, plan and reviews),
 * the decisions, grouped by topic, each with a status (``current``, ``intended``, ``superseded``, ``obsolete``),
-* deferred work (``open`` or ``dropped``) and architecturally important terms.
+* deferred work (``open`` or ``dropped``), and
+* architecturally important terms.
 
 The file does not exist in a fresh project. Run ``workflow index_decisions`` to have the reviewer
 create it, and again later to add what changed since. It records the commit hash of the last pass,
