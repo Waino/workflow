@@ -281,7 +281,11 @@ so it must be merged by fast-forward or merge commit, never squashed or rebased.
 ``workflow followthrough`` removes deferred items that have since been completed.
 
 The generated part of ``AGENTS.md`` tells agents to read ``intent/001_idea.md`` and, if it exists,
-the index. Remove any static copy of the first instruction from your own ``AGENTS.md`` body.
+the index, and how to number and refer to decisions. Remove any static copy of the first instruction
+from your own ``AGENTS.md`` body (``docs/body_of_agents.md`` in out-of-band mode).
+
+A project's customized ``config.yaml`` does not automatically pick up the ``index_decisions`` command
+or the ``followthrough`` addition: copy them over from ``docs/default_config.yaml`` by hand.
 
 The index is also the one place to see the current set of decisions: review it periodically
 and correct entries that are wrong or stale.

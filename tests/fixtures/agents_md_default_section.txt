@@ -22,6 +22,15 @@ The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md`
 Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
 Reviews (in docs/plans/reviews) do not follow this naming scheme.
 
+Decisions are recorded as a single numbered `## Decisions` list per file.
+A review organized per plan may have several Decisions sections; numbering continues across the file.
+Numbering is append-only: never renumber; a withdrawn decision stays in place, marked withdrawn.
+Every resolved open option gets a Decisions entry; the discarded option's "would have" summary is only the rationale.
+Refer to a decision as `{identifier} Decision {number}`, where the identifier is `intent/{number}_{slug}`
+for intents, `{number}_{slug}` (no state) for plans, and `reviews/{type}/{filename}` for reviews,
+always without the `.md` suffix, e.g. `023.4_init_oob_and_bootstrap Decision 2`.
+Older files predating this convention are not edited: resolve references to their decisions through the index.
+
 ### intent (agent: planner)
 Plans being explored.
 Inbound: (none)
@@ -102,5 +111,5 @@ Outbound: (none)
 Commands:
 - [prompt] full review — Perform a full review of the current codebase.
 - [prompt] followthrough — Compare done plans against the codebase for unimplemented features.
-- [prompt] index_decisions — Update the index of decisions from plans and reviews not yet indexed.
+- [prompt] index_decisions — Update the index of decisions from plans, intents, and reviews not yet indexed.
 - [prompt] refresh — Update planning/todo plans against decisions made since they were written.

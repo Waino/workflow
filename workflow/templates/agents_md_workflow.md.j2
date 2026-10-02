@@ -17,10 +17,19 @@ A prompt command may therefore arrive in a state where it is not listed below
 (for example, `ask` may be sent in any state).
 When this happens, follow the prompt as given.
 
-Plans reside in `docs/plans`.
-The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md` is in the state `implementing`.
+Plans reside in `{{ plans_dir }}`.
+The plan state is defined by location, e.g. `{{ plans_dir }}/implementing/002_foo.md` is in the state `implementing`.
 Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
-Reviews (in docs/plans/reviews) do not follow this naming scheme.
+Reviews (in {{ plans_dir }}/reviews) do not follow this naming scheme.
+
+Decisions are recorded as a single numbered `## Decisions` list per file.
+A review organized per plan may have several Decisions sections; numbering continues across the file.
+Numbering is append-only: never renumber; a withdrawn decision stays in place, marked withdrawn.
+Every resolved open option gets a Decisions entry; the discarded option's "would have" summary is only the rationale.
+Refer to a decision as `{identifier} Decision {number}`, where the identifier is `intent/{number}_{slug}`
+for intents, `{number}_{slug}` (no state) for plans, and `reviews/{type}/{filename}` for reviews,
+always without the `.md` suffix, e.g. `023.4_init_oob_and_bootstrap Decision 2`.
+Older files predating this convention are not edited: resolve references to their decisions through the index.
 {% if oob %}
 This project is out-of-band: plans live in `docs`, and code lives in separate repos ({{ code_repos|join(', ') }}).
 Every plan file in the `implementing` or `checking` state must carry a `branches` frontmatter block

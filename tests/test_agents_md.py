@@ -32,7 +32,6 @@ from workflow.agents_md import (
 from workflow.config import WorkflowConfig, load_config
 from workflow.exceptions import AgentsMdGenerationError, WorkflowError
 from workflow.metadata import METADATA_FILENAME, CodeRepoMeta, ProjectMetadata, ProjectMode, write_metadata
-from workflow.models import PlanState
 
 # ---------------------------------------------------------------------------
 # normalise
@@ -519,24 +518,11 @@ def test_agents_md_dry_run_writes_nothing(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 # ---------------------------------------------------------------------------
-# read-first instructions
+# read-first instructions (in-band is pinned by the golden fixture)
 # ---------------------------------------------------------------------------
-
-
-def test_render_workflow_section_in_band_reads_idea_and_index(tmp_path: Path) -> None:
-    section = render_workflow_section(_load_default_config(tmp_path))
-    assert "reading `docs/plans/intent/001_idea.md`" in section
-    assert "If `docs/plans/index_of_decisions.md` exists" in section
 
 
 def test_render_workflow_section_oob_reads_idea_and_index(tmp_path: Path) -> None:
     section = render_workflow_section(_load_oob_config(tmp_path))
     assert "reading `docs/plans/intent/001_idea.md`" in section
     assert "If `docs/plans/index_of_decisions.md` exists" in section
-
-
-def test_default_config_has_index_decisions_for_reviewer() -> None:
-    config = load_config(Path(__file__).parents[1] / "docs" / "default_config.yaml")
-    review = config.states[PlanState.REVIEW]
-    assert review.agent == "reviewer"
-    assert "index_decisions" in [cmd.name for cmd in review.commands]
