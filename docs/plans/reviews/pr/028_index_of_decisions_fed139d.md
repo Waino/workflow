@@ -107,3 +107,12 @@ Branch commits: `002ceac` feat, `5de17a9` style, `fed139d` docs.
 - Remove the static "Always start by reading docs/plans/intent/001_idea.md" line from this repo's `AGENTS.md`
   body, then run `workflow agents_md` to regenerate the managed section.
 - Paste the "Recording decisions" draft into the harness system prompts (Decision 23).
+
+## Reviewer-step process (agreed with the human)
+
+- All reviewer-step work (index file, format proposals, final `index_decisions` prompt) goes on
+  `feat/028_index_of_decisions`, so the placeholder never reaches `main`. The recorded hash is `1c5aabf`,
+  the `main` commit this branch was cut from.
+- Order: fix findings 1, 3, 4, 5, 8, 9 first; then build the index; then stop for human review.
+- Format proposals are discussed in chat first; agreed changes are written into the intent (spec + Decisions).
+- The final prompt text is written only after the format proposals are decided.
