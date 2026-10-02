@@ -1,3 +1,7 @@
+Always start by reading `docs/plans/intent/001_idea.md`.
+If `docs/plans/index_of_decisions.md` exists, read it next when planning or reviewing;
+when implementing, consult it if the plan leaves something unclear.
+
 The workflow below is enacted by the human user. Agents do not invoke `workflow`
 subcommands themselves; they receive rendered prompts in the chat via tmux, appearing as ordinary user messages.
 Script subcommands are not visible to the agents.
@@ -98,4 +102,5 @@ Outbound: (none)
 Commands:
 - [prompt] full review — Perform a full review of the current codebase.
 - [prompt] followthrough — Compare done plans against the codebase for unimplemented features.
+- [prompt] index_decisions — Update the index of decisions from plans and reviews not yet indexed.
 - [prompt] refresh — Update planning/todo plans against decisions made since they were written.

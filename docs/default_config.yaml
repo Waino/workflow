@@ -297,6 +297,16 @@ states:
           Go through all plans in the states intent, checking, and done.
           Compare features against the codebase.
           List unimplemented and only partially implemented features.
+          If `docs/plans/index_of_decisions.md` exists, also go through its deferred work section:
+          remove every item that the codebase shows to be completed, and record the current commit hash
+          as the last followthrough pass. Do not create the index file if it does not exist.
+      - command_type: prompt
+        name: index_decisions
+        description: Update the index of decisions from plans and reviews not yet indexed.
+        prompt: |
+          Placeholder (to be replaced in plan 028). Update `docs/plans/index_of_decisions.md`
+          (create it if missing) with decisions, deferred work, and terms from the indexable files
+          that are not yet mentioned in it or changed since the recorded commit hash.
       - command_type: prompt
         name: refresh
         description: Update planning/todo plans against decisions made since they were written.

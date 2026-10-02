@@ -16,6 +16,7 @@ from click.testing import CliRunner
 import workflow.commands.agents_md as cm_cmd
 from tests.conftest import create_project_marker
 from workflow import main
+from workflow.models import PlanState
 from workflow.agents_md import (
     MARKER_BEGIN,
     MARKER_END,
@@ -515,3 +516,27 @@ def test_agents_md_dry_run_writes_nothing(tmp_path: Path, monkeypatch: pytest.Mo
     assert ".agents_md_hash" in result.output
     assert not (tmp_path / "canon" / "AGENTS.md").exists()
     assert not list(tmp_path.rglob(".agents_md_hash"))
+
+
+# ---------------------------------------------------------------------------
+# read-first instructions
+# ---------------------------------------------------------------------------
+
+
+def test_render_workflow_section_in_band_reads_idea_and_index(tmp_path: Path) -> None:
+    section = render_workflow_section(_load_default_config(tmp_path))
+    assert "reading `docs/plans/intent/001_idea.md`" in section
+    assert "If `docs/plans/index_of_decisions.md` exists" in section
+
+
+def test_render_workflow_section_oob_reads_idea_and_index(tmp_path: Path) -> None:
+    section = render_workflow_section(_load_oob_config(tmp_path))
+    assert "reading `docs/plans/intent/001_idea.md`" in section
+    assert "If `docs/plans/index_of_decisions.md` exists" in section
+
+
+def test_default_config_has_index_decisions_for_reviewer() -> None:
+    config = load_config(Path(__file__).parents[1] / "docs" / "default_config.yaml")
+    review = config.states[PlanState.REVIEW]
+    assert review.agent == "reviewer"
+    assert "index_decisions" in [cmd.name for cmd in review.commands]

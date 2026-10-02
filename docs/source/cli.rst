@@ -267,7 +267,12 @@ second ``prompt_send_delay`` before typing, leaving time to press Ctrl-C.
 
 ``followthrough``
     Ask the reviewer to compare done/checking/intent plans against the codebase
-    and list unimplemented or partially implemented features.
+    and list unimplemented or partially implemented features. When the index of decisions
+    exists, also remove completed items from its deferred work section.
+
+``index_decisions``
+    Ask the reviewer to update ``docs/plans/index_of_decisions.md`` (created on the first
+    run) from plans, intents and reviews not yet indexed. See :ref:`Index of decisions`.
 
 ``refresh``
     Ask the planner to update ``planning``/``todo`` plans against decisions made in

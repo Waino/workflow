@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from workflow.exceptions import AgentsMdGenerationError
 from workflow.metadata import ProjectMode
+from workflow.names import WorktreeName
 
 if TYPE_CHECKING:
     from workflow.config import WorkflowConfig
@@ -209,7 +210,9 @@ def render_workflow_section(config: WorkflowConfig) -> str:
     template = env.from_string(template_text)
     oob = config.metadata is not None and config.metadata.mode == ProjectMode.oob
     code_repos = [repo.name for repo in config.metadata.code_repos] if oob and config.metadata is not None else []
-    return normalise(template.render(states=states_data, oob=oob, code_repos=code_repos))
+    layout = config.layout()
+    plans_dir = layout.plans_root(WorktreeName.canon).relative_to(layout.worktree_root(WorktreeName.canon))
+    return normalise(template.render(states=states_data, oob=oob, code_repos=code_repos, plans_dir=plans_dir))
 
 
 # ---------------------------------------------------------------------------

@@ -262,6 +262,29 @@ Reviews (under ``docs/plans/reviews/``) are a special case: they are never moved
 between states. Instead, a review's findings are addressed by writing one or more
 new plans.
 
+.. _Index of decisions:
+
+Index of decisions
+------------------
+
+Decisions are made during planning and review and recorded only in the individual plan,
+so a later plan can easily miss one. ``docs/plans/index_of_decisions.md`` collects them in one place:
+
+* a summary of each change (intent, plan and reviews),
+* the decisions, grouped by topic, each with a status (``current``, ``intended``, ``superseded``, ``obsolete``),
+* deferred work (``open`` or ``dropped``) and architecturally important terms.
+
+The file does not exist in a fresh project. Run ``workflow index_decisions`` to have the reviewer
+create it, and again later to add what changed since. It records the commit hash of the last pass,
+so it must be merged by fast-forward or merge commit, never squashed or rebased.
+``workflow followthrough`` removes deferred items that have since been completed.
+
+The generated part of ``AGENTS.md`` tells agents to read ``intent/001_idea.md`` and, if it exists,
+the index. Remove any static copy of the first instruction from your own ``AGENTS.md`` body.
+
+The index is also the one place to see the current set of decisions: review it periodically
+and correct entries that are wrong or stale.
+
 .. _Stacked plans:
 
 Stacked plans
