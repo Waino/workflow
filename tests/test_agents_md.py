@@ -16,7 +16,6 @@ from click.testing import CliRunner
 import workflow.commands.agents_md as cm_cmd
 from tests.conftest import create_project_marker
 from workflow import main
-from workflow.models import PlanState
 from workflow.agents_md import (
     MARKER_BEGIN,
     MARKER_END,
@@ -33,6 +32,7 @@ from workflow.agents_md import (
 from workflow.config import WorkflowConfig, load_config
 from workflow.exceptions import AgentsMdGenerationError, WorkflowError
 from workflow.metadata import METADATA_FILENAME, CodeRepoMeta, ProjectMetadata, ProjectMode, write_metadata
+from workflow.models import PlanState
 
 # ---------------------------------------------------------------------------
 # normalise
