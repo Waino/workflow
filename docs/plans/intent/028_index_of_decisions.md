@@ -14,7 +14,8 @@ The index file is located at `index_of_decisions.md` in the plans root
 (`docs/plans/` in-band, `plans/` out-of-band; derived via `layout`).
 In a fresh project, it does not exist. The file is created on the first run of the update prompt.
 
-The index records the commit hash of the last indexing pass (Decision 3, 21).
+The index records the commit hash of the last indexing pass (Decision 3, 21),
+and the commit hash of the last followthrough pass.
 
 The file is also the single place for the human to review the current set of decisions;
 the user docs recommend reviewing it periodically (Decision 11).
@@ -33,9 +34,9 @@ chosen by the reviewer, with the file identifier as a field. Each pass may merge
     - all of whose plans were rejected: their decisions are marked obsolete.
     - with no plan yet: their decisions are marked `intended`.
 
-### Entry summary section
+### Plan summary section
 
-Each entry in this section represents one change ("entry"), containing the following fields
+Each entry in this section represents one change, containing the following fields
 - One line summary of plan contents
 - List of related files: intent, ticket, reviews
     - Also acts to track which plans have been indexed: a file not mentioned needs to be added in the next pass
@@ -44,7 +45,7 @@ Each entry in this section represents one change ("entry"), containing the follo
 An entry collapses an intent, its plan(s), and their reviews,
 because their summaries would be (nearly) identical, and a review is best summarized by the reviewed change.
 For subplans and stacked plans, the reviewer decides when they need an entry of their own.
-Rule of thumb: entries with the same summary go together.
+Rule of thumb: plans with the same summary go together.
 
 ### Decision summary section
 
@@ -63,10 +64,19 @@ Each entry in this section represents one decision, containing the following fie
     - obsolete: This decision pertains to some component that was removed. A different path was not taken: the path is gone.
 - One line summary of decision
 
+Extracting decisions is not a mechanical process; reviewer chooses which decisions are worth indexing.
+
 Only explicit decisions are indexed. They should be non-trivial and likely to be relevant outside the plan itself.
 Logging every small decision the agent made by itself would be counterproductive.
-Something that needed to be asked from the user very likely counts
+Something that needed to be asked from the user is more likely to count
 (but beware of questions whose answer was already in the plan).
+Rejected proposals can also contain something to note
+(e.g. rejecting an integration test to form an intentionally accepted test gap).
+
+Never index the following:
+- Decisions about sequencing and scoping within a plan or sequence of subdivided plans.
+- The decision to accept or reject a proposal. The proposal itself may contain decisions worth indexing.
+- Decisions to add particular tests. The existence of the test is enough.
 
 Superseded and obsolete decisions are kept in the index, so an agent reading an old plan can tell
 whether a decision still holds. Superseded entries reference the superseding decision.
@@ -194,7 +204,7 @@ Reviewer will
     numbering never resets within a file.
 17. Intents whose plans were all rejected: decisions marked obsolete. Unplanned intents: decisions marked `intended`.
 18. The "Marking options" convention is revised: every resolved option produces a Decisions list entry.
-19. The grouping term is "entry", not "PR" (collides with `reviews/pr` and the `pr` command).
+19. The plan grouping term is "entry", not "PR" (collides with `reviews/pr` and the `pr` command).
 20. Candidates for indexing = indexable files not mentioned in the index + files changed since the recorded hash.
 21. The recorded hash is the `main` commit the review branch was cut from; the branch is merged ff or merge-commit;
     in oob the diff runs in the plans repo.
@@ -222,9 +232,10 @@ generated AGENTS.md section; this text covers behavior, so it does not depend on
   Once chosen, add a Decisions entry, and collapse each discarded option into a short "would have" summary
   plus the reason it was discarded.
 - Refer to decisions as `{identifier} Decision {n}` (see AGENTS.md); resolve legacy references through the index.
+  Use this format in plans, code, and chat.
 ```
 
-## Considered alternatives
+## Rejected alternatives
 
 ### Agent-managed section in `intent/001`
 
