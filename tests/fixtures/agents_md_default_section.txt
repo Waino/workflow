@@ -1,6 +1,8 @@
 Always start by reading `docs/plans/intent/001_idea.md`.
 If `docs/plans/index_of_decisions.md` exists, read it next when planning or reviewing;
 when implementing, consult it if the plan leaves something unclear.
+Read its header, Plan summaries and Terminology, list the topics with `grep -n '^###'`,
+then read the topic sections relevant to the task (and Deferred work when planning).
 
 The workflow below is enacted by the human user. Agents do not invoke `workflow`
 subcommands themselves; they receive rendered prompts in the chat via tmux, appearing as ordinary user messages.
