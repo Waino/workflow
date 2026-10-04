@@ -191,7 +191,7 @@ One loss: the only review-sourced deferred item ("fuzzy resolution of review pat
 
 ### Pruning (applied: 202 → 152 decisions, 44 KB → 35 KB)
 
-Numbers refer to the order of the first index version (`e4ef809`).
+Pruned entries are listed by file and decision; the first index version is `e4ef809`.
 
 - **Obvious location, higher bar** (20): 028 D3 hash-not-timestamps, 028 D4 indexed files, 028 D7 reviewer owns,
   028 D12 legacy locators, 028 D13 append-only, 028 D18 resolved options, 028 D21 main hash (all restated by the
