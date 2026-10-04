@@ -85,9 +85,15 @@ then save and close; the modified text is sent to the reviewer.
   The CLI always writes the log; no agent writes log entries directly.
 - **agent**: One of the three AI agents (planner, builder, reviewer) running in a sandbox.
   Does not include the human operator.
-- **repo**: A git clone of the project used by a participant.
-  The named repos are `canon` (human operator), `planner`, `builder`, `reviewer`, and `bare`.
-  `canon` is a repo but not an agent; `human` is an actor but not a repo.
+- **handoff**: A transition that passes a ticket between agents, done by a script command with cross-worktree git
+  (`todo`, `implement`, `check`, `accept`).
+- **ticket**: A plan in `planning`, `todo`, `implementing`, `checking`, `done`, or `rejected`;
+  intents and reviews are plans but not tickets.
+- **worktree**: The project checkout used by one participant: `canon` (human operator), `planner`, `builder`,
+  or `reviewer`. `canon` is a worktree but not an agent; `human` is an actor but not a worktree.
+  `bare` is the shared bare mirror the worktrees push to and fetch from (remote name `bare`); it is not a worktree.
+- **git repo**: An actual git repository inside a worktree. In-band, a worktree is a single git repo (`docs`);
+  out-of-band, a worktree is a directory holding the `docs` repo (plans) and one or more code repos.
 
 ## Loose path parsing
 
