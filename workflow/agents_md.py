@@ -212,7 +212,10 @@ def render_workflow_section(config: WorkflowConfig) -> str:
     plans_root_in_worktree = config.layout().plans_root_in_worktree
     return normalise(
         template.render(
-            states=states_data, oob=oob, code_repos=code_repos, plans_root_in_worktree=plans_root_in_worktree,
+            states=states_data,
+            oob=oob,
+            code_repos=code_repos,
+            plans_root_in_worktree=plans_root_in_worktree,
         ),
     )
 
