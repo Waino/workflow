@@ -304,9 +304,90 @@ states:
         name: index_decisions
         description: Update the index of decisions from plans and intents not yet indexed.
         prompt: |
-          Placeholder (to be replaced in plan 028). Update `{{ plans_root_in_worktree }}/index_of_decisions.md`
-          (create it if missing) with decisions, deferred work, and terms from the indexable files
-          that are not yet mentioned in it or changed since the recorded commit hash.
+          Update the index of decisions `{{ plans_root_in_worktree }}/index_of_decisions.md`; create it if it does not exist.
+          Its purpose: a planner reading only some prior plans must not miss a relevant decision, and decisions should not
+          be duplicated or contradicted unknowingly. It does not pin behaviour (tests do) and does not replace reading plans:
+          it tells agents which plans to read.
+
+          Indexable files: plans in `done` and all intents. Do not read reviews, or plans in other states.
+          Read every indexable file that
+          - is not covered by a Plan summaries entry (as head, related file, or subplan range), or
+          - changed since the last indexing pass: `git -C {{ plans_root_in_worktree }} diff --name-only --relative <hash>..HEAD -- .`
+          For a changed file, update its existing entries instead of adding duplicates.
+
+          File layout. Start the file with exactly this header, filling in the hashes:
+
+          ```
+          # Index of decisions
+
+          Last indexing pass: `<hash>` (the `main` commit the indexing branch was cut from).
+          Last followthrough pass: `<hash>` | (none)
+
+          Selective index of decisions, deferred work, and terms from done plans and intents.
+          Decisions judged trivial or local to their plan are not indexed: read the plans an entry points to
+          before relying on the absence of a decision. Obsolete detection is best-effort.
+          Topics are `###` headings: list them with `grep -n '^###'` and read the relevant ones.
+
+          Identifiers: `intent/{number}_{slug}` and `{number}_{slug}` (plans, without state).
+          Refer to a decision as `{identifier} Decision {n}`. In legacy files (no single numbered Decisions list),
+          numbers are valid only as given here, `D–` marks an unnumbered choice, and the locator (`§heading: "quote"`)
+          finds the text.
+
+          Statuses: decisions `current` / `intended` / `superseded` (→ superseding decision) / `obsolete`;
+          deferred work `open` / `dropped`; terms `current` / `superseded`.
+          ```
+
+          Then these `##` sections, in order. Keep entries to one summary line plus locator; wrap at 120 characters.
+          - `## Plan summaries`, ordered by number: ``- `{head}` — {one-line summary}.`` and optionally a second line
+            ``Related: {identifiers}`` (the intent, tickets) or ``Subplans {first}–{last}.``
+            The head is the top-level plan if one exists, else the intent. Every file you read must end up covered by an entry.
+          - `## Decisions`, grouped under `###` topic headings you choose (merge or rename topics as the index grows):
+            ``- {status} `{identifier}` D{n} — {one-line summary}. §{heading}: "{short quote}"``
+            The locator is needed for legacy files only.
+          - `## Deferred work`: ``- {status} `{identifier}` — {summary}.`` Add `###` topics once the section grows long.
+          - `## Terminology`: ``- {status} **{term}** (`{identifier}`) — {definition}.``
+
+          Numbering. A file with one numbered `## Decisions` list uses its numbers. Legacy files are never edited; number
+          their explicit decision items in file order across every decision-like list (Decisions, Design decisions,
+          Clarifications, post-review decisions, …) and inline `Decision:` sentences. A file's own labels go into the locator.
+          Load-bearing implicit choices in legacy files may be indexed as `D–` with a locator; elsewhere, index only
+          explicit decisions.
+
+          Statuses. `intended`: from an intent with no plan yet. `obsolete`: from an intent whose plans were all rejected,
+          or about a component since removed. Supersede check: for every decision you add, search the index for decisions
+          it overrides and mark them `superseded (→ {identifier} D{n})`; a withdrawn decision is marked the same way.
+          A decision that only narrows an earlier one adds "narrowed by …" to the earlier entry, which stays `current`.
+
+          Selecting decisions. The rules are heuristics and may conflict; make the call. Index a decision only if it is
+          non-trivial and likely relevant outside its own plan. Pruned decisions stay unindexed.
+          - A user's answer counts more, but only when they chose between real alternatives, not when confirming the obvious.
+          - Rejected proposals may matter, e.g. a deliberately accepted test gap.
+          - Decisions in the obvious location (the plan that introduced a subsystem) need a higher bar for impact.
+            Decisions in unobvious locations (follow-ups, bug fixes, later plans) get a lower bar for impact,
+            not for triviality.
+          - Keep surprising definitions; omit obvious ones. Omit structural decisions ("Foo subclasses Bar",
+            "Foo carries field baz") unless architecturally load-bearing.
+          - Keep prohibitions a later plan could plausibly violate (e.g. agents never push); not everything phrased negatively.
+          - When an intent and its plan restate decisions, index the earliest statement; index a later file only where it
+            changes or adds something.
+          - Superseded decisions pass the same bar as current ones. A supersession within one file is not indexed.
+          Never index:
+          - sequencing and scoping within a plan or a chain of subdivided plans;
+          - accepting or rejecting a proposal (the proposal itself may hold decisions);
+          - decisions to add particular tests;
+          - content already in `{{ plans_root_in_worktree }}/intent/001_idea.md`;
+          - a decision that only applies an indexed rule to one more caller or command;
+          - output wording and formatting, unless something parses it or it is a user-facing contract;
+          - an accepted limitation that is also a deferred work item: list it under Deferred work only.
+
+          Deferred work: deferred, out-of-scope, and future work. Only add items; skip items you can see are done
+          (`followthrough` prunes completed ones). Omit work deferred to a later part of the same subdivide chain.
+
+          Terminology: only terms coined or given a specific meaning in a plan and used across plans or in code identifiers.
+          Skip terms defined in `intent/001_idea.md`; suggest adding important ones there instead.
+
+          Record the `main` commit your branch was cut from as the last indexing pass, and commit the index.
+          In your final message, list the files you read and any borderline decisions you pruned, for human review.
       - command_type: prompt
         name: refresh
         description: Update planning/todo plans against decisions made since they were written.

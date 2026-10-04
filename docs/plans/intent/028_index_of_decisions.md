@@ -28,7 +28,7 @@ and the commit hash of the last followthrough pass.
 The file is also the single place for the human to review the current set of decisions;
 the user docs recommend reviewing it periodically (Decision 11).
 
-Decisions, deferred work, and terms are grouped under topic headings (e.g. git sync, plan resolution, oob layout)
+Decisions (and deferred work and terms, once long; Decision 42) are grouped under topic headings (e.g. git sync, plan resolution, oob layout)
 chosen by the reviewer, with the file identifier as a field. Each pass may merge or rename headings (Decision 10).
 Topic headings are `###`, fixed sections `##`, so `grep -n '^###'` lists the topics with current line numbers;
 agents read only the topic sections relevant to their task (Decision 40).
@@ -180,7 +180,8 @@ Hash rules (Decision 21):
 - Prompts get the template variable `plans_root_in_worktree` (`docs/plans` in both modes, derived from `layout`);
   running git with `-C` on it works in both modes, as git finds the enclosing repo (Decision 36).
 
-The exact text TBD.
+The prompt text is in `docs/default_config.yaml`. It carries the full format and selection rules, since other
+projects have neither this intent nor a reference index, and the exact reader-facing header (Decision 41).
 
 ## Related change: how to unambiguously refer to decisions
 
@@ -294,6 +295,12 @@ Reviewer will
 40. Agents read the index selectively: header, Plan summaries, Terminology, then `grep -n '^###'` for topics and
     the relevant topic sections. Rejected: a maintained topic list (duplicates headings, drifts) and YAML with
     a filter command (needs tooling; conflicts with the rejected "Structured data" alternative).
+41. The index header's static text is part of the `index_decisions` prompt, which tells the agent to start the
+    file with exactly that header (so each pass refreshes it). The header holds only what readers need;
+    indexer-only rules (legacy numbering, selection) stay in the prompt. Rejected: a static file created at init
+    (needs migration, complicates "read if it exists", two sources of rules) and a package template injected as a
+    variable (extra code for one prompt; upgrade path if the header changes often).
+42. Deferred work and Terminology get `###` topic headings only once they grow long; Decisions always have them.
 
 ## Draft: system prompt section on recording decisions
 
