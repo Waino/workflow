@@ -165,3 +165,111 @@ Learnings and proposals (to be decided, then written into `intent/028_index_of_d
     `followthrough` remains the authority for pruning.
 12. **Selectivity.** 216 decisions is many. Candidates for pruning: trivial `D–` entries and 028's own decisions.
     Ask the human whether to prune before the prompt is written, since the prompt sets the bar for future passes.
+
+## Round 2: human decisions applied, pruning
+
+### Review issues
+
+- **3 (`{{ commit }}` before pull)**: confirmed and fixed (`3c466dd`). `_setup_*` read `branch`/`commit` before
+  `_dispatch_prompt` pulled the recipient. `pr` was mostly safe, since `check` already pulls the reviewer. But
+  `full review` (and any stateless prompt) on a reviewer whose checked-out branch lagged `bare` (e.g. `main` after a
+  planner `push`, which is not a handoff and refreshes no clone) named the report after the pre-pull commit.
+  The sync now runs inside setup, before metadata is read. A regression test covers `pr` and `full-review`.
+  Side effect: "Plan resolved to" is now printed after the sync instead of before it.
+- **6**: merge-method restriction removed from docs and intent Decision 21.
+- **7**: `Layout.plans_root_in_worktree` (`docs/plans` in both modes) is the template variable for all prompts and
+  for AGENTS.md (replacing `plans_dir`). `git -C {{ plans_root_in_worktree }} diff --name-only --relative <hash> -- .`
+  works in both modes, so no repo-root-relative variable is needed.
+
+### Format proposals
+
+Recorded as intent/028 Decisions 24–37 (Decision 16 withdrawn, 4/21/22 amended). intent/001 terminology updated
+(worktree, git repo, ticket, handoff); those terms were removed from the index Terminology section (Decision 15).
+Consequences applied to the index: reviews dropped from Plan summaries, subplans listed as ranges.
+One loss: the only review-sourced deferred item ("fuzzy resolution of review paths", from
+`reviews/followthrough/bf55b86`) was dropped with the reviews. If still wanted, it needs an intent.
+
+### Pruning (applied: 202 → 152 decisions, 44 KB → 35 KB)
+
+Numbers refer to the order of the first index version (`e4ef809`).
+
+- **Obvious location, higher bar** (20): 028 D3 hash-not-timestamps, 028 D4 indexed files, 028 D7 reviewer owns,
+  028 D12 legacy locators, 028 D13 append-only, 028 D18 resolved options, 028 D21 main hash (all restated by the
+  index header or AGENTS.md); 012 D9 union on empty intersection; 012 D12 full path skips git; 012 tmux optional;
+  004.1 unknown scripts fail at load; 004.2 kebab-case names; 027 D6 dispatch names plan/recipient;
+  020 D6 shared `require()`; 005.2 hard prerequisite errors; 008 marker matrix; 023 D31 status matrix;
+  023 D3 atomic write; 023 D23 `add-repo` exists; 023 D21 `sync` exists.
+- **Structural "subclass/field"** (4): 002 sequence-number ints; 003 `Review` subclass; 004.4 template variables
+  `plan`/`branch`/`commit`; 023 D20 five layout accessors.
+- **Trivial** (15): 014 D23 same-second git ties; 024 D12 rebase in preview (follows from 020 D9); 020 D4 resumed
+  transition skips (follows from 020 D2); 020 D5 `index.lock`; 027 D19 "Resume" vs "Execution plan" wording;
+  027 D20 relative cwd; 023.6 `check-ref-format`; 023.6 D2 hash file `v2`; 027 D15 prompt prints reminder;
+  027 D18 entries without `next_step`; 027.2 choice reminders omit plan name; 017 D2 `env.list` check;
+  023 D9 at least one code repo; 023 D33 dirty check in all repos; 024 D11 doctor compares `main`.
+- **Not relevant outside the plan** (5): 004.4 per-repo prompt loop (superseded); 005.3 doublecheck loop
+  (superseded); 014 D4 hand-coded `check` mapping (superseded inside the same plan); 014 D18 non-transition
+  commands; 023 D4 `.workflow_root` cutover (migration-only; policy covered by the migration-over-shim entry).
+- **Scoping within a plan** (1): 027 D23 conservative parametrization (separate sub-plan, refactor-local policy).
+- **Obvious definition** (1): 025 D2 `--onto` names what the work sits on.
+- **Restated (format decision 28)** (4): intent/020 no automatic rollback (= 007 partial failures);
+  023.4 AGENTS.md to all four roots (= 023 D17); 023 D27 config vs state (= Terminology); 023 D29 mode
+  immutability (= 023 D2).
+- "Never index" rules for accept/reject and adding tests pruned nothing: legacy files rarely record those as decisions.
+
+### Ten lowest-value remaining decisions
+
+1. `022` three-agent limit is deliberate: intent/001 already says three agents; a doc caveat, not a design choice.
+2. `022` one workflow, fork to change it: product positioning, never consulted when planning a feature.
+3. `014` D8 slug regex: visible in code and in the error message; kept only by the "unobvious location" rule.
+4. `intent/017` D4 image hardcoded: duplicates the open deferred item "container image override".
+5. `intent/017` D5 `-it` intentional: local to the shell script.
+6. `017` script lookup (project dir, then `PATH`): one function, easily found by code search.
+7. `020.1` D4 `new` is non-resumable: follows from `new` allocating a fresh number.
+8. `intent/027` D21 `doctor` also uses exact names: applies 026 D2 to one more caller.
+9. `intent/024` D3 refresh/park after the canon push: fully restated and extended by `024` D3 (every clone).
+10. `023.6` D12 `.workflow.json` hash is advisory: a minor detail of the hash file.
+
+Kept despite low value, because a rule protects them: 3 (unobvious location), 4–5 (accepted gaps).
+
+### Proposed additional rules
+
+1. Content already in `intent/001` is not indexed (mirrors Decision 15 for terms). Prunes 1.
+2. An accepted limitation that is also a deferred-work item is listed only under Deferred work. Prunes 4.
+3. A decision that only applies an indexed rule to one more caller or command is not indexed. Prunes 8,
+   and in round 1 would have pruned 024 D12 and 020 D4.
+4. Output wording and formatting are not indexed unless something parses them or they are a user-facing contract.
+   Prunes 027 D19/D20, 027.2 (already pruned as trivial; makes the reason explicit).
+5. A supersession inside the same file (decision withdrawn before the plan was done) is not indexed. Only
+   cross-file supersessions are kept (014 D4).
+6. Superseded decisions pass the same bar as current ones. A superseded decision that would be pruned if current
+   is not kept (004.4/005.3 loops).
+
+### Critique of the rule set
+
+1. "Keep decisions in unobvious locations even if less impactful" collides with "non-trivial". Fix-up plans
+   (014, 027.2) are full of small choices. Recommend: "a lower bar for impact, not for triviality".
+2. "Something asked from the user is more likely to count" inflated legacy intents. intent/023's 36 clarified
+   decisions include trivial answers (atomic write, at least one repo). Recommend weighting it only for choices
+   between real alternatives, not confirmations.
+3. "Keep never-X decisions": almost anything can be phrased negatively ("no confirmation dialog"). Recommend
+   restricting it to prohibitions a later plan could plausibly violate (agents never push, no silent fallback).
+4. "Superseded and obsolete decisions are kept" (Decision 5) without a bar keeps trivia alive. See proposed rule 6.
+5. "Obvious location" is ambiguous for subsystems spread over several plans (the resolver: 003, 012, 014, 016).
+   Acceptable as a heuristic; the definition is "the plan that introduced the subsystem".
+6. No rule recommended against outright. "Never index decisions to add tests" is redundant with
+   "relevant outside the plan" but costs nothing as an explicit example.
+
+### 9.2 Reading only relevant topics: proposal
+
+Options:
+- A. **Markdown headings plus grep (recommended).** AGENTS.md: "When planning or reviewing, read its header,
+  Plan summaries and Terminology, list the topics with `grep -n '^###' <file>`, then read the topic sections
+  relevant to the task." No maintenance; line numbers come from grep, so they are always current. An Opus-level
+  agent does this without further help.
+- B. Topic list at the top, without line numbers. The reviewer maintains it on each pass. It duplicates the
+  headings and drifts when a pass merges topics. Line numbers would drift on every edit.
+- C. YAML plus a filter command. Needs a parser, and either a CLI agents can run (they can't run `workflow`) or a
+  script. Conflicts with the rejected "Structured data" alternative and with readability for the human.
+
+Recommendation: A. Keep topic headings at `###` and the fixed sections at `##`, so one grep lists them.
+Deferred work only matters when planning; the instruction can say so.

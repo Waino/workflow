@@ -4,9 +4,11 @@ Last indexing pass: `1c5aabf` (the `main` commit the indexing branch was cut fro
 Last followthrough pass: (none)
 
 Maintained by the `index_decisions` prompt; `followthrough` prunes completed deferred work.
+Selective by design: decisions judged trivial or local to their plan are not indexed, so read the plans
+a Plan summaries entry points to before relying on the absence of a decision.
 Obsolete detection is best-effort: a `current` entry may describe code that has since been removed.
 
-Identifiers: `intent/{number}_{slug}`, `{number}_{slug}` (plans, no state), `reviews/{type}/{filename}`.
+Identifiers: `intent/{number}_{slug}`, `{number}_{slug}` (plans, no state). Reviews are not indexed.
 `D{n}` is the decision number in that file. Legacy files (written before the decision conventions) are not
 edited: their `D{n}` counts explicit decision items in file order across every decision-like list
 (Decisions, Design decisions, Clarified decisions, Clarifications, PR-/post-review decisions) and
@@ -21,42 +23,32 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
 
 - `intent/001_idea` — Project idea: three sandboxed agents plus a human operator, the `workflow` CLI, the plan
   state machine, git branch strategy, config-driven prompts.
-  Related: (global; 002–008 derived from it)
 - `002_models_and_config` — Pydantic models (Plan, PlanState, command union, audit entry) and YAML config loading.
-  Related: reviews/pr/002_models_and_config_0e6baa9
 - `003_path_resolution` — Loose fuzzy-path plan resolution, `Review` subclass, sequence-number collision detection.
-  Related: reviews/pr/003_path_resolution_0f57880
+  Superseded as a resolver design by 012.
 - `004_cli_framework` — Click CLI with dry-run, script registry, `run_command`, prompt dispatch to tmux, JSONL
   audit log; review fixes (config-aware group, project-relative `Plan.path`, `plan`/`branch`/`commit` context).
-  Related: 004.1_cli_and_registry, 004.2_prompt_dispatch, 004.3_audit_logging, 004.4_review_fixes,
-  reviews/pr/004_cli_framework_1e84d3a
+  Subplans 004.1–004.4.
 - `005_plan_state_and_git` — `transition_plan` via `git mv`, git helpers, `transfer_branch_to_main`, the
   doublecheck (later `validate`) suite; review fixes.
-  Related: 005.1_plan_state_transitions_and_git_helpers, 005.2_doublecheck, 005.3_review_fixes,
-  reviews/pr/005_plan_state_and_git_3b56c73
+  Subplans 005.1–005.3.
 - `006_info_commands` — `new`, `status`, `log`, `cheat`.
-  Related: reviews/pr/006_info_commands_29e01ca
 - `007_workflow_commands` — `init`, `start`, `todo`, `implement`, `push` (later `check`), `accept`, `reject`.
-  Related: reviews/pr/007_workflow_commands_29e01ca
 - `008_claude_md_generation` — Generated workflow section of AGENTS.md between markers, plus the trusted
   `.agents_md_hash`.
-  Related: reviews/pr/008_claude_md_generation_7e15d67
 - `intent/010_pipeline_parallelism` — Timeline analysis of three dependent tickets: the human is the bottleneck;
-  two parallel tickets are practical.
-  Related: (analysis only, no plan)
+  two parallel tickets are practical. (Analysis only, no plan.)
 - `intent/011_tmux_pane_rotation` — Verified libtmux proof-of-concept for control-pane rotation by recorded pane id.
   Related: 019_tmux_implementation_gaps
 - `012_plan_resolution_respec` — Rename doublecheck→validate, split handoff `check` from content `push`, merged
   multi-source plan resolver (path, subcommand, git history, audit log, tmux).
-  Related: intent/012_plan_resolution_respec, reviews/pr/012_plan_resolution_respec_29e01ca
+  Related: intent/012_plan_resolution_respec
 - `intent/013_example_walkthrough` — Walkthrough of a project's first handoffs; pins the expected git and tmux
   behaviour of each command.
   Related: 019_tmux_implementation_gaps
 - `014_fixes_to_006_007_012` — Fixes from the 006/007/012 reviews: `also_valid_in_states`, `pull_target`, main
   guards, config-derived audit mapping, git source gives state only, `check` owns implementing→checking, first
   end-to-end integration test.
-  Related: reviews/pr/006_info_commands_29e01ca, reviews/pr/007_workflow_commands_29e01ca,
-  reviews/pr/012_plan_resolution_respec_29e01ca
 - `015_wide_resolver_test` — One parametrized resolver test over a wide (plan, command) matrix with
   sequence-number-only inputs.
 - `016_soft_resolver_constraints` — Prompt-subcommand and audit repo hints are soft and dropped when the path
@@ -64,42 +56,36 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
 - `017_docker_script` — `start` launches agents through a per-project `run_agent_in_docker.sh`; `--reset`;
   example script in docs.
   Related: intent/017_docker_script
-- `intent/018_prompts` — Checklist for the `full review` prompt.
-  Related: (no plan; folded into the default config prompt)
+- `intent/018_prompts` — Checklist for the `full review` prompt. (No plan; folded into the default config prompt.)
 - `019_tmux_implementation_gaps` — Docked control pane, `go` rotation, `implement` creates the builder feature
   branch and rotates, `check` rotates to reviewer.
-  Related: intent/011_tmux_pane_rotation, intent/013_example_walkthrough, reviews/followthrough/bf55b86
+  Related: intent/011_tmux_pane_rotation, intent/013_example_walkthrough
 - `020_robustness` — Preconditions and idempotent resume (`ResumePlan`, `--continue`, resume preview) for the
   script commands; new `doctor`.
-  Related: intent/020_robustness, 020.1_more_robustness, reviews/pr/020_robustness_8582f69
+  Related: intent/020_robustness, 020.1_more_robustness
 - `021_run_agent_in_docker_fixes` — Docker script takes a mandatory subcommand (`agent`/`venv`/`shell`/`hook`);
   hooks run in throwaway containers; canon venv and `canon_pre_commit`.
-  Related: intent/017_docker_script, reviews/pr/021_run_agent_in_docker_fixes_ae03329
+  Related: intent/017_docker_script
 - `022_user_docs` — User documentation in `docs/source`.
 - `intent/023_out_of_band` — Out-of-band mode: plans in a separate `docs` repo, multiple code repos,
   `.workflow.json`, layout/worktree vocabulary, `bare` remote, `init --oob`/`add-repo`, multi-repo handoffs and
   `sync`, per-repo validate/doctor/status.
-  Related: 023.1_project_metadata_file, 023.2_layout_and_vocabulary, 023.3_bare_remote_rename,
-  023.4_init_oob_and_bootstrap, 023.5_multi_repo_git_orchestration, 023.6_validate_doctor_and_reporting,
-  reviews/pr/023.4_init_oob_and_bootstrap_20e6a4e, reviews/pr/023.6_validate_doctor_and_reporting_b21c7ca
+  Subplans 023.1–023.6.
 - `024_avoiding_failed_merges` — No stale `main` after handoffs, rebase fallback in `transfer_branch_to_main`,
   `rebase` prompt, read-only `bare` mount, branch deletion on accept, `reject` never merges.
-  Related: intent/024_avoiding_failed_merges, reviews/pr/024_avoiding_failed_merges_b929f03
+  Related: intent/024_avoiding_failed_merges
 - `025_stacked_plans` — Several plans share one feature branch (`implement --onto`), `onto` frontmatter,
   stack cascades, mid-stack guards, stack-aware prompts.
-  Related: intent/025_stacked_plans, reviews/pr/025_stacked_plans_5a880d0
+  Related: intent/025_stacked_plans
 - `026_stacking_bugs` — Always merge `origin/main` into the stack branch after the canon push; exact-name stack
   reference lookup.
-  Related: intent/026_stacking_bugs, reviews/pr/026_stacking_bugs_447250e
+  Related: intent/026_stacking_bugs
 - `intent/027_various_fixes` — Prompt routing follows the plan's worktree (borrowing, blind-send warning,
   worktree-relative paths, builder `rebase`); next step recorded in the audit log; dry-run fixes; dotted-number
   parsing; conservative test parametrization.
-  Related: 027.1_prompt_dispatch, 027.2_small_fixes, 027.3_test_parametrization,
-  reviews/pr/027.3_test_parametrization_c58b06b
+  Subplans 027.1–027.3.
 - `intent/028_index_of_decisions` — This index: read-first instructions and decision conventions in the generated
   AGENTS.md, `index_decisions` prompt, `followthrough` prunes deferred work.
-  Related: reviews/pr/028_index_of_decisions_fed139d
-- `reviews/followthrough/bf55b86` — Follow-through of intents and done plans (gaps later closed by 019 and others).
 
 ## Decisions
 
@@ -112,32 +98,16 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
 - current `022_user_docs` D– — The tool encodes one workflow; changing it beyond config means forking.
   §Configurable vs requiring code changes: "fork the repo"
 - current `022_user_docs` D– — The three-agent limit is deliberate. §Caveats: "limited on purpose"
-- current `intent/027_various_fixes` D23 — Test parametrization is conservative: no coverage drop, no assertion
-  dropped without an equivalent. §8: "Decision: conservative"
 - current `014_fixes_to_006_007_012` D21 — The sandbox git rejects `--no-verify`; integration tests swap in a
   plain commit. §Phase 4d Decisions: "D7: The integration test bypasses `--no-verify`"
-- current `intent/028_index_of_decisions` D3 — The index records the commit of the last pass, not timestamps.
-- current `intent/028_index_of_decisions` D4 — Indexed: done plans, all intents, reviews; excluded: in-flight and
-  rejected plans and their reviews.
-- current `intent/028_index_of_decisions` D7 — The reviewer owns `index_decisions`; its branch is merged manually.
 - current `intent/028_index_of_decisions` D8 — Read-first instructions and decision conventions live in the
   generated AGENTS.md section, phrased by activity.
-- current `intent/028_index_of_decisions` D12 — Legacy decisions carry a locator and resolve only via this index.
-- current `intent/028_index_of_decisions` D13 — Decisions lists are append-only; withdrawn entries stay, marked.
 - current `intent/028_index_of_decisions` D14 — The indexer only adds deferred work; `followthrough` prunes it.
-- current `intent/028_index_of_decisions` D18 — Every resolved option gets a Decisions entry; the "would have"
-  summary is rationale only.
-- current `intent/028_index_of_decisions` D21 — The recorded hash is the `main` commit the indexing branch was
-  cut from.
 - current `intent/028_index_of_decisions` D23 — How and when to record decisions goes into the harness system
   prompts (manual edit).
 
 ### Plan model and naming
 
-- current `002_models_and_config` D– — Sequence numbers are int lists; the string form zero-pads only the first
-  component (`012.1`). §Plan model: "sequence_number: list[int]"
-- current `003_path_resolution` D– — Reviews are a `Plan` subclass carrying the review-only fields.
-  §Review: "Add `Review` as a subclass of `Plan`"
 - current `004.4_review_fixes` D– — `Plan.path` is relative to the project dir, so prompts are portable.
   §3: "from absolute path to project-relative path"
 - current `intent/012_plan_resolution_respec` D10 — An intent may share its number with a ticket; two tickets with
@@ -151,10 +121,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
 
 - superseded (→ intent/012 D1) `003_path_resolution` D– — Single-repo resolver with `expected_states`.
   §Resolution algorithm: "always searches exactly one repo"
-- superseded (→ intent/012 D1) `004.4_review_fixes` D– — Per-repo candidate loop for prompt resolution.
-  §5: "maps prompt commands to candidate workflow targets"
-- superseded (→ intent/012 D1) `005.3_review_fixes` D– — Per-command repo loop for doublecheck.
-  §1: "_resolve_doublecheck_plan"
 - current `003_path_resolution` D– — Cross-repo dedup keeps the most progressed state; rejected outranks all;
   reviews are never deduplicated. §Resolution algorithm: "`rejected` ranks highest"
 - current `intent/012_plan_resolution_respec` D1 — One merged resolver entry point across all repos.
@@ -171,30 +137,18 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   §Decisions: "consults the audit log"
 - current `intent/012_plan_resolution_respec` D8 — Reviews resolve separately, detected by the `reviews/` prefix.
   §Decisions: "Reviews are resolved by a separate function"
-- current `intent/012_plan_resolution_respec` D9 — An empty intersection prints the union with sources and exits
-  non-zero. §Decisions: "prints the union with source attributions"
 - current `intent/012_plan_resolution_respec` D11 — Git history across all refs replaces the working tree as a
   source. §Decisions: "Filesystem is intentionally replaced by git history"
-- current `intent/012_plan_resolution_respec` D12 — A path fixing repo, state and number skips git.
-  §Decisions: "we skip git entirely"
 - current `intent/012_plan_resolution_respec` D– — A ticket's planner branch is found from git
   (`for-each-ref --contains`), not from its name. §Resolving the branch for a ticket
-- current `012_plan_resolution_respec` D– — Tmux is optional; its absence makes the source silent.
-  §The tmux source: "Must not raise on tmux absence"
 - current `014_fixes_to_006_007_012` D1 — Extra valid states for a script live in config (`also_valid_in_states`),
   not in resolver code. §Decisions: "`also_valid_in_states` on `ScriptCommand`"
-- superseded (→ 014 D17) `014_fixes_to_006_007_012` D4 — Hand-coded `check` audit mapping.
-  §Decisions: "`check` audit mapping"
 - current `014_fixes_to_006_007_012` D15 — Git history gives only the state, except for `push`, which needs the
   clone with unpushed edits. §Phase 4a–c Decisions: "D1: Git contributes state only"
 - current `014_fixes_to_006_007_012` D17 — The audit command→(repo, state) mapping is derived from config
   transitions. §Phase 4a–c Decisions: "D3: Derive `AUDIT_COMMAND_REPO_STATE` from the config"
-- current `014_fixes_to_006_007_012` D18 — Non-transition commands give no audit constraint.
-  §Phase 4a–c Decisions: "D4: Keep behaviour for absent / non-transition commands"
 - current `014_fixes_to_006_007_012` D20 — The audited state is a lower bound; later states are allowed (safety
   net only). §Phase 4d Decisions: "D6: Audit log contributes forward-progression states"
-- current `014_fixes_to_006_007_012` D23 — Same-second git ties go to the more progressed state.
-  §Phase 4d Decisions: "D9: Break `_from_git_history` timestamp ties"
 - current `016_soft_resolver_constraints` D– — Path, script subcommand, git (push) and tmux are hard repo
   constraints; prompt subcommand and audit are soft, dropped when the path names a repo.
   §Root-cause classification
@@ -207,14 +161,8 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
 
 ### Prompt dispatch and CLI
 
-- current `004.1_cli_and_registry` D– — Unknown script names fail at config load.
-  §Script registry: "wired into the existing `WorkflowConfig.validate_script_references`"
-- current `004.2_prompt_dispatch` D– — Multi-word command names become kebab-case CLI names.
-  §Dynamic command registration: "exposed as kebab-case"
 - current `004.4_review_fixes` D1 — A config-aware custom Click group loads config before subcommand lookup.
   §1: "Use Option A"
-- current `004.4_review_fixes` D– — Prompt templates get `plan`, `branch`, `commit`.
-  §4: "Stop passing `path_to_plan`"
 - current `004.4_review_fixes` D– — Dry-run renders placeholders for prompt branch/commit instead of running git
   (narrowed by intent/020 D9 for resume guards). §6: "do **not** broaden dry-run"
 - current `012_plan_resolution_respec` D– — The builder→reviewer handoff is `check`; `push` is a generic content
@@ -230,8 +178,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   never borrowed. §1.3 Decisions: "Borrowing requires `--edit`"
 - current `intent/027_various_fixes` D5 — An agent needing another's prompt gets a plain second definition, not
   `also_valid_in_states`. §1.3 Decisions: "`also_valid_in_states` is not reused"
-- current `intent/027_various_fixes` D6 — Every dispatch names its plan and recipient.
-  §1.3 Decisions: "Every dispatch prints"
 - current `intent/027_various_fixes` D7 — Sends to a non-active window warn loudly and wait an extra delay; no
   confirmation dialog. §1.3 Decisions: "Blind-send check"
 - current `intent/027_various_fixes` D8 — Dispatch never rotates the control pane.
@@ -275,8 +221,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   push. §Decisions 8
 - current `intent/024_avoiding_failed_merges` D10 — Merged feature branches are deleted locally and on bare;
   failures only warn. §Decisions 10
-- current `intent/024_avoiding_failed_merges` D12 — The rebase shows in the resume preview and dry-run.
-  §Decisions 12
 - current `intent/024_avoiding_failed_merges` D– — PR review filenames may cite pre-rebase hashes (accepted).
   §Audit notes: "Cosmetic; accepted"
 - current `024_avoiding_failed_merges` D1 — Force-pushing a published branch needs `--force-push`, a passing
@@ -294,18 +238,10 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   existence. §Decisions: "Guards check postconditions"
 - current `intent/020_robustness` D3 — Every git op in a handoff is its own guarded step.
   §Decisions: "Treat individual git commands as steps"
-- current `intent/020_robustness` D4 — A resumed transition detects the already-moved file and skips.
-  §Decisions: "Transition moves are a key precondition class"
-- current `intent/020_robustness` D5 — Precondition: no `.git/index.lock` in touched repos.
-  §Decisions: "No leftover git locks"
-- current `intent/020_robustness` D6 — Shared `require()` and uniform `[skip]` logging (`workflow/steps.py`).
-  §Decisions: "Shared vocabulary"
 - current `intent/020_robustness` D8 — A separate read-only `doctor` command, not an extension of `status`.
   §Decisions: "`doctor` command"
 - current `intent/020_robustness` D9 — Read-only guard queries run for real in dry-run; only mutations are
   simulated. §Decisions: "Dry-run previews resume"
-- current `intent/020_robustness` D– — No automatic rollback; recovery is manual and made rare.
-  §No automatic rollback
 - current `intent/020_robustness` D– — `--continue` vouches that a rough partial state came from this same
   command; documented as dangerous. §The `--continue` contract
 - current `020_robustness` D8 — Two-pass classify/preview/run; a rough step without `--continue` prints the
@@ -322,24 +258,16 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   §Design decisions: "`new` always allocates the next number"
 - current `026_stacking_bugs` D1 — A resume predicate that an earlier step of the same run invalidates is not
   classified; the idempotent step runs unconditionally. §Decisions: "Always run the `origin/main` merge"
-- current `intent/027_various_fixes` D19 — "Resume plan" only when a step is satisfied or needs `--continue`;
-  otherwise "Execution plan". §5.1: "Decision: \"resuming\" means"
-- current `intent/027_various_fixes` D20 — Dry-run prints the cwd relative to the current directory.
-  §5.2: "Decision: print `cwd` relative"
 
 ### Validation
 
 - current `005.2_doublecheck` D– — Per-worktree file-scope rules (planner: plans only; builder: no intents or
   reviews; reviewer: no intents; canon: unrestricted). §Checks: "File scope verification"
-- current `005.2_doublecheck` D– — Missing prerequisites fail the command instead of becoming check results.
-  §Doublecheck function: "Missing prerequisites are hard command errors"
 - current `012_plan_resolution_respec` D– — `doublecheck` is renamed `validate`. §Phase 1
 - current `intent/023_out_of_band` D14 — Oob `validate` only checks that per-repo branch info exists; branch
   naming follows upstream. §Clarified decisions 14
 - current `023.6_validate_doctor_and_reporting` D– — Builder/reviewer may not edit `body_of_agents.md` or
   `bootstrap_venv.sh`; the planner may not commit code. §`validate` becomes per-repo
-- current `023.6_validate_doctor_and_reporting` D– — Branch-name validity is delegated to
-  `git check-ref-format`. §Plan `branches` frontmatter
 - current `025_stacked_plans` D– — A stacked branch is validated as a whole, not per plan.
   §Scope: "validated as a whole — accepted"
 
@@ -349,8 +277,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   §Command: "This is the deliberate choice"
 - current `008_claude_md_generation` D– — `.agents_md_hash` lives outside every repo and is never agent-visible.
   §Trust model
-- current `008_claude_md_generation` D– — Column-0 markers, strict marker matrix, append when no markers exist.
-  §Marker handling rules
 - current `008_claude_md_generation` D– — Runtime details (`worktree_override`, `pull_target`, `reminder`) stay out
   of AGENTS.md. §Risks: "are not surfaced in AGENTS.md"
 - superseded (→ intent/023 D17) `intent/023_out_of_band` D5 — Oob AGENTS.md via a symlink from the docs repo.
@@ -359,12 +285,8 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   unversioned. §Second round decisions 1
 - current `intent/023_out_of_band` D34 — The generated section says workflow rules override repo-local AGENTS.md.
   §Second round decisions 18
-- current `023.4_init_oob_and_bootstrap` D– — In oob, AGENTS.md = body + managed section, written to all four
-  worktree roots, never committed. §AGENTS.md in oob mode
 - current `023.4_init_oob_and_bootstrap` D10 — A missing `body_of_agents.md` is an error, not an empty body.
   §PR-review decisions: "A missing `body_of_agents.md` fails `agents_md`"
-- current `023.6_validate_doctor_and_reporting` D2 — `.agents_md_hash` format `v2` adds the `.workflow.json`
-  hash; old files just mismatch. §Clarifications 2
 - current `023.6_validate_doctor_and_reporting` D12 — The `.workflow.json` hash is advisory; `add-repo`
   regenerates AGENTS.md. §Post-review decisions: "`.workflow.json` stays a hint"
 
@@ -380,18 +302,10 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   in the audit log. §1.3 Decisions: "`doctor` reports audit entries that are impossible"
 - current `intent/027_various_fixes` D13 — The audit log records the displayed next step; nothing parses it.
   §3 Decisions: "`next_step` holds the plain text"
-- current `intent/027_various_fixes` D15 — Prompt dispatch prints and records its reminder.
-  §3 Decisions: "Prompt dispatch also prints its next step"
 - current `intent/027_various_fixes` D16 — `validate` writes an audit entry only on success; its next step is a
   configured free-text `reminder`. §3 Decisions: "`validate` writes an audit entry"
 - current `intent/027_various_fixes` D17 — Every command with a next step has an explicit `reminder`; no implicit
   fallback. §3 Decisions: "Reminders are explicit"
-- current `intent/027_various_fixes` D18 — Entries without `next_step` show nothing; no derivation.
-  §3 Decisions: "Entries without `next_step`"
-- current `027.2_small_fixes` D– — Free-text choice reminders (`accept or reject`) omit the plan name.
-  §Risks: "accepted for a single mechanism"
-- current `intent/023_out_of_band` D31 — Oob `status` shows a worktree × repo matrix.
-  §Second round decisions 15
 
 ### Tmux layout
 
@@ -414,8 +328,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   §1: "_find_docker_script"
 - current `intent/017_docker_script` D1 — `start` passes `--project-dir`; the script derives mounts from it.
   §Design decisions from critique: "Volume path"
-- current `intent/017_docker_script` D2 — The script fails early without `env.list`.
-  §Design decisions from critique: "`env.list` validation"
 - current `intent/017_docker_script` D3 — The image needs a matching `auggie` UID (accepted limitation).
   §Design decisions from critique: "User ID"
 - current `intent/017_docker_script` D4 — The image is hardcoded (accepted for now).
@@ -443,36 +355,24 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   §Clarified decisions 1
 - current `intent/023_out_of_band` D2 — `.workflow.json` is tool-owned JSON state; the mode is fixed at init.
   §Clarified decisions 2
-- current `intent/023_out_of_band` D3 — Atomic write (tmp + `os.replace`) instead of a lock.
-  §Clarified decisions 3
-- current `intent/023_out_of_band` D4 — Hard cutover `.workflow_root` → `.workflow.json`, no fallback.
-  §Clarified decisions 4
 - current `intent/023_out_of_band` D6 — One `.venv` at the worktree root covering all code repos.
   §Clarified decisions 6
 - current `intent/023_out_of_band` D7 — `bare` keeps its in-band shape; the modes are not unified.
   §Clarified decisions 7
 - current `intent/023_out_of_band` D8 — The docs repo is always named `docs`. §Clarified decisions 8
-- current `intent/023_out_of_band` D9 — An oob project has at least one code repo. §Clarified decisions 9
 - current `intent/023_out_of_band` D10 — `init --oob` expects canon pre-populated by the operator.
   §Clarified decisions 10
 - current `intent/023_out_of_band` D11 — The workflow remote is named `bare` in both modes; `origin`/`upstream`
   keep their usual meaning. §Clarified decisions 11
 - current `intent/023_out_of_band` D18 — The oob venv is built by `docs/bootstrap_venv.sh` (option B).
   §Second round decisions 2
-- current `intent/023_out_of_band` D20 — Five layout accessors: `worktree_root`, `git_repo_root`, `plans_root`,
-  `venv_root`, `hook_root`. §Second round decisions 4
 - current `intent/023_out_of_band` D22 — Per-repo branch info lives in plan frontmatter under `branches`
   (`branch` + `base`, or `null`). §Second round decisions 6
-- current `intent/023_out_of_band` D23 — `workflow add-repo` registers a code repo after init.
-  §Second round decisions 7
 - current `intent/023_out_of_band` D24 — The docs repo's upstream is optional. §Second round decisions 8
-- current `intent/023_out_of_band` D27 — Config (hand-authored YAML) vs state (tool-owned JSON with `version`) is
-  documented. §Second round decisions 11
 - superseded (→ intent/023 D28) `intent/023_out_of_band` D15 — Hook fallback to `.git/hooks/pre-commit` with an
   init-time opt-out. §Clarified decisions 15
 - current `intent/023_out_of_band` D28 — `run_hook` is per repo; extra hooks in code repos only warn.
   §Second round decisions 12
-- current `intent/023_out_of_band` D29 — `init` enforces mode immutability. §Second round decisions 13
 - current `023.4_init_oob_and_bootstrap` D– — Project-setup commands (`add-repo`, `sync`, `doctor`) live outside
   the state machine. §`workflow add-repo`: "no state entry"
 - current `023.4_init_oob_and_bootstrap` D5 — Canon code repos get a `bare` remote but keep tracking `origin`.
@@ -486,12 +386,8 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   §Clarified decisions 12
 - current `intent/023_out_of_band` D13 — On `check`, code repos are only fetched; the reviewer checks out
   branches. §Clarified decisions 13
-- current `intent/023_out_of_band` D21 — `workflow sync` refreshes `bare/{repo}` from upstream; `doctor` reports
-  divergence. §Second round decisions 5
 - current `intent/023_out_of_band` D32 — Every agent-side code repo has exactly one remote, `bare`, so agents
   cannot reach upstream. §Second round decisions 16
-- current `intent/023_out_of_band` D33 — `check` and `doctor` check dirty state in all repos.
-  §Second round decisions 17
 - current `023.5_multi_repo_git_orchestration` D– — The tool never checks out, refreshes, or parks a code repo;
   it only fetches. §Branch handling in code repos
 - current `023.5_multi_repo_git_orchestration` D– — Every prompt dispatch fetches all code repos (warnings only).
@@ -512,14 +408,11 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   §Clarifications 1
 - current `023.6_validate_doctor_and_reporting` D5 — Everywhere, tracked changes are an anomaly and untracked-only
   is a note. §Clarifications 5
-- current `intent/024_avoiding_failed_merges` D11 — `doctor` compares each `main` with bare's and flags branches
-  not based on it (informational). §Decisions 11
 
 ### Stacked plans
 
 - current `intent/025_stacked_plans` D1 — A stack shares one branch; a branch per plan was rejected.
   §Decisions 1, §Rejected approach
-- current `intent/025_stacked_plans` D2 — `--onto` names what the new work sits on. §Decisions 2
 - current `intent/025_stacked_plans` D3 — Stacking onto a plan past `implementing` is refused. §Decisions 3
 - current `intent/025_stacked_plans` D4 — Stacks are lists, not trees: `--onto` must name the tip. §Decisions 4
 - current `intent/025_stacked_plans` D5 — `onto:` frontmatter is the source of truth; the branch is named after
@@ -554,7 +447,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
 - open `intent/017_docker_script` — Ensure `.venv/bin/activate` is sourced before the agent runs.
 - open `intent/017_docker_script` — Container image override.
 - open `019_tmux_implementation_gaps` — Automatic agent dispatch on every command (intent/001 stretch goal).
-- open `reviews/followthrough/bf55b86` — Fuzzy resolution of review paths (`reviews/pr/007`).
 - open `020_robustness` — `SourcesDisagreeError` when the same transition command is rerun with a bare
   identifier (workaround: fully qualified path).
 - open `021_run_agent_in_docker_fixes` — Run `canon_pre_commit` as part of `accept`.
@@ -567,10 +459,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
 
 ## Terminology
 
-- current **ticket** (`intent/012_plan_resolution_respec`) — a plan in planning, todo, implementing, checking,
-  done or rejected; excludes intents and reviews.
-- current **handoff** (`intent/012_plan_resolution_respec`) — a transition between agents, done by a script
-  command with cross-repo git (`todo`, `implement`, `check`, `accept`).
 - current **silent source** (`intent/012_plan_resolution_respec`) — a resolver source with no information on a
   dimension; it adds no constraint there.
 - current **soft / hard constraint** (`016_soft_resolver_constraints`) — a resolver repo contribution that is a
@@ -583,10 +471,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   `docs` repo; fixed at init.
 - current **state vs config** (`intent/023_out_of_band`) — `.workflow.json` is tool-owned state; `config.yaml`
   is hand-authored config.
-- current **worktree** (`023.2_layout_and_vocabulary`) — one of `canon`, `planner`, `builder`, `reviewer`
-  (`WorktreeName`); in oob a wrapper directory holding several git repos.
-- current **git repo / docs repo / code repo** (`023.2_layout_and_vocabulary`) — an actual git repository in a
-  worktree; `docs` holds the plans (`Layout.repos()` includes it, `code_repos()` does not).
 - current **push set** (`023.5_multi_repo_git_orchestration`) — repos in the acting worktree with commits in no
   `bare` ref; what `check`/`accept` push.
 - current **stack / tip / root** (`intent/025_stacked_plans`) — plans sharing one feature branch via `onto`; the
