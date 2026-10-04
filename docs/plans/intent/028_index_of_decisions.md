@@ -19,7 +19,7 @@ Non-goals:
 ## Index file format
 
 The index file is located at `index_of_decisions.md` in the plans root
-(`docs/plans/` in-band, `plans/` out-of-band; derived via `layout`).
+(`docs/plans/` relative to the worktree root in both modes; `plans_root_in_worktree`, Decision 36).
 In a fresh project, it does not exist. The file is created on the first run of the update prompt.
 
 The index records the commit hash of the last indexing pass (Decision 3, 21),
@@ -30,6 +30,8 @@ the user docs recommend reviewing it periodically (Decision 11).
 
 Decisions, deferred work, and terms are grouped under topic headings (e.g. git sync, plan resolution, oob layout)
 chosen by the reviewer, with the file identifier as a field. Each pass may merge or rename headings (Decision 10).
+Topic headings are `###`, fixed sections `##`, so `grep -n '^###'` lists the topics with current line numbers;
+agents read only the topic sections relevant to their task (Decision 40).
 
 ### Indexed files
 
@@ -84,8 +86,9 @@ since later passes skip the file. Compressing already-indexed entries is a separ
 Only explicit decisions are indexed. They should be non-trivial and likely to be relevant outside the plan itself.
 Legacy files are a reviewer-discretionary exception: load-bearing implicit choices may be indexed as `D–` (Decision 27).
 Logging every small decision the agent made by itself would be counterproductive.
-Something that needed to be asked from the user is more likely to count
-(but beware of questions whose answer was already in the plan).
+Something that needed to be asked from the user is more likely to count, but only when the user chose between
+real alternatives, not when confirming the obvious
+(and beware of questions whose answer was already in the plan) (Decision 39).
 Rejected proposals can also contain something to note
 (e.g. rejecting an integration test to form an intentionally accepted test gap).
 
@@ -96,16 +99,28 @@ Never index the following:
 
 Further rules (Decision 35):
 - Decisions in the obvious location (e.g. the plan where a subsystem was added) must pass a higher bar for impact.
-  Keep decisions in less obvious locations (follow-ups, bug fixes, arbitrary later plans) even if less impactful.
+  Keep decisions in less obvious locations (follow-ups, bug fixes, arbitrary later plans) even if less impactful:
+  a lower bar for impact, not for triviality (Decision 39).
 - Omit structural decisions like "Foo is a subclass of Bar" or "Foo carries the field baz",
   unless architecturally load-bearing.
 - Keep surprising definitions, omit the obvious.
 - Keep "never do X" decisions: negatives are hard to establish with code search.
+  Only prohibitions a later plan could plausibly violate (e.g. agents never push), not anything that merely
+  can be phrased negatively (Decision 39).
+
+Further rules (Decision 38):
+- Content already in `intent/001` is not indexed.
+- An accepted limitation that is also a deferred-work item is listed only under Deferred work.
+- A decision that only applies an indexed rule to one more caller or command is not indexed.
+- Output wording and formatting are not indexed, unless something parses them or they are a user-facing contract.
+- A supersession inside the same file (withdrawn before the plan was done) is not indexed;
+  only cross-file supersessions are.
+- Superseded decisions pass the same bar as current ones.
 
 When an intent and its plan restate the same decisions, only the earliest statement is indexed;
 a later file is indexed only where it changes or adds something (Decision 28).
 
-Superseded and obsolete decisions are kept in the index, so an agent reading an old plan can tell
+Superseded and obsolete decisions that pass the bar are kept in the index, so an agent reading an old plan can tell
 whether a decision still holds. Superseded entries reference the superseding decision.
 
 Supersede check: for each newly indexed decision, the reviewer searches the index for decisions it overrides
@@ -145,6 +160,8 @@ The template uses `layout` to produce the correct paths, so it works for oob pro
 The index instruction is phrased by activity rather than agent name
 (e.g. read when planning or reviewing; when implementing, consult it if the plan leaves something unclear),
 because agent names are configurable.
+"Read it" means: header, Plan summaries, Terminology, the topic list via `grep -n '^###'`,
+then the relevant topic sections; Deferred work when planning (Decision 40).
 Removing the old static instruction from existing projects' AGENTS.md / `body_of_agents.md` is a manual step for the human.
 
 ## Update prompt
@@ -268,6 +285,15 @@ Reviewer will
     `docs/plans`; git runs with `-C {{ plans_root_in_worktree }}` so the same command works in both modes.
 37. Prompt git metadata (`{{ branch }}`, `{{ commit }}`) is read after the recipient worktree is synced,
     so a review is named after the commit the agent actually sees (review fix; previously read before the pull).
+38. Six further pruning rules (listed under Decision summary section): `intent/001` content, accepted limitations
+    that are deferred work, applying a rule to one more caller, output wording, same-file supersessions,
+    superseded decisions pass the same bar. Reason: the first pruning pass found these as recurring low-value kinds.
+39. Rule refinements: "unobvious location" lowers the bar for impact, not for triviality; "asked from the user"
+    counts only for choices between real alternatives; "never do X" only for prohibitions a later plan could
+    plausibly violate. Reason: each rule as first phrased kept trivia in the first pass.
+40. Agents read the index selectively: header, Plan summaries, Terminology, then `grep -n '^###'` for topics and
+    the relevant topic sections. Rejected: a maintained topic list (duplicates headings, drifts) and YAML with
+    a filter command (needs tooling; conflicts with the rejected "Structured data" alternative).
 
 ## Draft: system prompt section on recording decisions
 
