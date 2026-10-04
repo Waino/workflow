@@ -273,3 +273,16 @@ Options:
 
 Recommendation: A. Keep topic headings at `###` and the fixed sections at `##`, so one grep lists them.
 Deferred work only matters when planning; the instruction can say so.
+
+## Round 3: final prompt and new rules applied
+
+Header placement: option A (intent/028 Decision 41). The `index_decisions` prompt in `docs/default_config.yaml`
+is self-contained and holds the exact reader-facing header; the index header was replaced with it.
+New rules (Decisions 38, 39) pruned 10 more decisions (152 → 142):
+- intent/001 content: `022` three-agent limit.
+- Accepted limitation that is deferred work: `intent/017` D4 hardcoded image.
+- One more caller: `intent/027` D21 doctor exact names; `021` D6 `check` requires the script.
+- Same-file supersession: `intent/023` D5 (→ D17), `intent/023` D15 (→ D28).
+- Superseded below the bar: `003` single-repo resolver (the Plan summaries entry already says superseded).
+- Lower bar for impact, not triviality: `014` D8 slug regex; `020.1` D4 `new` non-resumable.
+- User confirmation, not a choice: `intent/017` D5 `-it`.
