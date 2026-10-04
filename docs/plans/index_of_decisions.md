@@ -3,18 +3,15 @@
 Last indexing pass: `1c5aabf` (the `main` commit the indexing branch was cut from).
 Last followthrough pass: (none)
 
-Maintained by the `index_decisions` prompt; `followthrough` prunes completed deferred work.
-Selective by design: decisions judged trivial or local to their plan are not indexed, so read the plans
-a Plan summaries entry points to before relying on the absence of a decision.
-Obsolete detection is best-effort: a `current` entry may describe code that has since been removed.
+Selective index of decisions, deferred work, and terms from done plans and intents.
+Decisions judged trivial or local to their plan are not indexed: read the plans an entry points to
+before relying on the absence of a decision. Obsolete detection is best-effort.
+Topics are `###` headings: list them with `grep -n '^###'` and read the relevant ones.
 
-Identifiers: `intent/{number}_{slug}`, `{number}_{slug}` (plans, no state). Reviews are not indexed.
-`D{n}` is the decision number in that file. Legacy files (written before the decision conventions) are not
-edited: their `D{n}` counts explicit decision items in file order across every decision-like list
-(Decisions, Design decisions, Clarified decisions, Clarifications, PR-/post-review decisions) and
-inline `Decision:` sentences, and each carries a locator (`§heading: "quote"`).
-`D–` marks an implicit legacy design choice with no decision marker; it is indexed by locator only.
-A file's own labels (e.g. 014's `D6`, 019's `D1`) appear in the locator, not in the number.
+Identifiers: `intent/{number}_{slug}` and `{number}_{slug}` (plans, without state).
+Refer to a decision as `{identifier} Decision {n}`. In legacy files (no single numbered Decisions list),
+numbers are valid only as given here, `D–` marks an unnumbered choice, and the locator (`§heading: "quote"`)
+finds the text.
 
 Statuses: decisions `current` / `intended` / `superseded` (→ superseding decision) / `obsolete`;
 deferred work `open` / `dropped`; terms `current` / `superseded`.
@@ -97,7 +94,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   migration script instead. §Vocabulary rename: "Do **not** accept the old key"
 - current `022_user_docs` D– — The tool encodes one workflow; changing it beyond config means forking.
   §Configurable vs requiring code changes: "fork the repo"
-- current `022_user_docs` D– — The three-agent limit is deliberate. §Caveats: "limited on purpose"
 - current `014_fixes_to_006_007_012` D21 — The sandbox git rejects `--no-verify`; integration tests swap in a
   plain commit. §Phase 4d Decisions: "D7: The integration test bypasses `--no-verify`"
 - current `intent/028_index_of_decisions` D8 — Read-first instructions and decision conventions live in the
@@ -112,15 +108,11 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   §3: "from absolute path to project-relative path"
 - current `intent/012_plan_resolution_respec` D10 — An intent may share its number with a ticket; two tickets with
   one number are an error. §Decisions: "Collision rule for same sequence number"
-- current `014_fixes_to_006_007_012` D8 — Slugs match `[a-z0-9]+(_[a-z0-9]+)*`.
-  §Decisions: "Slug validation for `new`"
 - current `intent/027_various_fixes` D12 — Prompts use worktree-relative plan paths (`plan.path_in_worktree`).
   §2: "Decision: add a `path_in_worktree` helper"
 
 ### Plan resolution
 
-- superseded (→ intent/012 D1) `003_path_resolution` D– — Single-repo resolver with `expected_states`.
-  §Resolution algorithm: "always searches exactly one repo"
 - current `003_path_resolution` D– — Cross-repo dedup keeps the most progressed state; rejected outranks all;
   reviews are never deduplicated. §Resolution algorithm: "`rejected` ranks highest"
 - current `intent/012_plan_resolution_respec` D1 — One merged resolver entry point across all repos.
@@ -156,8 +148,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   §Risks: "Tmux: stays hard as requested"
 - current `026_stacking_bugs` D2 — Stack references use an exact-name lookup (referring repo, then canon), not the
   fuzzy resolver. §Decisions: "Repo-scoped exact-name lookup"
-- current `intent/027_various_fixes` D21 — `onto` is an exact name: `doctor` also uses `find_stack_member`.
-  §6: "Decision: fix both name parsers"
 
 ### Prompt dispatch and CLI
 
@@ -254,8 +244,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   §Design decisions: "One guarded `transfer_branch_to_main`"
 - current `020.1_more_robustness` D3 — push/new/go get preconditions and cheap idempotence only, no `ResumePlan`.
   §Design decisions: "Lightweight commands"
-- current `020.1_more_robustness` D4 — `new` is non-resumable; it only refuses to overwrite.
-  §Design decisions: "`new` always allocates the next number"
 - current `026_stacking_bugs` D1 — A resume predicate that an earlier step of the same run invalidates is not
   classified; the idempotent step runs unconditionally. §Decisions: "Always run the `origin/main` merge"
 
@@ -279,8 +267,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   §Trust model
 - current `008_claude_md_generation` D– — Runtime details (`worktree_override`, `pull_target`, `reminder`) stay out
   of AGENTS.md. §Risks: "are not surfaced in AGENTS.md"
-- superseded (→ intent/023 D17) `intent/023_out_of_band` D5 — Oob AGENTS.md via a symlink from the docs repo.
-  §Clarified decisions 5
 - current `intent/023_out_of_band` D17 — Oob AGENTS.md body is `docs/body_of_agents.md`; the generated file is
   unversioned. §Second round decisions 1
 - current `intent/023_out_of_band` D34 — The generated section says workflow rules override repo-local AGENTS.md.
@@ -330,10 +316,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   §Design decisions from critique: "Volume path"
 - current `intent/017_docker_script` D3 — The image needs a matching `auggie` UID (accepted limitation).
   §Design decisions from critique: "User ID"
-- current `intent/017_docker_script` D4 — The image is hardcoded (accepted for now).
-  §Design decisions from critique: "Hardcoded image"
-- current `intent/017_docker_script` D5 — `-it` is intentional; the script is not for CI.
-  §Design decisions from critique: "No TTY"
 - current `021_run_agent_in_docker_fixes` D– — The script's first argument is a subcommand
   (`agent`/`venv`/`shell`/`hook`); inapplicable flags are usage errors. §Goal: "mandatory subcommand"
 - current `021_run_agent_in_docker_fixes` D1 — The hook runs in a throwaway `docker run --rm` container for every
@@ -342,8 +324,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
   §Key design decisions: "canon gets its own venv"
 - current `021_run_agent_in_docker_fixes` D5 — Throwaway containers get no API keys (`--env-file` dropped).
   §Key design decisions: "drop `--env-file`"
-- current `021_run_agent_in_docker_fixes` D6 — `check` requires `run_agent_in_docker.sh`, like init/start.
-  §Key design decisions: "`check` hard-depends on the external script"
 - current `intent/024_avoiding_failed_merges` D9 — `bare` is mounted read-only into agent containers: fetch
   works, push fails by construction. §Decisions 9
 
@@ -369,8 +349,6 @@ deferred work `open` / `dropped`; terms `current` / `superseded`.
 - current `intent/023_out_of_band` D22 — Per-repo branch info lives in plan frontmatter under `branches`
   (`branch` + `base`, or `null`). §Second round decisions 6
 - current `intent/023_out_of_band` D24 — The docs repo's upstream is optional. §Second round decisions 8
-- superseded (→ intent/023 D28) `intent/023_out_of_band` D15 — Hook fallback to `.git/hooks/pre-commit` with an
-  init-time opt-out. §Clarified decisions 15
 - current `intent/023_out_of_band` D28 — `run_hook` is per repo; extra hooks in code repos only warn.
   §Second round decisions 12
 - current `023.4_init_oob_and_bootstrap` D– — Project-setup commands (`add-repo`, `sync`, `doctor`) live outside
