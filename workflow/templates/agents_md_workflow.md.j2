@@ -1,5 +1,5 @@
-Always start by reading `{{ plans_dir }}/intent/001_idea.md`.
-If `{{ plans_dir }}/index_of_decisions.md` exists, read it next when planning or reviewing;
+Always start by reading `{{ plans_root_in_worktree }}/intent/001_idea.md`.
+If `{{ plans_root_in_worktree }}/index_of_decisions.md` exists, read it next when planning or reviewing;
 when implementing, consult it if the plan leaves something unclear.
 
 The workflow below is enacted by the human user. Agents do not invoke `workflow`
@@ -17,18 +17,19 @@ A prompt command may therefore arrive in a state where it is not listed below
 (for example, `ask` may be sent in any state).
 When this happens, follow the prompt as given.
 
-Plans reside in `{{ plans_dir }}`.
-The plan state is defined by location, e.g. `{{ plans_dir }}/implementing/002_foo.md` is in the state `implementing`.
+Plans reside in `{{ plans_root_in_worktree }}`.
+The plan state is defined by location, e.g. `{{ plans_root_in_worktree }}/implementing/002_foo.md` is in the state `implementing`.
 Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
-Reviews (in {{ plans_dir }}/reviews) do not follow this naming scheme.
+Reviews (in {{ plans_root_in_worktree }}/reviews) do not follow this naming scheme.
 
 Decisions are recorded as a single numbered `## Decisions` list per file.
-A review organized per plan may have several Decisions sections; numbering continues across the file.
+Don't create decision-like sections labeled e.g. "Clarifications" or "Post-review fixes"; these go under "Decisions".
+Decisions made while fixing review findings go into the plan's Decisions list, not into the review.
 Numbering is append-only: never renumber; a withdrawn decision stays in place, marked withdrawn.
 Every resolved open option gets a Decisions entry; the discarded option's "would have" summary is only the rationale.
 Refer to a decision as `{identifier} Decision {number}`, where the identifier is `intent/{number}_{slug}`
-for intents, `{number}_{slug}` (no state) for plans, and `reviews/{type}/{filename}` for reviews,
-always without the `.md` suffix, e.g. `023.4_init_oob_and_bootstrap Decision 2`.
+for intents and `{number}_{slug}` (no state) for plans, always without the `.md` suffix,
+e.g. `023.4_init_oob_and_bootstrap Decision 2`.
 Older files predating this convention are not edited: resolve references to their decisions through the index.
 {% if oob %}
 This project is out-of-band: plans live in `docs`, and code lives in separate repos ({{ code_repos|join(', ') }}).

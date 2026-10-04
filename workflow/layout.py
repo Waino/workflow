@@ -48,7 +48,12 @@ class Layout(BaseModel):
 
     def plans_root(self, worktree: WorktreeName) -> Path:
         """Root of the plans tree inside *worktree* (identical in both modes)."""
-        return self.worktree_root(worktree) / "docs" / "plans"
+        return self.worktree_root(worktree) / self.plans_root_in_worktree
+
+    @property
+    def plans_root_in_worktree(self) -> PurePosixPath:
+        """The plans root as an agent sees it from its cwd, the worktree root (identical in both modes)."""
+        return PurePosixPath("docs", "plans")
 
     def venv_root(self, worktree: WorktreeName) -> Path:
         """Root holding ``.venv`` for *worktree* (identical in both modes)."""

@@ -36,7 +36,7 @@ states:
           Before we start planning the implementation sequence,
           let's discuss the overall architecture, pinning down any critical architectural choices.
 
-          Start by reading the project idea at `docs/plans/intent/001_idea.md`.
+          Start by reading the project idea at `{{ plans_root_in_worktree }}/intent/001_idea.md`.
           Ask any questions until you have a clear understanding.
           Propose alternative approaches for any open questions, listing pros and cons.
           Point out gaps, additional architectural decisions that should be made a this point.
@@ -45,20 +45,20 @@ states:
           we don't need the specs to be complete at this point, instead focusing on the high-impact decisions.
 
           Once ambiguities have been cleared up and decisions have been made,
-          write the fleshed out architecture document into `docs/plans/planning/002_architecture.md`.
+          write the fleshed out architecture document into `{{ plans_root_in_worktree }}/planning/002_architecture.md`.
         reminder: mvp
       - command_type: prompt
         name: mvp
         description: Create a plan sequence for the MVP slice
         prompt: |
-          Read the plans at `docs/plans/intent/001_idea.md` and `docs/plans/planning/002_architecture.md`.
+          Read the plans at `{{ plans_root_in_worktree }}/intent/001_idea.md` and `{{ plans_root_in_worktree }}/planning/002_architecture.md`.
           Begin by asking any questions, until you have a clear understanding.
 
           We'll create plans for the MVP slice.
           Begin by determining which features to include in the MVP; ask if unclear.
           Then break the work down into several detailed implementation plans.
-          Write each plan into `docs/plans/planning/`.
-          Use running numbers starting from 3, e.g. `docs/plans/planning/003_foo.md` and docs/plans/planning/004_bar.md`
+          Write each plan into `{{ plans_root_in_worktree }}/planning/`.
+          Use running numbers starting from 3, e.g. `{{ plans_root_in_worktree }}/planning/003_foo.md` and `{{ plans_root_in_worktree }}/planning/004_bar.md`
 
           Commit your changes.
         reminder: critique
@@ -91,7 +91,7 @@ states:
         description: Write a detailed plan from an intent.
         prompt: |
           Read the intent at {{ plan.path_in_worktree }}.
-          Write a detailed implementation plan into docs/plans/planning/.
+          Write a detailed implementation plan into {{ plans_root_in_worktree }}/planning/.
           Commit your changes.
         transition: planning
         reminder: critique
@@ -101,9 +101,9 @@ states:
         prompt: |
           Read the plan at {{ plan.path_in_worktree }}.
           Break it down into several detailed implementation plans.
-          Write each plan into `docs/plans/planning/`.
+          Write each plan into `{{ plans_root_in_worktree }}/planning/`.
           Use running numbers in a hierarchy below the input plan,
-          e.g. `docs/plans/planning/{{ plan.sequence_number_str }}.1_foo.md` and `docs/plans/planning/{{ plan.sequence_number_str }}.2_bar.md`
+          e.g. `{{ plans_root_in_worktree }}/planning/{{ plan.sequence_number_str }}.1_foo.md` and `{{ plans_root_in_worktree }}/planning/{{ plan.sequence_number_str }}.2_bar.md`
           Commit your changes.
         transition: planning
         reminder: critique
@@ -237,7 +237,7 @@ states:
           {% endfor -%}
           The review covers the whole branch, but organise it per plan.
           {%- endif %}
-          Write a report into docs/plans/reviews/pr/{{ plan.name }}_{{ commit }}.md.
+          Write a report into {{ plans_root_in_worktree }}/reviews/pr/{{ plan.name }}_{{ commit }}.md.
           Commit your changes. Do not modify the code.
         reminder: fix
       - command_type: manual
@@ -247,7 +247,7 @@ states:
         name: fix
         description: Fix issues from the most recent review.
         prompt: |
-          Fix the issues identified in the most recent review `docs/plans/reviews/pr/{{ plan.name }}_*.md`.
+          Fix the issues identified in the most recent review `{{ plans_root_in_worktree }}/reviews/pr/{{ plan.name }}_*.md`.
         reminder: validate
       - command_type: prompt
         name: rebase
@@ -289,7 +289,7 @@ states:
         description: Perform a full review of the current codebase.
         prompt: |
           Perform a full review of the current state of the codebase.
-          Write a report into docs/plans/reviews/full/{{ today }}_{{ commit }}.md.
+          Write a report into {{ plans_root_in_worktree }}/reviews/full/{{ today }}_{{ commit }}.md.
       - command_type: prompt
         name: followthrough
         description: Compare done plans against the codebase for unimplemented features.
@@ -297,14 +297,14 @@ states:
           Go through all plans in the states intent, checking, and done.
           Compare features against the codebase.
           List unimplemented and only partially implemented features.
-          If `docs/plans/index_of_decisions.md` exists, also go through its deferred work section:
+          If `{{ plans_root_in_worktree }}/index_of_decisions.md` exists, also go through its deferred work section:
           remove every item that the codebase shows to be completed, and record the `main` commit
           your branch was cut from as the last followthrough pass. Do not create the index file if it does not exist.
       - command_type: prompt
         name: index_decisions
-        description: Update the index of decisions from plans, intents, and reviews not yet indexed.
+        description: Update the index of decisions from plans and intents not yet indexed.
         prompt: |
-          Placeholder (to be replaced in plan 028). Update `docs/plans/index_of_decisions.md`
+          Placeholder (to be replaced in plan 028). Update `{{ plans_root_in_worktree }}/index_of_decisions.md`
           (create it if missing) with decisions, deferred work, and terms from the indexable files
           that are not yet mentioned in it or changed since the recorded commit hash.
       - command_type: prompt

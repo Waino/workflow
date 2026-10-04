@@ -24,6 +24,8 @@ from pydantic import BaseModel, ConfigDict
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from workflow.layout import Layout
+
 from workflow.audit import write_audit_log
 from workflow.config import PromptCommand, WorkflowConfig
 from workflow.exceptions import (
@@ -212,8 +214,23 @@ def _check_borrow(resolved: _ResolvedTarget, cmd_name: str, recipient: str, *, e
         raise WorkflowError(msg)
 
 
+def _sync_worktree(layout: Layout, worktree_name: WorktreeName, *, dry_run: bool) -> None:
+    """Pull the recipient's docs repo and fetch its code repos before the prompt is rendered."""
+    repo_path = layout.git_repo_root(worktree_name)
+    try:
+        git_pull(repo_path, dry_run=dry_run, skip_if_no_upstream=True)
+        # An agent asked to rebase (the 'rebase' prompt) needs a current bare/main;
+        # the plain pull above only advances the checked-out branch.
+        refresh_main(repo_path, dry_run=dry_run)
+    except subprocess.CalledProcessError as exc:
+        msg = f"git sync failed in {repo_path}: {exc}"
+        raise WorkflowError(msg) from exc
+    # Every dispatch must leave code repos fetched, or the agent starts from stale bare/*.
+    fetch_code_repos_best_effort(layout, worktree_name, dry_run=dry_run)
+
+
 def _git_metadata(target: _PromptTarget, config: WorkflowConfig, *, dry_run: bool) -> tuple[str, str]:
-    """Return branch and commit metadata for the prompt target worktree."""
+    """Return branch and commit metadata for the prompt target worktree (call after syncing it)."""
     if dry_run:
         return "<dry-run-branch>", "<dry-run-commit>"
 
@@ -256,6 +273,8 @@ def _setup_has_plan(
             if child is not None:
                 msg = f"{plan.name} has {child.name} stacked on it; run this command on {child.name} instead."
                 raise WorkflowError(msg)
+        # Sync first, so {{ commit }} names what the agent will actually see.
+        _sync_worktree(layout, target.worktree_name, dry_run=dry_run)
         branch, commit = _git_metadata(target, config, dry_run=dry_run)
         today = datetime.now(tz=UTC).date().isoformat()
         stack = stack_entries(layout, plan)
@@ -266,6 +285,7 @@ def _setup_has_plan(
             commit=commit,
             today=today,
             stack=stack,
+            plans_root_in_worktree=layout.plans_root_in_worktree,
         )
     except (PlanCollisionError, WorkflowError) as exc:
         # PlanCollisionError is not a WorkflowError: stack_child/stack_entries scan whole
@@ -302,10 +322,18 @@ def _setup_stateless(
     if target.agent_name is None:
         error_console.print("[red]No agent configured for review state.[/red]")
         return None
+    layout = config.layout()
     try:
+        _sync_worktree(layout, target.worktree_name, dry_run=dry_run)
         branch, commit = _git_metadata(target, config, dry_run=dry_run)
         today = datetime.now(tz=UTC).date().isoformat()
-        rendered = _render_prompt(target.command.prompt, branch=branch, commit=commit, today=today)
+        rendered = _render_prompt(
+            target.command.prompt,
+            branch=branch,
+            commit=commit,
+            today=today,
+            plans_root_in_worktree=layout.plans_root_in_worktree,
+        )
     except WorkflowError as exc:
         print_workflow_error(exc)
         return None
@@ -349,19 +377,6 @@ def _dispatch_prompt(
 
     if result.plan_path is not None:
         console.print(f"Plan resolved to: {result.plan_path}")
-
-    layout = config.layout()
-    repo_path = layout.git_repo_root(worktree_name)
-    try:
-        git_pull(repo_path, dry_run=dry_run, skip_if_no_upstream=True)
-        # An agent asked to rebase (the 'rebase' prompt) needs a current bare/main;
-        # the plain pull above only advances the checked-out branch.
-        refresh_main(repo_path, dry_run=dry_run)
-    except subprocess.CalledProcessError as exc:
-        error_console.print(f"[red]git sync failed in {repo_path}: {exc}[/red]")
-        return 1
-    # Every dispatch must leave code repos fetched, or the agent starts from stale bare/*.
-    fetch_code_repos_best_effort(layout, worktree_name, dry_run=dry_run)
 
     if edit_mode:
         edited = _open_in_editor(prompt)

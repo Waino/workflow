@@ -158,6 +158,45 @@ def test_pr_uses_reviewer_repo_and_renders_branch_commit_and_plan(
 
 
 @pytest.mark.parametrize(
+    ("args", "expected_path"),
+    [
+        (["pr", "004"], "docs/plans/reviews/pr/004_cli_framework_after.md"),
+        (["full-review"], "_after.md"),
+    ],
+)
+def test_prompt_commit_is_read_after_sync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    args: list[str],
+    expected_path: str,
+) -> None:
+    """A review must be named after the commit the agent sees, not the pre-pull HEAD."""
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, "reviewer", "checking", "004_cli_framework.md")
+    monkeypatch.chdir(tmp_path)
+    head = ["before"]
+    prompts: list[str] = []
+
+    def fake_pull(_repo_path: Path, **_kwargs: object) -> None:
+        head[0] = "after"
+
+    def fake_send(_agent_name: str, prompt: str, _config: object, **_kwargs: object) -> None:
+        prompts.append(prompt)
+
+    monkeypatch.setattr(tmux_dispatch, "git_pull", fake_pull)
+    monkeypatch.setattr(tmux_dispatch, "refresh_main", MagicMock())
+    monkeypatch.setattr(tmux_dispatch, "git_current_branch", MagicMock(return_value="feat/004_cli_framework"))
+    monkeypatch.setattr(tmux_dispatch, "git_commit_hash", lambda _repo: head[0])
+    monkeypatch.setattr(tmux_dispatch, "write_audit_log", MagicMock())
+    monkeypatch.setattr(tmux_dispatch, "send_prompt_to_agent", fake_send)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), *args])
+
+    assert result.exit_code == 0, result.output
+    assert expected_path in prompts[0]
+
+
+@pytest.mark.parametrize(
     ("state", "repo"),
     [("planning", "planner"), ("checking", "reviewer")],
 )

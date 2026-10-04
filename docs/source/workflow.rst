@@ -267,17 +267,18 @@ new plans.
 Index of decisions
 ------------------
 
-Decisions are made during planning and review and recorded only in the individual plan,
+Decisions are made during planning and review and recorded only in the individual plan
+(decisions made while fixing review findings go into the plan too),
 so a later plan can easily miss one. ``docs/plans/index_of_decisions.md`` collects them in one place:
 
-* a summary of each change (intent, plan and reviews),
+* a summary of each change (intent and plans),
 * the decisions, grouped by topic, each with a status (``current``, ``intended``, ``superseded``, ``obsolete``),
 * deferred work (``open`` or ``dropped``), and
 * architecturally important terms.
 
 The file does not exist in a fresh project. Run ``workflow index_decisions`` to have the reviewer
-create it, and again later to add what changed since. It records the commit hash of the last pass,
-so it must be merged by fast-forward or merge commit, never squashed or rebased.
+create it, and again later to add what changed since. It records the ``main`` commit the
+last pass started from.
 ``workflow followthrough`` removes deferred items that have since been completed.
 
 The generated part of ``AGENTS.md`` tells agents to read ``intent/001_idea.md`` and, if it exists,
