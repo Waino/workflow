@@ -68,7 +68,7 @@ states:
         prompt: |
           Read the plan at {{ plan.path_in_worktree }}.
           Ask any questions until you have a clear understanding.
-        reminder: answer
+        reminder: critique
       - command_type: manual
         name: answer
         description: Human answers questions in chat.
