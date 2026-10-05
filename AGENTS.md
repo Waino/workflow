@@ -1,7 +1,5 @@
 # Project Guidelines
 
-Always start by reading docs/plans/intent/001_idea.md
-
 ## Code Style
 - black
 - Maximum line length 120.
@@ -13,7 +11,7 @@ Always start by reading docs/plans/intent/001_idea.md
 ## Git usage
 - Commit your changes, but don't push.
 - Use semantic commit messages following conventional commits.
-- Use feature branches, stop and let me know when a feature is ready to be merged.
+- Use feature branches
 
 ## Python development
 - Use uv for virtual environment and dependency management.
@@ -22,17 +20,23 @@ Always start by reading docs/plans/intent/001_idea.md
 - DO NOT use `git commit --no-verify`. Stop and ask for instructions instead of omitting the pre-commit hook.
 
 ## Sandboxed environment
-- Note that you run in a sandboxed and firewalled environment.
+- You run in a sandboxed and firewalled environment.
 - Your Internet use is restricted: don't try to download or upload anything.
 - You can install Python packages from pypi, but you can not download or install CLI tools.
 - If it is necessary for completing the work, you can stop and propose other tools to install. Do not try to install anything directly.
-- Note that you are not allowed to use Docker commands.
+- You are not allowed to use Docker commands.
 
 ## Documentation
 - Write user documentation in the `docs` subdirectory, in ReStructuredText format.
 - Update documentation when adding new features.
 
 <!-- WORKFLOW BEGIN -->
+Always start by reading `docs/plans/intent/001_idea.md`.
+If `docs/plans/index_of_decisions.md` exists, read it next when planning or reviewing;
+when implementing, consult it if the plan leaves something unclear.
+Read its header, Plan summaries and Terminology, list the topics with `grep -n '^###'`,
+then read the topic sections relevant to the task (and Deferred work when planning).
+
 The workflow below is enacted by the human user. Agents do not invoke `workflow`
 subcommands themselves; they receive rendered prompts in the chat via tmux, appearing as ordinary user messages.
 Script subcommands are not visible to the agents.
@@ -52,6 +56,16 @@ Plans reside in `docs/plans`.
 The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md` is in the state `implementing`.
 Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
 Reviews (in docs/plans/reviews) do not follow this naming scheme.
+
+Decisions are recorded as a single numbered `## Decisions` list per file.
+Don't create decision-like sections labeled e.g. "Clarifications" or "Post-review fixes"; these go under "Decisions".
+Decisions made while fixing review findings go into the plan's Decisions list, not into the review.
+Numbering is append-only: never renumber; a withdrawn decision stays in place, marked withdrawn.
+Every resolved open option gets a Decisions entry; the discarded option's "would have" summary is only the rationale.
+Refer to a decision as `{identifier} Decision {number}`, where the identifier is `intent/{number}_{slug}`
+for intents and `{number}_{slug}` (no state) for plans, always without the `.md` suffix,
+e.g. `023.4_init_oob_and_bootstrap Decision 2`.
+Older files predating this convention are not edited: resolve references to their decisions through the index.
 
 ### intent (agent: planner)
 Plans being explored.
