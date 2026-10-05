@@ -57,15 +57,22 @@ The plan state is defined by location, e.g. `docs/plans/implementing/002_foo.md`
 Plan names consist of an unique sequece number, a slug, and the `.md` suffix.
 Reviews (in docs/plans/reviews) do not follow this naming scheme.
 
-Decisions are recorded as a single numbered `## Decisions` list per file.
-Don't create decision-like sections labeled e.g. "Clarifications" or "Post-review fixes"; these go under "Decisions".
-Decisions made while fixing review findings go into the plan's Decisions list, not into the review.
-Numbering is append-only: never renumber; a withdrawn decision stays in place, marked withdrawn.
-Every resolved open option gets a Decisions entry; the discarded option's "would have" summary is only the rationale.
-Refer to a decision as `{identifier} Decision {number}`, where the identifier is `intent/{number}_{slug}`
-for intents and `{number}_{slug}` (no state) for plans, always without the `.md` suffix,
-e.g. `023.4_init_oob_and_bootstrap Decision 2`.
-Older files predating this convention are not edited: resolve references to their decisions through the index.
+- Record a decision when the user answers a question, picks between options, or resolves a critique point.
+  Record it in the plan file right away, not only in chat.
+- Decisions are recorded as a single numbered `## Decisions` list per file.
+  Don't create decision-like sections labeled e.g. "Clarifications" or "Post-review fixes"; these go under "Decisions".
+- Decisions made while fixing review findings go into the plan's Decisions list, not into the review.
+- The list is append-only: never renumber. Amend in place and mark it amended;
+  a withdrawn decision stays, marked withdrawn with the reason.
+- Record only non-trivial decisions that are likely to matter outside this file.
+  Do not log every small choice you made yourself.
+- When presenting open options, mark the optional sections and recommend one.
+  Every resolved open option gets a Decisions entry; collapse the discarded option into a "would have" summary.
+- Refer to a decision as `{identifier} Decision {number}`, where the identifier is `intent/{number}_{slug}`
+  for intents and `{number}_{slug}` (no state) for plans, always without the `.md` suffix,
+  e.g. `023.4_init_oob_and_bootstrap Decision 2`.
+  Use this format in plans, code, and chat.
+- Older files predating this convention are not edited: resolve references to their decisions through the index.
 
 ### intent (agent: planner)
 Plans being explored.
@@ -92,6 +99,7 @@ Commands:
 - [prompt] critique — Critique the plan.
 - [manual] revise — Human revises the plan.
 - [prompt] rebase — Rebase the working branch onto current main.
+- [script] validate — Run verification checks.
 - [script] todo -> todo — Approve for implementation.
 
 ### todo (agent: human operator)
@@ -110,6 +118,7 @@ Commands:
 - [prompt] ask — Read the plan; ask clarifying questions.
 - [manual] answer — Human answers questions in chat.
 - [prompt] build — Implement the plan.
+- [prompt] rebase — Rebase the working branch onto current main.
 - [script] check -> checking — Run verification checks and hand off.
 
 ### checking (agent: reviewer)
@@ -145,5 +154,6 @@ Outbound: (none)
 Commands:
 - [prompt] full review — Perform a full review of the current codebase.
 - [prompt] followthrough — Compare done plans against the codebase for unimplemented features.
+- [prompt] index_decisions — Update the index of decisions from plans and intents not yet indexed.
 - [prompt] refresh — Update planning/todo plans against decisions made since they were written.
 <!-- WORKFLOW END -->
