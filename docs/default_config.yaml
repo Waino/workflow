@@ -368,6 +368,7 @@ states:
           - Keep surprising definitions; omit obvious ones. Omit structural decisions ("Foo subclasses Bar",
             "Foo carries field baz") unless architecturally load-bearing.
           - Keep prohibitions a later plan could plausibly violate (e.g. agents never push); not everything phrased negatively.
+            Negatives are hard to establish with code search.
           - When an intent and its plan restate decisions, index the earliest statement; index a later file only where it
             changes or adds something.
           - Superseded decisions pass the same bar as current ones. A supersession within one file is not indexed.
