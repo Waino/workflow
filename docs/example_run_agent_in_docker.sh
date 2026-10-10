@@ -25,6 +25,7 @@ set -euo pipefail
 IMAGE=gronsti-pi
 # Docker port exports, e.g. "-p 127.0.0.1:8050:8050"
 BUILDER_PORTS=""
+CONTAINER_ENVS="--env UV_LINK_MODE=copy --env GIT_EDITOR=true"
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -176,6 +177,7 @@ if [[ "$THROWAWAY" != true ]]; then
                     --env-file "$ENV_LIST" \
                     --env PROJECT="$PROJECT" \
                     --env AGENT="$REPO" \
+                    ${CONTAINER_ENVS} \
                     -v "/home/auggie/pi_agents/${REPO}:/home/auggie/.pi" \
                     -v /home/auggie/dot_cache:/home/auggie/.cache \
                     -v /home/auggie/dot_local/share/uv/python:/home/auggie/.local/share/uv/python \
@@ -246,7 +248,7 @@ case "$SUBCOMMAND" in
             -v "${PROJECT_DIR}/${REPO}:${REPO_PATH}" --workdir "$HOOK_WORKDIR" \
             -v /home/auggie/dot_cache:/home/auggie/.cache \
             -v /home/auggie/dot_local/share/uv/python:/home/auggie/.local/share/uv/python \
-            --env PROJECT="$PROJECT" --env AGENT="$REPO" \
+            --env PROJECT="$PROJECT" --env AGENT="$REPO" ${CONTAINER_ENVS} \
             "${IMAGE}" bash -lc "$HOOK_CMD"
         ;;
     agent)
