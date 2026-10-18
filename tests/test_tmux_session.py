@@ -1,15 +1,20 @@
 """Tests for workflow.tmux_session."""
 
 import shutil
+import uuid
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import libtmux
+import libtmux.exc
 import pytest
 
 from tests.conftest import create_project_marker
 from workflow.config import WorkflowConfig, load_config
 from workflow.exceptions import WorkflowError
 from workflow.names import WorktreeName
+from workflow.tmux_dispatch import workflow_session_exists
 from workflow.tmux_session import PROJECT_DIR_OPTION, active_tmux_repo, find_workflow_session
 
 
@@ -71,6 +76,42 @@ def test_active_tmux_repo(tmp_path: Path) -> None:
     config = _config(tmp_path)
     with patch("workflow.tmux_session.libtmux.Server", return_value=_server(session=_session(str(tmp_path)))):
         assert active_tmux_repo(config) == WorktreeName.builder
+
+
+@pytest.fixture
+def real_tmux(monkeypatch: pytest.MonkeyPatch) -> Iterator[libtmux.Server]:
+    """A real tmux server on a private socket, so the mocks' show_option contract is checked against tmux."""
+    if shutil.which("tmux") is None:
+        pytest.skip("tmux not on PATH")
+    server = libtmux.Server(socket_name=f"workflow-test-{uuid.uuid4().hex[:8]}")
+    monkeypatch.setattr("workflow.tmux_session.libtmux.Server", lambda: server)
+    yield server
+    if server.is_alive():
+        server.kill()
+
+
+def test_real_tmux_tagged_session_is_found(tmp_path: Path, real_tmux: libtmux.Server) -> None:
+    config = _config(tmp_path)
+    session = real_tmux.new_session(session_name=config.session_name, detach=True)
+    session.set_option(PROJECT_DIR_OPTION, str(config.project_dir))
+    found = find_workflow_session(config)
+    assert found is not None
+    assert found.session_id == session.session_id
+
+
+# An untagged session (every session started before this change) makes show_option raise
+# InvalidOption instead of returning None, so the migration path crashes `workflow start`.
+@pytest.mark.xfail(strict=True, raises=libtmux.exc.InvalidOption)
+@pytest.mark.parametrize("query", [find_workflow_session, workflow_session_exists])
+def test_real_tmux_untagged_session_raises_workflow_error(
+    tmp_path: Path,
+    real_tmux: libtmux.Server,
+    query: Callable[[WorkflowConfig], object],
+) -> None:
+    config = _config(tmp_path)
+    real_tmux.new_session(session_name=config.session_name, detach=True)
+    with pytest.raises(WorkflowError, match="unknown project"):
+        query(config)
 
 
 def test_active_tmux_repo_none_on_foreign_session(tmp_path: Path) -> None:

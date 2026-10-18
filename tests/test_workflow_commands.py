@@ -17,7 +17,8 @@ from tests.conftest import create_project_marker, make_layout
 from workflow import git_helpers, main
 from workflow.audit import read_audit_log, write_audit_log
 from workflow.commands.info import _parse_datetime
-from workflow.exceptions import WorkflowError
+from workflow.config import load_config
+from workflow.exceptions import PlanNotFoundError, WorkflowError
 from workflow.frontmatter import PlanFrontmatter, render_frontmatter
 from workflow.git_helpers import CommitResult
 from workflow.metadata import METADATA_FILENAME, ProjectMetadata, write_metadata
@@ -1316,3 +1317,19 @@ def test_rotate_best_effort_downgrades_error_to_warning(
 
     assert result.exit_code == 0, result.output
     assert "tmux rotation skipped" in result.output
+
+
+# The not-found hint only guards CalledProcessError; a missing planner clone raises
+# FileNotFoundError from subprocess, replacing the original error with a traceback.
+@pytest.mark.xfail(strict=True, raises=FileNotFoundError)
+def test_resolve_planner_plan_reraises_original_when_planner_clone_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_config(_make_project(tmp_path), project_dir=tmp_path)
+    shutil.rmtree(tmp_path / "planner")
+    not_found = PlanNotFoundError("999", ["planner"])
+    monkeypatch.setattr(wc, "resolve_plan", MagicMock(side_effect=not_found))
+
+    with pytest.raises(PlanNotFoundError):
+        wc._resolve_planner_plan("999", config, "todo")
