@@ -46,7 +46,7 @@ from workflow.names import WorktreeName, command_cli_name
 from workflow.next_step import format_next_step
 from workflow.plan_resolver import resolve_plan
 from workflow.shell import console, error_console, print_next_step, print_workflow_error
-from workflow.stack import stack_child, stack_entries
+from workflow.stack import branch_for_plan, stack_child, stack_entries
 from workflow.tmux_session import PROJECT_DIR_OPTION, active_tmux_repo, find_workflow_session
 
 _STACK_TIP_EXEMPT_COMMANDS = frozenset({"ask"})
@@ -230,9 +230,18 @@ def _sync_worktree(layout: Layout, worktree_name: WorktreeName, *, dry_run: bool
     fetch_code_repos_best_effort(layout, worktree_name, dry_run=dry_run)
 
 
-def _git_metadata(target: _PromptTarget, config: WorkflowConfig, *, dry_run: bool) -> tuple[str, str]:
+def _git_metadata(
+    target: _PromptTarget,
+    config: WorkflowConfig,
+    plan: Plan | None,
+    *,
+    dry_run: bool,
+) -> tuple[str, str]:
     """Return branch and commit metadata for the prompt target worktree (call after syncing it)."""
     if dry_run:
+        # Only builder/reviewer sit on the plan's feature branch; the planner's branch is not derivable.
+        if plan is not None and target.worktree_name in (WorktreeName.builder, WorktreeName.reviewer):
+            return f"{branch_for_plan(config.layout(), plan)} (expected)", "<dry-run-commit>"
         return "<dry-run-branch>", "<dry-run-commit>"
 
     repo_path = config.layout().git_repo_root(target.worktree_name)
@@ -276,7 +285,7 @@ def _setup_has_plan(
                 raise WorkflowError(msg)
         # Sync first, so {{ commit }} names what the agent will actually see.
         _sync_worktree(layout, target.worktree_name, dry_run=dry_run)
-        branch, commit = _git_metadata(target, config, dry_run=dry_run)
+        branch, commit = _git_metadata(target, config, plan, dry_run=dry_run)
         today = datetime.now(tz=UTC).date().isoformat()
         stack = stack_entries(layout, plan)
         rendered = _render_prompt(
@@ -326,7 +335,7 @@ def _setup_stateless(
     layout = config.layout()
     try:
         _sync_worktree(layout, target.worktree_name, dry_run=dry_run)
-        branch, commit = _git_metadata(target, config, dry_run=dry_run)
+        branch, commit = _git_metadata(target, config, None, dry_run=dry_run)
         today = datetime.now(tz=UTC).date().isoformat()
         rendered = _render_prompt(
             target.command.prompt,

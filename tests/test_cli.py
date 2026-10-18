@@ -782,3 +782,42 @@ def test_build_dry_run_prints_the_next_step(tmp_path: Path, monkeypatch: pytest.
     assert result.exit_code == 0, result.output
     assert "Next step: workflow check 004_x" in result.output
     assert '"next_step":"workflowcheck004_x"' in "".join(result.output.split())
+
+
+_PROMPT_HOMES = {
+    "build": ("implementing", "builder"),
+    "pr": ("checking", "reviewer"),
+    "rebase": ("planning", "planner"),
+}
+
+
+@pytest.mark.parametrize(
+    ("command", "frontmatter_branch", "expected"),
+    [
+        pytest.param("build", None, "feat/004_x (expected)", id="builder_default_branch"),
+        pytest.param("build", "feat/other", "feat/other (expected)", id="builder_frontmatter_branch"),
+        pytest.param("pr", None, "feat/004_x (expected)", id="reviewer"),
+        pytest.param("rebase", None, "<dry-run-branch>", id="planner_keeps_placeholder"),
+    ],
+)
+def test_dry_run_renders_the_expected_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    frontmatter_branch: str | None,
+    expected: str,
+) -> None:
+    state, repo = _PROMPT_HOMES[command]
+    config_path = _make_project(tmp_path)
+    _make_plan(tmp_path, repo, state, "004_x.md")
+    if frontmatter_branch:
+        frontmatter = f"---\nbranches:\n  docs:\n    branch: {frontmatter_branch}\n    base: abc1234\n---\n"
+        (tmp_path / repo / "docs" / "plans" / state / "004_x.md").write_text(
+            frontmatter + "# 004_x\n", encoding="utf-8",
+        )
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "--dry-run", command, "004"])
+
+    assert result.exit_code == 0, result.output
+    assert "".join(expected.split()) in "".join(result.output.split())

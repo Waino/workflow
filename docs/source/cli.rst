@@ -17,7 +17,10 @@ Global options
   current directory when below it (``.`` when equal) and absolute otherwise. Resumable
   commands (``init``, ``implement``, ...) print their step list first: titled
   ``Resume plan`` when a step is already done or needs ``--continue``, otherwise
-  ``Execution plan``. ``agents_md`` prints the files it would write.
+  ``Execution plan``. ``agents_md`` prints the files it would write. Prompt commands
+  render ``{{ branch }}`` as ``<branch> (expected)`` for builder and reviewer prompts
+  (the plan's feature branch) and as ``<dry-run-branch>`` otherwise; ``{{ commit }}``
+  is always ``<dry-run-commit>``.
 * ``--config PATH`` — use an explicit config file instead of the default resolution
   order (explicit path → ``{project_dir}/config.yaml`` → ``~/.config/workflow/config.yaml``).
 
