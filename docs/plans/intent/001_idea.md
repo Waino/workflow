@@ -56,17 +56,24 @@ then save and close; the modified text is sent to the reviewer.
 ### Planner
 - Branch naming: `plan/{input_plan}` (e.g. `plan/003_foo` could be either for `plan 003_foo` or
   `subdivide 003_foo`).
-- Branch selection rule: if already on a `plan/*` branch, stay on it. Otherwise, create a new
-  `plan/{input_plan}` branch from `main`.
+- Branch selection rule (refined by intent/030_various_fixes Decisions 5, 16, 18, 30; the canonical statement
+  is the generated AGENTS.md workflow block):
+    - Stay on the current `plan/*` branch only if it is related to the input plan: it is the input plan's own
+      branch, its sequence number is a prefix of the input plan's (`005.2` on `plan/005_foo`), or the input
+      plan's file exists on it but not on `main` (created there, e.g. by `subdivide` or `mvp`).
+    - Otherwise check out `plan/{input_plan}` if it exists, else create it from `main`; commit pending
+      changes on the current branch before switching.
+    - On `main`, the branch is created already during `ask`. `architecture` and `mvp` use `plan/002_architecture`.
     - This keeps related tickets created in one session (e.g. several `subdivide` outputs) on a single
-      branch, avoids nested branching, and prevents accidentally committing onto a stranded feature
-      branch the planner happens to be left on.
+      branch, avoids nested branching, prevents unrelated work from being merged by another plan's `todo`,
+      and prevents accidentally committing onto a stranded feature branch the planner happens to be left on.
     - Consequence: a branch may carry tickets whose sequence numbers don't match its name (e.g.
       `subdivide 001` produces `002`, `003`, ... on `plan/001_idea`). The ticket-to-branch mapping is
       therefore not derivable from names alone — see "Resolving the branch for a ticket" in 012.
-- For `critique`: same rule applies — if already on a `plan/*` branch, commit there; otherwise create
-  `plan/{plan_name}` from main.
-- Plan branches are merged to `main` via the `todo` or `implement` scripts.
+- For `critique`: same rule applies.
+- Plan branches are merged to `main` via the `todo` or `implement` scripts, which then delete the merged branch
+  (intent/030_various_fixes Decision 17). `todo` pushes the planner's checked-out branch and fails clearly
+  when the plan is not on it (intent/030_various_fixes Decisions 2, 19).
 
 ### Builder
 - Branches from `main`, named `feat/{plan_name}`.
