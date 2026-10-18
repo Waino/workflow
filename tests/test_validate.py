@@ -69,14 +69,47 @@ def test_check_file_scope_enforces_repo_rules(target_repo: str, changed_files: l
     assert result.status == status
 
 
-def test_check_noqa_nosec_reports_only_added_comments() -> None:
-    diff_text = """ context
+_PLANS = PurePosixPath("docs/plans")
+
+
+def test_check_suppressions_reports_only_added_comments() -> None:
+    diff_text = """+++ b/x.py
+ context
 +x = 1  # noqa: F401
 -y = 2  # nosec
 +z = 3  # nosec B101"""
-    result = dc._check_noqa_nosec(diff_text)
+    result = dc._check_suppressions(diff_text, _PLANS)
+    assert result.check_name == "suppressions"
     assert result.status == "warn"
+    assert result.message == "2 suppression comment(s) added"
     assert result.details == ["x = 1  # noqa: F401", "z = 3  # nosec B101"]
+
+
+@pytest.mark.parametrize("marker", dc.SUPPRESSION_MARKERS)
+def test_check_suppressions_flags_every_marker(marker: str) -> None:
+    result = dc._check_suppressions(f"+++ b/x.py\n+code {marker} here", _PLANS)
+    assert result.status == "warn"
+
+
+def test_check_suppressions_markers_sorted_and_lowercase() -> None:
+    assert list(dc.SUPPRESSION_MARKERS) == sorted(dc.SUPPRESSION_MARKERS)
+    assert all(m == m.lower() for m in dc.SUPPRESSION_MARKERS)
+
+
+@pytest.mark.parametrize(
+    ("diff_text", "status"),
+    [
+        pytest.param("+++ b/x.py\n+x = 1  # NOLINT", "warn", id="uppercase"),
+        pytest.param("+++ b/docs/plans/todo/001_x.md\n+mention noqa here", "pass", id="plan_file_skipped"),
+        pytest.param("+++ b/docs/plans/todo/001_x.md\n+++ b/x.py\n+# noqa", "warn", id="file_after_plan_file"),
+        pytest.param("+++ b/docs/plansfoo/x.md\n+# noqa", "warn", id="plans_prefix_is_a_path_prefix"),
+        pytest.param("+++ b/x.py\n-x = 1  # noqa", "pass", id="removed_line"),
+        pytest.param("+++ b/x.py\n+x = 1", "pass", id="no_markers"),
+        pytest.param("", "pass", id="empty"),
+    ],
+)
+def test_check_suppressions_status(diff_text: str, status: str) -> None:
+    assert dc._check_suppressions(diff_text, _PLANS).status == status
 
 
 def test_check_git_hooks_passes_for_managed_symlink(tmp_path: Path) -> None:

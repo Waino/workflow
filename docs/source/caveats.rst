@@ -16,6 +16,6 @@ Caveats and limitations
   push; every merge to ``main`` goes through a script command run by the human.
   This allows enforcing strict quality gates.
 * **Validation is best-effort, not a full CI pipeline.** ``workflow validate`` checks
-  things like plan/state boundaries, stray ``noqa``/``nosec`` comments, git hook
+  things like plan/state boundaries, added lint/type-check suppression comments (``noqa``, ``type: ignore``, ...), git hook
   integrity, and that ``AGENTS.md`` has not been edited by the agent — it does not replace
   running your own test suite.

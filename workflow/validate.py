@@ -8,7 +8,7 @@ In-band: one repo, four checks, unchanged from before 023.6.  Oob: ``validate``
 iterates ``layout.repos()`` in the acting worktree instead of a single repo, and
 gains two oob-only checks (``planner-code-commits``, ``branches-frontmatter``).
 ``file-scope`` and ``git-hooks`` become per-repo (``CheckResult.repo`` set);
-``noqa-nosec`` and ``agents-md`` stay single, worktree-level results (``repo=None``)
+``suppressions`` and ``agents-md`` stay single, worktree-level results (``repo=None``)
 covering every repo/worktree internally. See ``CHECK_NAMES_IN_BAND``/``CHECK_NAMES_OOB``.
 """
 
@@ -42,15 +42,34 @@ if TYPE_CHECKING:
     from workflow.layout import Layout
     from workflow.models import Plan
 
-CHECK_NAMES_IN_BAND: list[str] = ["file-scope", "noqa-nosec", "git-hooks", "agents-md"]
+CHECK_NAMES_IN_BAND: list[str] = ["file-scope", "suppressions", "git-hooks", "agents-md"]
 CHECK_NAMES_OOB: list[str] = [
     "file-scope",
     "planner-code-commits",
-    "noqa-nosec",
+    "suppressions",
     "git-hooks",
     "agents-md",
     "branches-frontmatter",
 ]
+# Lowercase substrings that silence a linter, type checker, or test-coverage tool.
+SUPPRESSION_MARKERS: tuple[str, ...] = (
+    "#[allow(",
+    "@suppresswarnings",
+    "@ts-expect-error",
+    "@ts-ignore",
+    "@ts-nocheck",
+    "eslint-disable",
+    "fmt: off",
+    "mypy: ignore-errors",
+    "nolint",
+    "noqa",
+    "nosec",
+    "pragma: no cover",
+    "pylint: disable",
+    "pyright: ignore",
+    "shellcheck disable",
+    "type: ignore",
+)
 _BRANCHES_FRONTMATTER_REQUIRED_STATES = frozenset({PlanState.IMPLEMENTING, PlanState.CHECKING})
 _OOB_DOCS_ROOT_FILES = frozenset({"body_of_agents.md", "bootstrap_venv.sh"})
 """Hand-written files at the oob docs repo root that only planner/canon may touch."""
@@ -163,7 +182,7 @@ def _validate_in_band(layout: Layout, config: WorkflowConfig, target_repo: Workt
 
     return [
         _check_file_scope(changed_files, target_repo, layout.plans_prefix),
-        _check_noqa_nosec(full_diff),
+        _check_suppressions(full_diff, layout.plans_prefix),
         _check_git_hooks(repo_path, config.managed_hooks),
         _check_agents_md(repo_path, layout.project_dir, changed_files),
     ]
@@ -227,21 +246,24 @@ def _is_allowed(
     return True  # unknown repo: allow
 
 
-def _check_noqa_nosec(diff_text: str) -> CheckResult:
+def _check_suppressions(diff_text: str, plans_prefix: PurePosixPath) -> CheckResult:
     found = []
+    in_plans = False
     for line in diff_text.splitlines():
-        if line.startswith("+") and not line.startswith("+++"):
+        if line.startswith("+++ "):
+            in_plans = PurePosixPath(line.removeprefix("+++ b/")).is_relative_to(plans_prefix)
+        elif line.startswith("+") and not in_plans:
             stripped = line[1:]
-            if "noqa" in stripped or "nosec" in stripped:
+            if any(marker in stripped.lower() for marker in SUPPRESSION_MARKERS):
                 found.append(stripped.strip())
     if found:
         return CheckResult(
-            check_name="noqa-nosec",
+            check_name="suppressions",
             status="warn",
-            message=f"{len(found)} noqa/nosec comment(s) added",
+            message=f"{len(found)} suppression comment(s) added",
             details=found,
         )
-    return CheckResult(check_name="noqa-nosec", status="pass", message="No noqa/nosec comments added")
+    return CheckResult(check_name="suppressions", status="pass", message="No suppression comments added")
 
 
 def _installed_managed_hooks(repo_path: Path, config: WorkflowConfig) -> dict[str, str]:
@@ -413,7 +435,7 @@ def _validate_oob(layout: Layout, config: WorkflowConfig, plan: Plan, worktree: 
                 ),
             )
 
-    results.append(_check_noqa_nosec("\n".join(all_diffs)))
+    results.append(_check_suppressions("\n".join(all_diffs), layout.plans_prefix))
     results.append(_check_agents_md_oob(layout))
     results.append(_check_planner_code_commits(layout))
     results.append(_check_branches_frontmatter(layout, plan))

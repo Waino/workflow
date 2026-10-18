@@ -378,7 +378,7 @@ def test_validate_prints_results_and_next_step(tmp_path: Path, monkeypatch: pyte
     def fake_validate(*_args: object, **_kwargs: object) -> list[CheckResult]:
         return [
             CheckResult(check_name="file-scope", status="pass", message="ok"),
-            CheckResult(check_name="noqa-nosec", status="warn", message="1 found", details=["# noqa"]),
+            CheckResult(check_name="suppressions", status="warn", message="1 found", details=["# noqa"]),
             CheckResult(check_name="git-hooks", status="pass", message="ok"),
             CheckResult(check_name="agents-md", status="pass", message="ok"),
         ]
@@ -391,7 +391,7 @@ def test_validate_prints_results_and_next_step(tmp_path: Path, monkeypatch: pyte
         print(result.stderr, file=sys.stderr)
     assert result.exit_code == 0
     assert "[✓] file-scope: ok" in result.output
-    assert "[!] noqa-nosec: 1 found" in result.output
+    assert "[!] suppressions: 1 found" in result.output
     assert "# noqa" in result.output
     assert "Next step: todo or reject" in result.output
     [entry] = read_audit_log(tmp_path)

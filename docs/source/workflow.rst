@@ -174,8 +174,8 @@ unrestricted for file scope. ``git-hooks`` expects the managed ``pre-commit`` sy
 only in a repo that ships ``.git-pre-commit-hook`` (the same repos ``init`` installs it
 in); elsewhere an executable hook -- e.g. a code repo's own pre-commit-framework hook --
 counts as unmanaged, which only warns in a code repo but fails in docs.
-``noqa-nosec`` and ``agents-md`` stay single, worktree-level results,
-but internally cover every repo/worktree: ``noqa-nosec`` scans each code repo's commits
+``suppressions`` and ``agents-md`` stay single, worktree-level results,
+but internally cover every repo/worktree: ``suppressions`` scans each code repo's commits
 not yet in ``bare`` the same way it scans the docs repo's diff, and ``agents-md`` checks
 the AGENTS.md copy at every worktree root, not just the acting one. Two checks are new
 and oob-only: ``planner-code-commits`` fails if the planner has committed to any code
@@ -183,9 +183,14 @@ repo (code changes belong to builder/reviewer), and ``branches-frontmatter`` enf
 rule above.
 
 A code repo has no stable baseline ref to diff against, so its ``file-scope`` and
-``noqa-nosec`` inputs are *every* commit reachable from ``HEAD`` but from no ``bare`` ref
+``suppressions`` inputs are *every* commit reachable from ``HEAD`` but from no ``bare`` ref
 -- all unpushed work in that clone, not a diff of one branch against its base. A
-``noqa`` added in one such commit and removed in a later one is still reported.
+suppression added in one such commit and removed in a later one is still reported.
+
+The ``suppressions`` check warns on added lines containing a marker that silences a tool
+(``noqa``, ``nosec``, ``type: ignore``, ``eslint-disable``, ``pragma: no cover``, ... see
+``SUPPRESSION_MARKERS`` in ``workflow/validate.py``), case-insensitively. Lines added in
+plan files are ignored.
 
 ``workflow doctor`` mirrors the same per-repo shape: the table gains a ``repo`` column
 (omitted in-band) with one ``bare`` row and one row per worktree for every registered

@@ -239,7 +239,7 @@ def git_diff_text_not_in_bare(repo_path: Path) -> str:
     """Return concatenated patches for commits reachable from HEAD but not from any ``bare`` ref.
 
     The full-diff-text counterpart to :func:`git_changed_files_not_in_bare`: one consistent
-    "reviewable diff" definition for a code repo, reused by ``noqa-nosec``. Read-only guard
+    "reviewable diff" definition for a code repo, reused by ``suppressions``. Read-only guard
     query: always runs for real, even in dry-run.
     """
     result = subprocess.run(
