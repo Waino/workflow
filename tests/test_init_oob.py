@@ -452,6 +452,36 @@ class TestInitInBand:
         assert _contains(result.output, message)
         assert not (tmp_path / "bare").exists()
 
+    def test_all_problems_are_listed_in_one_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _make_in_band_project(tmp_path)
+        (tmp_path / "env.list").unlink()
+        _git(["rm", "--cached", ".git-pre-commit-hook"], cwd=tmp_path / "canon")
+        _git(["commit", "-m", "untrack"], cwd=tmp_path / "canon")
+        (tmp_path / "bare").mkdir()
+
+        result = _run_in_band_init(tmp_path, monkeypatch)
+
+        assert result.exit_code == 1
+        for phrase in ("env.list must exist", ".git-pre-commit-hook must be committed", "not a valid bare clone"):
+            assert _contains(result.output, phrase)
+
+    def test_missing_git_dir_suppresses_dependent_messages(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _make_in_band_project(tmp_path)
+        (tmp_path / "env.list").unlink()
+        shutil.rmtree(tmp_path / "canon" / ".git")
+
+        result = _run_in_band_init(tmp_path, monkeypatch)
+
+        assert result.exit_code == 1
+        assert _contains(result.output, "not a git repository")
+        assert _contains(result.output, "env.list must exist")
+        for phrase in ("at least one commit", "pyproject.toml", ".git-pre-commit-hook"):
+            assert not _contains(result.output, phrase)
+
     def test_repo_without_commit_fails_precondition(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_in_band_project(tmp_path)
         shutil.rmtree(tmp_path / "canon" / ".git")
@@ -488,6 +518,27 @@ class TestInitInBand:
 
         assert (result.exit_code == 0) is ok, result.output
         assert ok or _contains(result.output, "must be executable")
+
+
+class TestInitOobPreflight:
+    def test_all_problems_are_listed_in_one_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        (tmp_path / "env.list").unlink()
+        (tmp_path / "canon" / DOCS_REPO / "body_of_agents.md").unlink()
+        shutil.rmtree(tmp_path / "canon" / "mypackage" / ".git")
+        _git(["init", "-b", "main"], cwd=tmp_path / "canon" / "mypackage")
+        (tmp_path / "bare" / DOCS_REPO).mkdir(parents=True)
+
+        result = _run_init(tmp_path, monkeypatch)
+
+        assert result.exit_code == 1
+        for phrase in (
+            "env.list must exist",
+            "body_of_agents.md must exist",
+            "mypackage must have at least one commit",
+        ):
+            assert _contains(result.output, phrase)
+        assert _contains(result.output, "not a valid bare clone")
 
 
 class TestAddRepo:
@@ -599,6 +650,18 @@ class TestAddRepo:
         result = _add_repo(tmp_path, "docs")
         assert result.exit_code == 1
         assert _contains(result.output, "reserved for the docs repo")
+
+    def test_problems_are_collected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        first = _run_init(tmp_path, monkeypatch)
+        assert first.exit_code == 0, first.output
+        (tmp_path / "bare" / "dep2").mkdir()
+
+        result = _add_repo(tmp_path, "dep2")
+
+        assert result.exit_code == 1
+        assert _contains(result.output, "not a git repository")
+        assert _contains(result.output, "not a valid bare clone")
 
     def test_rejected_when_canon_repo_missing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_oob_project(tmp_path, ["mypackage"])

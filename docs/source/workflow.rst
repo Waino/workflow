@@ -102,7 +102,8 @@ one commit that contains ``.git-pre-commit-hook`` and either ``pyproject.toml`` 
 executable ``docs/bootstrap_venv.sh`` (committed as executable) that creates the venv;
 a non-Python project commits its own, possibly no-op, script (see
 ``docs/example_bootstrap_venv.sh``). Agents clone the committed ``HEAD``, so files that
-exist only in the working tree fail the venv step later; ``init`` checks for them up front.
+exist only in the working tree fail the venv step later; ``init`` checks for them up front
+and reports every problem it finds in one error (as does ``add-repo`` for its repo).
 
 .. _Multi-repo handoffs:
 

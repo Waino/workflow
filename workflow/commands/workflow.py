@@ -678,72 +678,86 @@ def _resolve_init_metadata(
     return ProjectMetadata()
 
 
-def _require_executable_bootstrap(repo: Path, rel_path: str) -> None:
-    """Require *rel_path* in *repo* to exist, be executable, and be committed as executable."""
+def _check_executable_bootstrap(repo: Path, rel_path: str, issues: list[str]) -> None:
+    """Append an issue unless *rel_path* in *repo* exists, is executable, and is committed as executable."""
     path = repo / rel_path
-    require(path.is_file(), f"{path} must exist.")
-    require(os.access(path, os.X_OK), f"{path} must be executable.")
+    if not path.is_file():
+        issues.append(f"{path} must exist.")
+        return
+    if not os.access(path, os.X_OK):
+        issues.append(f"{path} must be executable.")
     # Agents clone the repo, so they only get the committed file and its committed mode.
-    require(
-        git_file_mode_at_ref(repo, "HEAD", rel_path) == _GIT_EXECUTABLE_MODE,
-        f"{path} must be committed as executable (git add --chmod=+x {rel_path}).",
-    )
+    if git_file_mode_at_ref(repo, "HEAD", rel_path) != _GIT_EXECUTABLE_MODE:
+        issues.append(f"{path} must be committed as executable (git add --chmod=+x {rel_path}).")
 
 
-def _check_in_band_init_preconditions(layout: Layout) -> None:
+def _check_repo_with_commit(repo: Path, issues: list[str]) -> bool:
+    """Append issues unless *repo* is a git repo with a commit and no lock; return whether HEAD-based checks can run."""
+    if not (repo / ".git").is_dir():
+        issues.append(f"{repo} is not a git repository (no .git/ found).")
+        return False
+    if git_index_lock_present(repo):
+        issues.append(f"leftover git lock in {repo}; remove it first.")
+    if git_rev_parse(repo, "HEAD") is None:
+        issues.append(f"{repo} must have at least one commit.")
+        return False
+    return True
+
+
+def _check_bare_valid(bare_path: Path, issues: list[str]) -> None:
+    if bare_path.exists() and not git_is_valid_repo(bare_path, bare=True):
+        issues.append(f"{bare_path} exists but is not a valid bare clone; remove it or fix it.")
+
+
+def _raise_if_issues(title: str, issues: list[str]) -> None:
+    if issues:
+        raise WorkflowError("\n".join([f"{title}:", *(f"- {issue}" for issue in issues)]))
+
+
+def _check_in_band_init_preconditions(layout: Layout, issues: list[str]) -> None:
     canon_repo = layout.git_repo_root(WorktreeName.canon)
-    require((canon_repo / ".git").is_dir(), f"{canon_repo} is not a git repository (no .git/ found).")
-    require(git_rev_parse(canon_repo, "HEAD") is not None, f"{canon_repo} must have at least one commit.")
-    require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
+    if not _check_repo_with_commit(canon_repo, issues):
+        return
     # Agents clone HEAD, so a working-tree-only file fails later, inside the venv step.
-    require(
-        git_path_exists_at_ref(canon_repo, "HEAD", ".git-pre-commit-hook"),
-        f"{canon_repo / '.git-pre-commit-hook'} must be committed.",
-    )
+    if not git_path_exists_at_ref(canon_repo, "HEAD", ".git-pre-commit-hook"):
+        issues.append(f"{canon_repo / '.git-pre-commit-hook'} must be committed.")
     bootstrap = f"{DOCS_REPO}/{BOOTSTRAP_VENV_FILENAME}"
     has_bootstrap = git_path_exists_at_ref(canon_repo, "HEAD", bootstrap)
-    require(
-        has_bootstrap or git_path_exists_at_ref(canon_repo, "HEAD", "pyproject.toml"),
-        f"{canon_repo} must commit a pyproject.toml, or a {bootstrap} script that creates the venv "
-        "(see docs/example_bootstrap_venv.sh).",
-    )
     if has_bootstrap:
-        _require_executable_bootstrap(canon_repo, bootstrap)
+        _check_executable_bootstrap(canon_repo, bootstrap, issues)
+    elif not git_path_exists_at_ref(canon_repo, "HEAD", "pyproject.toml"):
+        issues.append(
+            f"{canon_repo} must commit a pyproject.toml, or a {bootstrap} script that creates the venv "
+            "(see docs/example_bootstrap_venv.sh).",
+        )
 
 
-def _check_oob_init_preconditions(layout: Layout) -> None:
+def _check_oob_init_preconditions(layout: Layout, issues: list[str]) -> None:
     docs_repo = layout.git_repo_root(WorktreeName.canon, DOCS_REPO)
-    require((docs_repo / ".git").is_dir(), f"{docs_repo} is not a git repository (no .git/ found).")
-    require(git_rev_parse(docs_repo, "HEAD") is not None, f"{docs_repo} must have at least one commit.")
-    require(git_current_branch(docs_repo) == "main", f"{docs_repo} must have 'main' checked out.")
-    require(not git_index_lock_present(docs_repo), f"leftover git lock in {docs_repo}; remove it first.")
+    if _check_repo_with_commit(docs_repo, issues):
+        if git_current_branch(docs_repo) != "main":
+            issues.append(f"{docs_repo} must have 'main' checked out.")
+        body_path = docs_repo / BODY_OF_AGENTS_FILENAME
+        if not body_path.is_file():
+            issues.append(f"{body_path} must exist.")
+        _check_executable_bootstrap(docs_repo, BOOTSTRAP_VENV_FILENAME, issues)
     for repo in layout.code_repos():
-        code_repo_path = layout.git_repo_root(WorktreeName.canon, repo)
-        require((code_repo_path / ".git").is_dir(), f"{code_repo_path} is not a git repository (no .git/ found).")
-        require(git_rev_parse(code_repo_path, "HEAD") is not None, f"{code_repo_path} must have at least one commit.")
-        require(not git_index_lock_present(code_repo_path), f"leftover git lock in {code_repo_path}; remove it first.")
-    body_path = docs_repo / BODY_OF_AGENTS_FILENAME
-    require(body_path.is_file(), f"{body_path} must exist.")
-    _require_executable_bootstrap(docs_repo, BOOTSTRAP_VENV_FILENAME)
+        _check_repo_with_commit(layout.git_repo_root(WorktreeName.canon, repo), issues)
 
 
 def _check_init_preconditions(layout: Layout) -> None:
-    """Fail fast on cheaply-detectable causes of a broken ``init`` run."""
-    project_dir = layout.project_dir
-    if not (project_dir / "env.list").is_file():
-        msg = f"{project_dir / 'env.list'} must exist."
-        raise WorkflowError(msg)
+    """Fail on cheaply-detectable causes of a broken ``init`` run, listing all of them at once."""
+    issues: list[str] = []
+    env_list = layout.project_dir / "env.list"
+    if not env_list.is_file():
+        issues.append(f"{env_list} must exist.")
     if _is_oob(layout):
-        _check_oob_init_preconditions(layout)
+        _check_oob_init_preconditions(layout, issues)
     else:
-        _check_in_band_init_preconditions(layout)
+        _check_in_band_init_preconditions(layout, issues)
     for repo in layout.repos():
-        bare_path = layout.bare_repo(repo)
-        if bare_path.exists():
-            require(
-                git_is_valid_repo(bare_path, bare=True),
-                f"{bare_path} exists but is not a valid bare clone; remove it or fix it.",
-            )
+        _check_bare_valid(layout.bare_repo(repo), issues)
+    _raise_if_issues("init pre-flight checks failed", issues)
 
 
 def _create_and_commit_gitkeep_files(layout: Layout, canon_repo: Path, *, dry_run: bool) -> None:
@@ -884,16 +898,10 @@ def _add_repo_metadata(layout: Layout, name: str, *, run_hook: bool) -> ProjectM
         mode=metadata.mode,
         code_repos=[*metadata.code_repos, _code_repo_meta(name, run_hook=run_hook)],
     )
-    canon_repo = layout.git_repo_root(WorktreeName.canon, name)
-    require((canon_repo / ".git").is_dir(), f"{canon_repo} is not a git repository (no .git/ found).")
-    require(git_rev_parse(canon_repo, "HEAD") is not None, f"{canon_repo} must have at least one commit.")
-    require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
-    bare_path = layout.bare_repo(name)
-    if bare_path.exists():
-        require(
-            git_is_valid_repo(bare_path, bare=True),
-            f"{bare_path} exists but is not a valid bare clone; remove it or fix it.",
-        )
+    issues: list[str] = []
+    _check_repo_with_commit(layout.git_repo_root(WorktreeName.canon, name), issues)
+    _check_bare_valid(layout.bare_repo(name), issues)
+    _raise_if_issues("add-repo pre-flight checks failed", issues)
     return new_metadata
 
 
