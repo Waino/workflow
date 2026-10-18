@@ -1319,9 +1319,6 @@ def test_rotate_best_effort_downgrades_error_to_warning(
     assert "tmux rotation skipped" in result.output
 
 
-# The not-found hint only guards CalledProcessError; a missing planner clone raises
-# FileNotFoundError from subprocess, replacing the original error with a traceback.
-@pytest.mark.xfail(strict=True, raises=FileNotFoundError)
 def test_resolve_planner_plan_reraises_original_when_planner_clone_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

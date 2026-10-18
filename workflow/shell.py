@@ -35,7 +35,7 @@ def print_next_step(next_step: str | None) -> None:
         console.print(f"Next step: [bold]{next_step}[/bold]")
 
 
-def _display_cwd(cwd: str | Path) -> str:
+def display_path(cwd: str | Path) -> str:
     """Return *cwd* relative to the current directory when below it (``.`` when equal), else absolute."""
     path = Path(cwd).resolve()
     here = Path.cwd().resolve()
@@ -60,7 +60,7 @@ def run_command(
     (``check=True`` is always set).
     """
     if dry_run:
-        where = f" in {_display_cwd(kwargs['cwd'])}" if kwargs.get("cwd") is not None else ""
+        where = f" in {display_path(kwargs['cwd'])}" if kwargs.get("cwd") is not None else ""
         console.print(f"[dim]would run{where}:[/dim] {shlex.join(args)}")
         return None
     return subprocess.run(args, check=True, **kwargs)  # noqa: S603

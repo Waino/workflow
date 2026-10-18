@@ -24,6 +24,7 @@ from workflow.git_helpers import (
     git_commits_between,
     git_commits_not_in_bare,
     git_current_branch,
+    git_diff_branch,
     git_diff_text_not_in_bare,
     git_fetch_remote,
     git_index_lock_present,
@@ -679,6 +680,18 @@ def test_delete_merged_branch_removes_locally_and_on_bare(tmp_path: Path) -> Non
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_delete_merged_branch_skips_everything_when_still_checked_out(tmp_path: Path) -> None:
+    _bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
+    transfer_branch_to_main(source, canon, branch="feat/x")
+    assert git_current_branch(source) == "feat/x"
+
+    delete_merged_branch(canon, (source,), "feat/x")
+
+    assert git_branch_exists(source, "feat/x")
+    assert git_ref_exists_remote(canon, "feat/x")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_delete_merged_branch_warns_without_raising_when_not_merged(tmp_path: Path) -> None:
     bare, source, canon = _setup_transfer_scenario(tmp_path, "feat/x")
     other = tmp_path / "other"
@@ -959,6 +972,17 @@ def test_not_in_bare_helpers_cover_only_unpushed_commits(tmp_path: Path) -> None
     assert "+a.txt" in diff
     assert "+b.txt" in diff
     assert "pushed.txt" not in diff
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_diff_helpers_keep_b_prefix_with_noprefix_config(tmp_path: Path) -> None:
+    _bare, clone = _make_bare_and_clone(tmp_path)
+    _git(["config", "diff.noprefix", "true"], cwd=clone)
+    _git(["checkout", "-b", "feat/x"], cwd=clone)
+    _commit_file(clone, "a.txt", "a")
+
+    assert "+++ b/a.txt" in git_diff_text_not_in_bare(clone)
+    assert "+++ b/a.txt" in git_diff_branch(clone)
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")

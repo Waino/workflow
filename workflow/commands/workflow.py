@@ -112,7 +112,8 @@ from workflow.validate import validate as run_validate
 # Each command also accepts its own transition's *target* state, so a plan already
 # moved by a prior (partially-failed) run of the same command can be resumed.
 BOOTSTRAP_VENV_FILENAME = "bootstrap_venv.sh"
-"""Executable venv-bootstrap script, version controlled in the docs repo (oob mode only)."""
+"""Executable venv-bootstrap script, version controlled in the docs repo (oob) or its ``docs/`` dir (in-band)."""
+IN_BAND_BOOTSTRAP_PATH = f"docs/{BOOTSTRAP_VENV_FILENAME}"  # path inside the in-band project repo
 _GIT_EXECUTABLE_MODE = "100755"
 
 _EXPECTED_STATES_FOR: dict[str, set[PlanState]] = {
@@ -722,13 +723,11 @@ def _check_in_band_init_preconditions(layout: Layout, issues: list[str]) -> None
     # Agents clone HEAD, so a working-tree-only file fails later, inside the venv step.
     if not git_path_exists_at_ref(canon_repo, "HEAD", ".git-pre-commit-hook"):
         issues.append(f"{canon_repo / '.git-pre-commit-hook'} must be committed.")
-    bootstrap = f"{DOCS_REPO}/{BOOTSTRAP_VENV_FILENAME}"
-    has_bootstrap = git_path_exists_at_ref(canon_repo, "HEAD", bootstrap)
-    if has_bootstrap:
-        _check_executable_bootstrap(canon_repo, bootstrap, issues)
+    if git_path_exists_at_ref(canon_repo, "HEAD", IN_BAND_BOOTSTRAP_PATH):
+        _check_executable_bootstrap(canon_repo, IN_BAND_BOOTSTRAP_PATH, issues)
     elif not git_path_exists_at_ref(canon_repo, "HEAD", "pyproject.toml"):
         issues.append(
-            f"{canon_repo} must commit a pyproject.toml, or a {bootstrap} script that creates the venv "
+            f"{canon_repo} must commit a pyproject.toml, or a {IN_BAND_BOOTSTRAP_PATH} script that creates the venv "
             "(see docs/example_bootstrap_venv.sh).",
         )
 
@@ -1356,15 +1355,16 @@ def _resolve_planner_plan(plan_path: str, config: WorkflowConfig, command_name: 
     except (PlanNotFoundError, SourcesDisagreeError) as exc:
         planner_repo = config.layout().git_repo_root(WorktreeName.planner)
         branch = None
-        with suppress(subprocess.CalledProcessError):
+        with suppress(subprocess.CalledProcessError, OSError):
             branch = git_current_branch(planner_repo)
         if branch is None:
             raise
-        msg = (
-            f"{exc}\nThe planner clone is on branch '{branch}'; {command_name} only sees plans on that branch. "
-            f"Check out the branch holding the plan in {planner_repo} and retry."
+        print_workflow_error(exc)
+        hint = (
+            f"The planner clone is on branch '{branch}'; {command_name} only sees planning-state plans on that "
+            f"branch. Check out the branch holding the plan in {planner_repo} and retry."
         )
-        raise WorkflowError(msg) from exc
+        raise WorkflowError(hint) from exc
 
 
 def _delete_merged_planner_branch(layout: Layout, branch: str | None, *, dry_run: bool) -> None:

@@ -13,6 +13,7 @@ from click.testing import CliRunner
 import workflow.commands.workflow as wc
 from tests.conftest import commit_in_band_init_files
 from workflow.cli import main
+from workflow.commands.workflow import IN_BAND_BOOTSTRAP_PATH
 from workflow.git_helpers import CommitResult
 from workflow.metadata import METADATA_FILENAME, ProjectMode, read_metadata
 from workflow.names import DOCS_REPO, WorktreeName
@@ -506,12 +507,12 @@ class TestInitInBand:
     ) -> None:
         _make_in_band_project(tmp_path)
         canon = tmp_path / "canon"
-        script = canon / DOCS_REPO / "bootstrap_venv.sh"
+        script = canon / IN_BAND_BOOTSTRAP_PATH
         script.parent.mkdir()
         script.write_text("#!/bin/bash\n", encoding="utf-8")
         script.chmod(mode)
         _git(["rm", "pyproject.toml"], cwd=canon)
-        _git(["add", "docs/bootstrap_venv.sh"], cwd=canon)
+        _git(["add", IN_BAND_BOOTSTRAP_PATH], cwd=canon)
         _git(["commit", "-m", "bootstrap instead of pyproject"], cwd=canon)
 
         result = _run_in_band_init(tmp_path, monkeypatch)

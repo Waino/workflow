@@ -1489,6 +1489,7 @@ def test_todo_fails_naming_the_branch_when_the_plan_is_on_another_branch(
     assert result.exit_code == 1
     flat = "".join(result.output.split())
     assert "Theplannercloneisonbranch'plan/other'" in flat
+    assert "Noplanfound" in flat
     assert "plan/005_foo" in _branches(planner)
     assert run_git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout == canon_head
     assert not (tmp_path / "canon" / "docs" / "plans" / "todo" / "005_foo.md").exists()

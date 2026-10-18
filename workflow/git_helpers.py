@@ -29,10 +29,13 @@ if TYPE_CHECKING:
     from workflow.names import WorktreeName
 
 from workflow.exceptions import WorkflowError
-from workflow.shell import console, error_console, run_command, run_condition_command
+from workflow.shell import console, display_path, error_console, run_command, run_condition_command
 from workflow.steps import require
 
 GIT_REVPARSE_NO_UPSTREAM = 128
+
+# Fixed prefixes keep diff headers (``+++ b/...``) independent of user ``diff.noprefix``/``diff.mnemonicPrefix``.
+_DIFF_PREFIX_ARGS = ("--src-prefix=a/", "--dst-prefix=b/")
 
 BARE_REMOTE = "bare"
 """Name of the remote pointing at the workflow's own bare clone, in both in-band and oob modes."""
@@ -242,8 +245,8 @@ def git_diff_text_not_in_bare(repo_path: Path) -> str:
     "reviewable diff" definition for a code repo, reused by ``suppressions``. Read-only guard
     query: always runs for real, even in dry-run.
     """
-    result = subprocess.run(
-        ["git", "log", "-p", "HEAD", "--not", "--remotes=bare"],  # noqa: S607
+    result = subprocess.run(  # noqa: S603
+        ["git", "log", "-p", *_DIFF_PREFIX_ARGS, "HEAD", "--not", "--remotes=bare"],  # noqa: S607
         cwd=repo_path,
         capture_output=True,
         check=True,
@@ -580,7 +583,7 @@ def git_diff_branch(repo_path: Path, *extra_args: str) -> str:
     Raises :class:`subprocess.CalledProcessError` on non-zero exit.
     """
     result = run_command(
-        ["git", "diff", f"{BARE_REMOTE}/main...HEAD", *extra_args],
+        ["git", "diff", *_DIFF_PREFIX_ARGS, f"{BARE_REMOTE}/main...HEAD", *extra_args],
         cwd=repo_path,
         capture_output=True,
     )
@@ -644,13 +647,21 @@ def delete_merged_branch(
     if dry_run:
         # A dry run never landed the merge, so the merged-into-main probe below would
         # always fail and warn about a branch that is fine.
-        console.print(f"[dim]would delete {branch} in {', '.join(map(str, repos))} and on bare (once merged)[/dim]")
+        where = ", ".join(map(display_path, repos))
+        console.print(f"[dim]would delete {branch} in {where} and on bare (once merged)[/dim]")
         return
     if not git_ref_exists_remote(canon_repo, branch):
         return
     if not git_is_ancestor(canon_repo, f"{BARE_REMOTE}/{branch}", "main"):
         error_console.print(
             f"[yellow]\\[!] {branch} is not (yet) known to be merged into main; skipping branch cleanup.[/yellow]",
+        )
+        return
+    checked_out = [repo for repo in repos if git_current_branch(repo) == branch]
+    if checked_out:
+        where = ", ".join(map(str, checked_out))
+        error_console.print(
+            f"[yellow]\\[!] {branch} is still checked out in {where}; skipping branch cleanup.[/yellow]",
         )
         return
     for repo in repos:
