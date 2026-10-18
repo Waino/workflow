@@ -20,11 +20,12 @@ from workflow.commands.doctor import (
     _bare_staleness_notes,
     _check_bare,
     _check_worktree,
+    _config_notes,
     _duplicate_plan_anomalies,
     _legacy_marker_anomalies,
     _stack_anomalies,
 )
-from workflow.config import WorkflowConfig, load_config
+from workflow.config import TmuxConfig, WorkflowConfig, load_config
 from workflow.frontmatter import PlanFrontmatter, RepoBranch, render_frontmatter
 from workflow.layout import Layout
 from workflow.metadata import LEGACY_ROOT_MARKER, CodeRepoMeta, ProjectMetadata, ProjectMode, write_metadata
@@ -290,6 +291,21 @@ def test_doctor_cli_exits_zero_on_clean_setup(tmp_path: Path, monkeypatch: pytes
     result = CliRunner().invoke(main, ["--config", str(config_path), "doctor"])
 
     assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize(
+    ("pinned", "project_name", "expect_note"),
+    [
+        pytest.param("workflow", "myproj", True, id="pinned_default_differs"),
+        pytest.param("workflow", None, False, id="pinned_default_same"),
+        pytest.param(None, "myproj", False, id="not_pinned"),
+        pytest.param("custom", "myproj", False, id="custom_pin"),
+    ],
+)
+def test_config_notes_flag_pinned_default(pinned: str | None, project_name: str | None, *, expect_note: bool) -> None:
+    config = WorkflowConfig(agents=[], states={}, tmux=TmuxConfig(session_name=pinned), project_name=project_name)
+
+    assert bool(_config_notes(config)) is expect_note
 
 
 def test_legacy_marker_anomalies_flags_leftover_marker(tmp_path: Path) -> None:

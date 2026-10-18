@@ -19,6 +19,7 @@ from workflow.audit import read_audit_log
 from workflow.config import load_config
 from workflow.exceptions import WorkflowError
 from workflow.names import WorktreeName
+from workflow.tmux_session import PROJECT_DIR_OPTION
 from workflow.validate import CheckResult
 
 if TYPE_CHECKING:
@@ -406,13 +407,18 @@ def _load_config(tmp_path: Path) -> WorkflowConfig:
     return load_config(project_dir=tmp_path)
 
 
-def _rotation_server(*, recorded: str | None = "%3", source_window: str = "planner") -> MagicMock:
+def _rotation_server(
+    project_dir: Path | None,
+    *,
+    recorded: str | None = "%3",
+    source_window: str = "planner",
+) -> MagicMock:
     server = MagicMock()
     server.is_alive.return_value = True
     session = MagicMock()
     session.server = server
     server.sessions.get.return_value = session
-    session.show_option.return_value = recorded
+    session.show_option.side_effect = lambda option: str(project_dir) if option == PROJECT_DIR_OPTION else recorded
     control_pane = MagicMock()
     control_pane.window.name = source_window
     server.panes.get.return_value = control_pane
@@ -423,7 +429,7 @@ def _rotation_server(*, recorded: str | None = "%3", source_window: str = "plann
 class TestRotateControlPane:
     def test_joins_and_selects_target(self, tmp_path: Path) -> None:
         config = _load_config(tmp_path)
-        server = _rotation_server()
+        server = _rotation_server(config.project_dir)
         session = server.sessions.get.return_value
         target_window = MagicMock()
         session.windows.get.return_value = target_window
@@ -434,7 +440,7 @@ class TestRotateControlPane:
 
     def test_noop_when_already_in_target(self, tmp_path: Path) -> None:
         config = _load_config(tmp_path)
-        server = _rotation_server(source_window="builder")
+        server = _rotation_server(config.project_dir, source_window="builder")
         session = server.sessions.get.return_value
         with patch("workflow.tmux_dispatch.libtmux.Server", return_value=server):
             tmux_dispatch.rotate_control_pane(config, "builder")
@@ -442,7 +448,7 @@ class TestRotateControlPane:
 
     def test_raises_when_no_control_pane_recorded(self, tmp_path: Path) -> None:
         config = _load_config(tmp_path)
-        server = _rotation_server(recorded=None)
+        server = _rotation_server(config.project_dir, recorded=None)
         with (
             patch("workflow.tmux_dispatch.libtmux.Server", return_value=server),
             pytest.raises(
@@ -454,7 +460,7 @@ class TestRotateControlPane:
 
     def test_raises_when_target_window_missing(self, tmp_path: Path) -> None:
         config = _load_config(tmp_path)
-        server = _rotation_server()
+        server = _rotation_server(config.project_dir)
         session = server.sessions.get.return_value
         session.windows.get.return_value = None
         with (
@@ -488,6 +494,7 @@ def test_create_workflow_session_dry_run_previews_commands(
     assert "new-window" in out
     assert "split-window" in out
     assert "@workflow_control_pane" in out
+    assert PROJECT_DIR_OPTION in out
 
 
 def test_assert_in_workflow_session_requires_tmux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

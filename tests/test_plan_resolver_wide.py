@@ -38,7 +38,7 @@ from workflow.plan_resolver import SourcesDisagreeError, resolve_plan
 def _silence_tmux(monkeypatch: pytest.MonkeyPatch) -> None:
     dead = MagicMock()
     dead.is_alive.return_value = False
-    monkeypatch.setattr("workflow.plan_resolver.libtmux.Server", lambda: dead)
+    monkeypatch.setattr("workflow.tmux_session.libtmux.Server", lambda: dead)
 
 
 # ---------------------------------------------------------------------------

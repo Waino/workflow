@@ -10,8 +10,6 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import TypeVar
 
-import libtmux
-import libtmux.exc
 from pydantic import BaseModel, ConfigDict
 from rich.console import Group
 from rich.text import Text
@@ -22,6 +20,7 @@ from workflow.exceptions import AmbiguousPlanError, PlanCollisionError, PlanNotF
 from workflow.layout import Layout
 from workflow.models import Plan, PlanState, Review, ReviewSubState
 from workflow.names import WorktreeName
+from workflow.tmux_session import active_tmux_repo
 
 # Color styles for the SourcesDisagreeError rendering.
 _REPO_STYLES: dict[WorktreeName, str] = {
@@ -772,29 +771,9 @@ def _from_audit_log(
     return _Constraint(repos=repos, states=forward)
 
 
-def active_tmux_repo(session_name: str) -> WorktreeName | None:
-    """Return the WorktreeName of the active window in the named tmux session, or None."""
-    try:
-        server = libtmux.Server()
-        if not server.is_alive():
-            return None
-        session = server.sessions.get(session_name=session_name, default=None)
-        if session is None:
-            return None
-        active = session.active_window
-        if active is None or active.name is None:
-            return None
-        try:
-            return WorktreeName(active.name)
-        except ValueError:
-            return None
-    except (OSError, libtmux.exc.LibTmuxException):
-        return None
-
-
 def _from_tmux(config: WorkflowConfig) -> _Constraint:
     """Derive a soft repo constraint from the active tmux window, if any."""
-    repo = active_tmux_repo(config.tmux.session_name)
+    repo = active_tmux_repo(config)
     if repo is None:
         return _Constraint()
     if repo == WorktreeName.canon:

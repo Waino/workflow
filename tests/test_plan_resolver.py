@@ -53,7 +53,7 @@ def _silence_tmux(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     dead = MagicMock()
     dead.is_alive.return_value = False
-    monkeypatch.setattr("workflow.plan_resolver.libtmux.Server", lambda: dead)
+    monkeypatch.setattr("workflow.tmux_session.libtmux.Server", lambda: dead)
 
 
 # ---------------------------------------------------------------------------
@@ -759,11 +759,12 @@ class TestParseGitLogOutput:
 
 
 class TestTmuxSource:
-    def _make_session(self, window_name: str) -> MagicMock:
+    def _make_session(self, window_name: str, project_dir: Path) -> MagicMock:
         window = MagicMock()
         window.name = window_name
         session = MagicMock()
         session.active_window = window
+        session.show_option.return_value = str(project_dir)
         return session
 
     @pytest.mark.parametrize(
@@ -787,8 +788,8 @@ class TestTmuxSource:
         config = _make_config(tmp_path)
         server = MagicMock()
         server.is_alive.return_value = alive
-        server.sessions.get.return_value = None if window_name is None else self._make_session(window_name)
-        with patch("workflow.plan_resolver.libtmux.Server", return_value=server):
+        server.sessions.get.return_value = None if window_name is None else self._make_session(window_name, tmp_path)
+        with patch("workflow.tmux_session.libtmux.Server", return_value=server):
             constraint = _from_tmux(config)
         assert constraint.repos == expected
 
@@ -801,7 +802,7 @@ class TestTmuxSource:
     )
     def test_server_raises_returns_none(self, tmp_path: Path, error: Exception) -> None:
         config = _make_config(tmp_path)
-        with patch("workflow.plan_resolver.libtmux.Server", side_effect=error):
+        with patch("workflow.tmux_session.libtmux.Server", side_effect=error):
             constraint = _from_tmux(config)
         assert constraint.repos is None
 

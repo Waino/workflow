@@ -11,6 +11,7 @@ from tests.conftest import create_project_marker
 from workflow.config import (
     PromptCommand,
     TmuxConfig,
+    WorkflowConfig,
     find_legacy_project_root,
     find_project_root,
     load_config,
@@ -263,7 +264,7 @@ class TestCommandModels:
 class TestTmuxConfig:
     def test_defaults(self) -> None:
         cfg = TmuxConfig()
-        assert cfg.session_name == "workflow"
+        assert cfg.session_name is None
         assert cfg.prompt_send_delay == 1.0
 
     def test_loaded_from_yaml(self, tmp_path: Path) -> None:
@@ -281,8 +282,22 @@ class TestTmuxConfig:
     def test_tmux_defaults_when_omitted(self, project_dir: Path) -> None:
         """When no tmux section is in YAML, defaults are used."""
         loaded = load_config(project_dir=project_dir)
-        assert loaded.tmux.session_name == "workflow"
+        assert loaded.tmux.session_name is None
         assert loaded.tmux.prompt_send_delay == 1.0
+
+    @pytest.mark.parametrize(
+        ("explicit", "project_name", "expected"),
+        [
+            pytest.param("pinned", "proj", "pinned", id="explicit"),
+            pytest.param(None, "proj", "proj", id="derived"),
+            pytest.param(None, "my.proj:x", "my_proj_x", id="sanitized"),
+            pytest.param(None, None, "workflow", id="no_project"),
+            pytest.param(None, "", "workflow", id="empty_name"),
+        ],
+    )
+    def test_session_name(self, explicit: str | None, project_name: str | None, expected: str) -> None:
+        cfg = WorkflowConfig(agents=[], states={}, tmux=TmuxConfig(session_name=explicit), project_name=project_name)
+        assert cfg.session_name == expected
 
 
 class TestDefaultConfig:

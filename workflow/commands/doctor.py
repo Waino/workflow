@@ -388,6 +388,15 @@ def _print_anomaly_section(title: str, messages: list[str]) -> None:
         console.print(f"  - {msg}")
 
 
+def _config_notes(config: WorkflowConfig) -> list[str]:
+    pinned = config.tmux.session_name
+    if pinned == "workflow" and config.derived_session_name != pinned:
+        return [
+            "tmux.session_name pins the old default 'workflow'; remove it from config.yaml to allow parallel projects",
+        ]
+    return []
+
+
 def _render_table(checks: list[WorktreeCheck]) -> Table:
     show_repo = any(check.repo is not None for check in checks)
     table = Table(title="Workflow Doctor")
@@ -467,6 +476,8 @@ def doctor(ctx: click.Context) -> None:
     audit_anomalies = _audit_anomalies(config, project_dir)
     _print_anomaly_section("Audit log anomalies", audit_anomalies)
     _print_anomaly_section("Audit log notes", _audit_notes(config, layout))
+
+    _print_anomaly_section("Config notes", _config_notes(config))
 
     any_anomaly = (
         any(c.anomalies for c in checks)

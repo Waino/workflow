@@ -123,6 +123,9 @@ class StateConfig(BaseModel):
         return self
 
 
+_TMUX_NAME_TABLE = str.maketrans(".:", "__")
+
+
 class AgentConfig(BaseModel):
     """Configuration for a single agent."""
 
@@ -135,8 +138,8 @@ class AgentConfig(BaseModel):
 class TmuxConfig(BaseModel):
     """Configuration for tmux integration (prompt dispatch via libtmux)."""
 
-    session_name: str = "workflow"
-    """Name of the tmux session created by `workflow start`."""
+    session_name: str | None = None
+    """Explicit tmux session name; ``None`` derives it from the project name (see ``WorkflowConfig.session_name``)."""
 
     prompt_send_delay: float = 1.0
     """Seconds to wait after window switch before send-keys."""
@@ -216,6 +219,17 @@ class WorkflowConfig(BaseModel):
         if self.project_dir is None:
             raise WorkflowError(NOT_IN_PROJECT_MSG)
         return self.project_dir
+
+    @property
+    def session_name(self) -> str:
+        """Name of the tmux session created by `workflow start`."""
+        return self.tmux.session_name or self.derived_session_name
+
+    @property
+    def derived_session_name(self) -> str:
+        """Session name used when ``tmux.session_name`` is not set."""
+        # tmux itself replaces these characters, so an unsanitized name would never match in lookups
+        return (self.project_name or "").translate(_TMUX_NAME_TABLE) or "workflow"
 
     def layout(self) -> Layout:
         """Build this project's Layout from project_dir and metadata.

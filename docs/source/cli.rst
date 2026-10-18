@@ -77,6 +77,10 @@ Setup and session management
     Create the tmux session (or attach to it if it already exists), one window per
     agent plus a ``builder-shell`` window for manual shell access. Supports
     ``--reset`` to tear down and recreate the session and containers.
+    The session is named after the project (``.`` and ``:`` become ``_``) unless
+    ``tmux.session_name`` is set in ``config.yaml``, so several projects can be open at
+    once. The session is tagged with the project directory; every tmux command (including
+    ``start --reset``) refuses a session of the same name that belongs to another project.
 
 ``go TARGET``
     Rotate the control pane to the named tmux window (an agent name, or ``manual``
