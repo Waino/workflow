@@ -154,6 +154,14 @@ def _check_oob_single_remote(check: WorktreeCheck, repo_path: Path, worktree: Wo
         check.anomalies.append(f"expected exactly one remote ({BARE_REMOTE!r}), found {remotes}")
 
 
+def _note_finished_planner_branch(check: WorktreeCheck, worktree: WorktreeName, repo_path: Path) -> None:
+    """Note a ``plan/*`` branch with nothing ahead of main: it is merged or empty and can be deleted."""
+    branch = check.branch or ""
+    is_plan_branch = worktree == WorktreeName.planner and branch.startswith("plan/")
+    if is_plan_branch and git_is_ancestor(repo_path, branch, "main"):
+        check.notes.append(f"branch {branch!r} has no commits ahead of main (merged or empty)")
+
+
 def _check_worktree(
     worktree: WorktreeName,
     repo_path: Path,
@@ -206,6 +214,7 @@ def _check_worktree(
         and check.branch not in active_branches
     ):
         check.anomalies.append(f"stray branch {check.branch!r}: no plan is implementing/checking on it")
+    _note_finished_planner_branch(check, worktree, repo_path)
 
     _check_staleness(check, repo_path, bare_path, active_branches)
     return check

@@ -628,15 +628,14 @@ def park_on_main(repo_path: Path, *, dry_run: bool = False) -> None:
 
 def delete_merged_branch(
     canon_repo: Path,
-    reviewer_repo: Path,
-    builder_repo: Path,
+    repos: Sequence[Path],
     branch: str,
     *,
     dry_run: bool = False,
 ) -> None:
-    """Delete *branch* in reviewer, builder, and on bare, once it is merged into ``main``.
+    """Delete *branch* in each of *repos* and on bare, once it is merged into ``main``.
 
-    Called after ``accept`` has already landed the merge, so every failure here is
+    Called after ``accept``/``todo``/``implement`` has already landed the merge, so every failure here is
     downgraded to a warning rather than raised -- the accept itself must not be undone
     by a cosmetic cleanup problem. No-ops (with a warning) if *branch* is not (yet)
     known to be merged; a no-op, silently, if it was already cleaned up by a prior run
@@ -645,7 +644,7 @@ def delete_merged_branch(
     if dry_run:
         # A dry run never landed the merge, so the merged-into-main probe below would
         # always fail and warn about a branch that is fine.
-        console.print(f"[dim]would delete {branch} in reviewer, builder and on bare (once merged)[/dim]")
+        console.print(f"[dim]would delete {branch} in {', '.join(map(str, repos))} and on bare (once merged)[/dim]")
         return
     if not git_ref_exists_remote(canon_repo, branch):
         return
@@ -654,7 +653,7 @@ def delete_merged_branch(
             f"[yellow]\\[!] {branch} is not (yet) known to be merged into main; skipping branch cleanup.[/yellow]",
         )
         return
-    for repo in (reviewer_repo, builder_repo):
+    for repo in repos:
         try:
             refresh_main(repo)
             if git_branch_exists(repo, branch):

@@ -671,7 +671,7 @@ def test_delete_merged_branch_removes_locally_and_on_bare(tmp_path: Path) -> Non
     _git(["checkout", "main"], cwd=source)
     _git(["checkout", "main"], cwd=builder)
 
-    delete_merged_branch(canon, source, builder, "feat/x")
+    delete_merged_branch(canon, (source, builder), "feat/x")
 
     assert not git_branch_exists(source, "feat/x")
     assert not git_branch_exists(builder, "feat/x")
@@ -685,7 +685,7 @@ def test_delete_merged_branch_warns_without_raising_when_not_merged(tmp_path: Pa
     _git(["clone", "-o", "bare", str(bare), str(other)], cwd=tmp_path)
     del bare
 
-    delete_merged_branch(canon, source, other, "feat/x")  # must not raise
+    delete_merged_branch(canon, (source, other), "feat/x")  # must not raise
 
     assert git_branch_exists(source, "feat/x")
 
@@ -698,10 +698,10 @@ def test_delete_merged_branch_is_a_noop_when_already_deleted(tmp_path: Path) -> 
     other = tmp_path / "other"
     _git(["clone", "-o", "bare", str(bare), str(other)], cwd=tmp_path)
     _git(["checkout", "main"], cwd=source)
-    delete_merged_branch(canon, source, other, "feat/x")
+    delete_merged_branch(canon, (source, other), "feat/x")
     del bare
 
-    delete_merged_branch(canon, source, other, "feat/x")  # must not raise
+    delete_merged_branch(canon, (source, other), "feat/x")  # must not raise
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")

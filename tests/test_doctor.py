@@ -125,6 +125,37 @@ def test_check_worktree_builder_stray_branch_is_an_anomaly(tmp_path: Path) -> No
     assert any("stray branch" in a for a in check.anomalies)
 
 
+@pytest.mark.parametrize(
+    ("commit_ahead", "expect_note"),
+    [
+        pytest.param(False, True, id="merged_or_empty"),
+        pytest.param(True, False, id="has_commits"),
+    ],
+)
+def test_check_worktree_planner_plan_branch_note(tmp_path: Path, *, commit_ahead: bool, expect_note: bool) -> None:
+    repo = _init_repo(tmp_path / "planner")
+    _git(["remote", "add", "bare", str(tmp_path / "bare")], cwd=repo)
+    _git(["checkout", "-b", "plan/005_foo"], cwd=repo)
+    if commit_ahead:
+        (repo / "x.md").write_text("x\n", encoding="utf-8")
+        _git(["add", "."], cwd=repo)
+        _git(["commit", "-m", "work"], cwd=repo)
+
+    check = _check_worktree(WorktreeName.planner, repo, active_branches=set(), bare_path=tmp_path / "bare")
+
+    assert check.anomalies == []
+    assert any("no commits ahead of main" in note for note in check.notes) is expect_note
+
+
+def test_check_worktree_planner_on_main_has_no_note(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "planner")
+    _git(["remote", "add", "bare", str(tmp_path / "bare")], cwd=repo)
+
+    check = _check_worktree(WorktreeName.planner, repo, active_branches=set(), bare_path=tmp_path / "bare")
+
+    assert check.notes == []
+
+
 def test_check_worktree_builder_active_feature_branch_is_not_an_anomaly(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path / "builder")
     _git(["remote", "add", "bare", str(tmp_path / "bare")], cwd=repo)

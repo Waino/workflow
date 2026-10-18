@@ -74,6 +74,16 @@ Reviews (in docs/plans/reviews) do not follow this naming scheme.
   Use this format in plans, code, and chat.
 - Older files predating this convention are not edited: resolve references to their decisions through the index.
 
+Planner branches: before writing anything for a planner prompt about plan `{input_plan}` (e.g. `005_foo`):
+- Stay on the current `plan/*` branch if it is related to the input plan: it is `plan/{input_plan}`,
+  its sequence number is a dotted-numbering ancestor of the input plan's (`005.2` on `plan/005_foo`),
+  or the input plan's file exists on this branch but not on `main` (it was created here, e.g. by `subdivide`).
+- Otherwise commit pending changes on the current branch (stop and ask if it is unclear where they belong),
+  then check out `plan/{input_plan}` if it exists, else create it from `main`.
+- On `main`, create the branch already for `ask`, so decisions are recorded on it.
+- `architecture` and `mvp` use `plan/002_architecture`.
+- `todo` merges whatever branch the planner has checked out; never leave unrelated work on it.
+
 ### intent (agent: planner)
 Plans being explored.
 Inbound: (none)

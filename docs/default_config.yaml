@@ -32,6 +32,7 @@ states:
         name: architecture
         description: Read the idea; discuss critical architectural choices.
         prompt: |
+          Work on branch `plan/002_architecture` (planner branch rule in AGENTS.md).
           We are starting a new project from a cookiecutter template.
           Before we start planning the implementation sequence,
           let's discuss the overall architecture, pinning down any critical architectural choices.
@@ -51,6 +52,7 @@ states:
         name: mvp
         description: Create a plan sequence for the MVP slice
         prompt: |
+          Work on branch `plan/002_architecture` (planner branch rule in AGENTS.md).
           Read the plans at `{{ plans_root_in_worktree }}/intent/001_idea.md` and `{{ plans_root_in_worktree }}/planning/002_architecture.md`.
           Begin by asking any questions, until you have a clear understanding.
 
@@ -66,6 +68,7 @@ states:
         name: ask
         description: Read the plan; ask clarifying questions.
         prompt: |
+          First apply the planner branch rule from AGENTS.md.
           Read the plan at {{ plan.path_in_worktree }}.
           Ask any questions until you have a clear understanding.
         reminder: critique
@@ -76,6 +79,7 @@ states:
         name: critique
         description: Critique the plan.
         prompt: |
+          First apply the planner branch rule from AGENTS.md.
           Read the plan at {{ plan.path_in_worktree }}.
           Critique the idea.
           Please be honest, even harsh if necessary.
@@ -90,6 +94,7 @@ states:
         name: plan
         description: Write a detailed plan from an intent.
         prompt: |
+          First apply the planner branch rule from AGENTS.md.
           Read the intent at {{ plan.path_in_worktree }}.
           Write a detailed implementation plan into {{ plans_root_in_worktree }}/planning/.
           Commit your changes.
@@ -99,6 +104,7 @@ states:
         name: subdivide
         description: Break the plan into smaller planning documents.
         prompt: |
+          First apply the planner branch rule from AGENTS.md.
           Read the plan at {{ plan.path_in_worktree }}.
           Break it down into several detailed implementation plans.
           Write each plan into `{{ plans_root_in_worktree }}/planning/`.
@@ -119,6 +125,7 @@ states:
         name: critique
         description: Critique the plan.
         prompt: |
+          First apply the planner branch rule from AGENTS.md.
           Read the plan at {{ plan.path_in_worktree }}.
           Critique the plan.
           Please be honest, even harsh if necessary.

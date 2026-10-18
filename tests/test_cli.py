@@ -100,6 +100,7 @@ def test_ask_resolves_planner_plan_and_dispatches_prompt(tmp_path: Path, monkeyp
         sends.append((agent_name, prompt, dry_run))
 
     expected_prompt = (
+        "First apply the planner branch rule from AGENTS.md.\n"
         "Read the plan at docs/plans/planning/004_cli_framework.md.\n"
         "Ask any questions until you have a clear understanding."
     )

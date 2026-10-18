@@ -8,6 +8,7 @@ import re
 import shlex
 import subprocess
 import time
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
@@ -81,7 +82,7 @@ from workflow.metadata import (
 from workflow.models import AuditLogEntry, Plan, PlanState
 from workflow.names import DOCS_REPO, AgentName, WorktreeName
 from workflow.next_step import find_command, format_next_step
-from workflow.plan_resolver import next_intent_number, resolve_plan
+from workflow.plan_resolver import SourcesDisagreeError, next_intent_number, resolve_plan
 from workflow.registry import register_script
 from workflow.shell import console, error_console, print_next_step, print_workflow_error, run_command
 from workflow.stack import (
@@ -1286,7 +1287,7 @@ def todo(ctx: click.Context, plan_path: str, *, force_validation: bool, force_pu
 
     try:
         layout = config.layout()
-        plan = resolve_plan(plan_path, config=config, command_name="todo")
+        plan = _resolve_planner_plan(plan_path, config, "todo")
         _enforce_expected_state(plan, "todo")
         planner_repo = layout.git_repo_root(WorktreeName.planner)
         canon_repo = layout.git_repo_root(WorktreeName.canon)
@@ -1305,6 +1306,7 @@ def todo(ctx: click.Context, plan_path: str, *, force_validation: bool, force_pu
         _classify_todo_steps(resume, plan, layout)
         resume.render()
 
+        planner_branch = None
         if resume.should_run(_STEP_TODO_TRANSFER):
             planner_branch = git_current_branch(planner_repo)
             result = transfer_branch_to_main(
@@ -1330,6 +1332,7 @@ def todo(ctx: click.Context, plan_path: str, *, force_validation: bool, force_pu
         )
         git_push(canon_repo, dry_run=dry_run)
         _sync_repos_best_effort(layout, park=WorktreeName.planner, dry_run=dry_run)
+        _delete_merged_planner_branch(layout, planner_branch, dry_run=dry_run)
         next_step = _command_next_step(config, PlanState.PLANNING, "todo", new_plan.name)
         _write_script_audit_log(config, "todo", dry_run=dry_run, input_plan=plan.name, next_step=next_step)
         print_next_step(next_step)
@@ -1344,6 +1347,31 @@ def todo(ctx: click.Context, plan_path: str, *, force_validation: bool, force_pu
         ctx.exit(1)
         return
     ctx.exit(0)
+
+
+def _resolve_planner_plan(plan_path: str, config: WorkflowConfig, command_name: str) -> Plan:
+    """Resolve *plan_path*; when it is not found, name the planner branch whose plans are the only ones seen."""
+    try:
+        return resolve_plan(plan_path, config=config, command_name=command_name)
+    except (PlanNotFoundError, SourcesDisagreeError) as exc:
+        planner_repo = config.layout().git_repo_root(WorktreeName.planner)
+        branch = None
+        with suppress(subprocess.CalledProcessError):
+            branch = git_current_branch(planner_repo)
+        if branch is None:
+            raise
+        msg = (
+            f"{exc}\nThe planner clone is on branch '{branch}'; {command_name} only sees plans on that branch. "
+            f"Check out the branch holding the plan in {planner_repo} and retry."
+        )
+        raise WorkflowError(msg) from exc
+
+
+def _delete_merged_planner_branch(layout: Layout, branch: str | None, *, dry_run: bool) -> None:
+    """Delete the planner branch a todo/implement transfer just merged; never ``main`` or a skipped transfer."""
+    if branch is not None and branch != "main":
+        canon_repo = layout.git_repo_root(WorktreeName.canon)
+        delete_merged_branch(canon_repo, (layout.git_repo_root(WorktreeName.planner),), branch, dry_run=dry_run)
 
 
 def _other_worktrees(layout: Layout, source_worktree: WorktreeName) -> list[Path]:
@@ -1675,10 +1703,13 @@ def _run_transfer_and_todo_steps(  # noqa: PLR0913
     *,
     force_push: bool,
     dry_run: bool,
-) -> tuple[Plan, bool]:
-    """Run the shared planning->todo transfer steps; returns (possibly-updated plan, transfer_ran)."""
-    transfer_ran = resume.should_run(_STEP_IMPLEMENT_TRANSFER)
-    if transfer_ran:
+) -> tuple[Plan, str | None]:
+    """Run the shared planning->todo transfer steps; returns (possibly-updated plan, transferred planner branch).
+
+    The branch is ``None`` when the transfer did not run.
+    """
+    planner_branch = None
+    if resume.should_run(_STEP_IMPLEMENT_TRANSFER):
         planner_repo = layout.git_repo_root(WorktreeName.planner)
         canon_repo = layout.git_repo_root(WorktreeName.canon)
         planner_branch = git_current_branch(planner_repo)
@@ -1701,7 +1732,7 @@ def _run_transfer_and_todo_steps(  # noqa: PLR0913
             worktree_override=WorktreeName.canon,
             dry_run=dry_run,
         )
-    return plan, transfer_ran
+    return plan, planner_branch
 
 
 def _classify_implement_steps(
@@ -1771,7 +1802,7 @@ def _run_implement_steps(  # noqa: PLR0913
     dry_run: bool,
 ) -> Plan:
     """Run the (already-classified) implement steps, gated on resume.should_run."""
-    plan, transfer_ran = _run_transfer_and_todo_steps(
+    plan, planner_branch = _run_transfer_and_todo_steps(
         resume,
         plan,
         layout,
@@ -1790,7 +1821,8 @@ def _run_implement_steps(  # noqa: PLR0913
     # Only planner is parked: builder keeps the new feat/* branch created below, so
     # parking it would check it straight back out onto 'main'. With no transfer there is
     # no planner branch involved at all, so nothing to park either.
-    _sync_repos_best_effort(layout, park=WorktreeName.planner if transfer_ran else None, dry_run=dry_run)
+    _sync_repos_best_effort(layout, park=WorktreeName.planner if planner_branch else None, dry_run=dry_run)
+    _delete_merged_planner_branch(layout, planner_branch, dry_run=dry_run)
     # Leave an existing feature branch (and any work in progress on it) untouched: the branch
     # creation is coupled to this same gate, not classified/gated separately (see above).
     if resume.should_run(_STEP_IMPLEMENT_FETCH_BUILDER):
@@ -1961,7 +1993,7 @@ def _run_implement_onto_steps(  # noqa: PLR0913
     dry_run: bool,
 ) -> Plan:
     """Run the (already-classified) ``implement --onto`` steps, gated on resume.should_run."""
-    plan, transfer_ran = _run_transfer_and_todo_steps(
+    plan, planner_branch = _run_transfer_and_todo_steps(
         resume,
         plan,
         layout,
@@ -2005,7 +2037,8 @@ def _run_implement_onto_steps(  # noqa: PLR0913
         dry_run=dry_run,
     )
     git_push(canon_repo, dry_run=dry_run)
-    _sync_repos_best_effort(layout, park=WorktreeName.planner if transfer_ran else None, dry_run=dry_run)
+    _sync_repos_best_effort(layout, park=WorktreeName.planner if planner_branch else None, dry_run=dry_run)
+    _delete_merged_planner_branch(layout, planner_branch, dry_run=dry_run)
 
     # Unconditional (see _classify_implement_onto_steps): not gated on resume.should_run.
     _merge_bare_main_into(builder_repo, dry_run=dry_run)
@@ -2040,7 +2073,7 @@ def implement(ctx: click.Context, plan_path: str, *, cont: bool, force_push: boo
     try:
         config.require_project_dir()
         layout = config.layout()
-        plan = resolve_plan(plan_path, config=config, command_name="implement")
+        plan = _resolve_planner_plan(plan_path, config, "implement")
         _enforce_expected_state(plan, "implement")
         builder_repo = layout.git_repo_root(WorktreeName.builder)
         canon_repo = layout.git_repo_root(WorktreeName.canon)
@@ -2581,7 +2614,7 @@ def accept(ctx: click.Context, plan_path: str, *, force_push: bool) -> None:
         # done-transition commit has itself reached bare.
         _sync_repos_best_effort(layout, park=WorktreeName.reviewer, dry_run=dry_run)
         builder_repo = layout.git_repo_root(WorktreeName.builder)
-        delete_merged_branch(canon_repo, reviewer_repo, builder_repo, branch, dry_run=dry_run)
+        delete_merged_branch(canon_repo, (reviewer_repo, builder_repo), branch, dry_run=dry_run)
         next_step = _command_next_step(config, PlanState.CHECKING, "accept", new_plan.name)
         _write_script_audit_log(
             config,

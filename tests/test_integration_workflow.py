@@ -1417,3 +1417,78 @@ def test_validate_records_an_audit_entry_only_on_success(tmp_path: Path, monkeyp
     assert result.exit_code == 0, result.output
     [entry] = validate_entries()
     assert (entry.input_plan, entry.next_step) == ("005_foo", "accept or reject")
+
+
+def _branches(repo: Path) -> list[str]:
+    return run_git(["branch", "--list", "--format=%(refname:short)"], cwd=repo).stdout.decode().split()
+
+
+def _commit_plan(planner: Path, plan_name: str) -> None:
+    make_plan_file(planner, "planning", f"{plan_name}.md")
+    run_git(["add", "."], cwd=planner)
+    run_git(["commit", "-m", f"add planning plan {plan_name}"], cwd=planner)
+    advance_clock()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_todo_deletes_the_merged_planner_branch_locally_and_on_bare(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = setup_stacked_project(tmp_path, monkeypatch)
+
+    create_and_todo_plan(config_path, tmp_path, "005_foo")
+
+    assert "plan/005_foo" not in _branches(tmp_path / "planner")
+    assert "plan/005_foo" not in _branches(tmp_path / "bare")
+    assert (tmp_path / "canon" / "docs" / "plans" / "todo" / "005_foo.md").exists()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_implement_deletes_the_merged_planner_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = setup_stacked_project(tmp_path, monkeypatch)
+    planner = tmp_path / "planner"
+    run_git(["checkout", "-b", "plan/005_foo"], cwd=planner)
+    _commit_plan(planner, "005_foo")
+
+    result = run_workflow(config_path, "implement", "005_foo")
+
+    assert result.exit_code == 0, result.output
+    assert "plan/005_foo" not in _branches(planner)
+    assert "plan/005_foo" not in _branches(tmp_path / "bare")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_todo_from_main_deletes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = setup_stacked_project(tmp_path, monkeypatch)
+    planner = tmp_path / "planner"
+    run_git(["branch", "plan/other"], cwd=planner)
+    _commit_plan(planner, "005_foo")  # on main: the fast-forward path
+
+    result = run_workflow(config_path, "todo", "005_foo")
+
+    assert result.exit_code == 0, result.output
+    assert sorted(_branches(planner)) == ["main", "plan/other"]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_todo_fails_naming_the_branch_when_the_plan_is_on_another_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = setup_stacked_project(tmp_path, monkeypatch)
+    planner = tmp_path / "planner"
+    run_git(["checkout", "-b", "plan/005_foo"], cwd=planner)
+    _commit_plan(planner, "005_foo")
+    run_git(["checkout", "main"], cwd=planner)
+    run_git(["checkout", "-b", "plan/other"], cwd=planner)
+    canon_head = run_git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout
+
+    result = run_workflow(config_path, "todo", "005_foo")
+
+    assert result.exit_code == 1
+    flat = "".join(result.output.split())
+    assert "Theplannercloneisonbranch'plan/other'" in flat
+    assert "plan/005_foo" in _branches(planner)
+    assert run_git(["rev-parse", "HEAD"], cwd=tmp_path / "canon").stdout == canon_head
+    assert not (tmp_path / "canon" / "docs" / "plans" / "todo" / "005_foo.md").exists()
