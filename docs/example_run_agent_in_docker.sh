@@ -209,8 +209,8 @@ case "$SUBCOMMAND" in
         ;;
     venv)
         [[ -d "${PROJECT_DIR}/${REPO}/.venv" ]] && rm -rf "${PROJECT_DIR}/${REPO}/.venv"
-        # Out-of-band: a bootstrap script version controlled in the docs repo (see
-        # docs/example_bootstrap_venv.sh) knows how to install every code repo.
+        # A bootstrap script (see docs/example_bootstrap_venv.sh) knows how to install the venv: it lives in
+        # the docs repo (out-of-band) or at docs/bootstrap_venv.sh of the project repo (in-band).
         BOOTSTRAP_REL="docs/bootstrap_venv.sh"
         if [[ -f "${PROJECT_DIR}/${REPO}/${BOOTSTRAP_REL}" ]]; then
             VENV_CMD="source ~/.bashrc && ./${BOOTSTRAP_REL}"

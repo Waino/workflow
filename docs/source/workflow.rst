@@ -51,6 +51,25 @@ Only the ``main`` branch is long-lived; every other branch is short-lived and de
 merge. Plans move through the pipeline as commits on these branches, and the CLI
 performs the push/pull/merge steps needed at each handoff.
 
+.. _Planner branches:
+
+Planner branches
+-----------------
+
+The planner works on a branch named ``plan/<input plan>`` (for example ``plan/005_foo``)
+and stays on a related ``plan/*`` branch rather than switching; ``architecture`` and
+``mvp`` use ``plan/002_architecture``. The "Planner branches" paragraph that
+``workflow agents_md`` writes into ``AGENTS.md`` is the authoritative wording of the rule.
+
+``todo`` and ``implement`` only see plans on the branch the planner clone has checked out.
+When the plan is not found, they print the usual error followed by a hint naming that
+branch.
+
+After ``todo`` or ``implement`` has merged the planner branch, it is deleted in the planner
+clone and on ``bare``. ``main`` is never deleted, and nothing is deleted when the transfer
+step did not run or the branch is still checked out. ``workflow doctor`` notes a ``plan/*``
+branch with nothing ahead of ``main``.
+
 .. _Out-of-band mode:
 
 Out-of-band mode
