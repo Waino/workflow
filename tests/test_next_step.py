@@ -23,7 +23,7 @@ def _make_config(tmp_path: Path) -> WorkflowConfig:
     ("state", "command", "expected"),
     [
         (PlanState.PLANNING, "todo", "workflow implement 005_foo"),  # command reminder
-        (PlanState.INTENT, "ask", "answer"),  # manual step: verbatim
+        (PlanState.INTENT, "ask", "workflow critique 005_foo"),
         (PlanState.CHECKING, "validate", "accept or reject"),  # free text
         (PlanState.IMPLEMENTING, "check", "manual review, then pr"),  # free text with a comma
         (PlanState.INTENT, "architecture", "workflow mvp 005_foo"),
