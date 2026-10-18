@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Example docs/bootstrap_venv.sh
 #
-# Out-of-band only. Copy this file to <project>/canon/docs/bootstrap_venv.sh, commit it to the
-# docs repo, mark it executable (`chmod +x`), and customise the repo list below.
+# Copy this file to <project>/canon/docs/bootstrap_venv.sh (out-of-band: committed in the docs repo;
+# in-band: committed in the project repo as docs/bootstrap_venv.sh), mark it executable
+# (`chmod +x`, committed with `git add --chmod=+x`), and customise the repo list below.
+# Out-of-band projects require it. In-band projects need it only without a pyproject.toml;
+# a non-Python project commits its own, possibly no-op, script.
 #
 # run_agent_in_docker.sh's 'venv' subcommand runs this script inside the container instead
 # of its own `uv venv --seed && uv sync` fallback whenever it exists,

@@ -82,7 +82,10 @@ script commands that run the pre-commit hook) invoke ``hook``. The script must:
   root when it exists (the out-of-band wrapper root has no ``pyproject.toml`` for
   plain ``uv sync`` to act on), falling back to
   ``uv venv --seed && uv sync`` otherwise. A template lives at
-  ``docs/example_bootstrap_venv.sh``.
+  ``docs/example_bootstrap_venv.sh``. In-band ``workflow init`` requires a committed
+  ``pyproject.toml`` or ``docs/bootstrap_venv.sh``, so a custom script must run the
+  bootstrap script when present, or the late failure on a project without
+  ``pyproject.toml`` returns.
 
 Customization points
 ----------------------

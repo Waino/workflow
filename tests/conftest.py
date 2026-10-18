@@ -143,6 +143,14 @@ def init_canon_repo(tmp_path: Path) -> Path:
     return canon
 
 
+def commit_in_band_init_files(canon: Path) -> None:
+    """Commit the files an in-band ``init`` requires at canon's HEAD."""
+    (canon / ".git-pre-commit-hook").touch()
+    (canon / "pyproject.toml").touch()
+    run_git(["add", ".git-pre-commit-hook", "pyproject.toml"], cwd=canon)
+    run_git(["commit", "-m", "add init files"], cwd=canon)
+
+
 def make_integration_config(tmp_path: Path) -> Path:
     """Write a minimal workflow config derived from the default, return its path."""
     with (tmp_path / "run_agent_in_docker.sh").open("w") as dummy_script:
@@ -152,7 +160,7 @@ def make_integration_config(tmp_path: Path) -> Path:
     dest = tmp_path / "config.yaml"
     dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
     create_project_marker(tmp_path)
-    (tmp_path / "canon" / ".git-pre-commit-hook").touch()
+    commit_in_band_init_files(tmp_path / "canon")
     (tmp_path / "env.list").touch()
     return dest
 

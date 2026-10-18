@@ -72,6 +72,7 @@ class TestClassifyMarkerStep:
 def test_init_runs_clone_commands_and_creates_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _make_project(tmp_path, marker=False)
     (tmp_path / "canon" / ".git").mkdir()
+    monkeypatch.setattr(wc, "_check_in_band_init_preconditions", MagicMock())
     monkeypatch.chdir(tmp_path)
     # Single manager mock so we can assert call ordering across all init steps.
     manager = MagicMock()
@@ -174,6 +175,7 @@ def test_init_succeeds_when_agents_md_unchanged(tmp_path: Path, monkeypatch: pyt
     """Init must continue past the AGENTS.md commit step when there's nothing to commit."""
     config_path = _make_project(tmp_path, marker=False)
     (tmp_path / "canon" / ".git").mkdir()
+    monkeypatch.setattr(wc, "_check_in_band_init_preconditions", MagicMock())
     (tmp_path / "canon" / ".git-pre-commit-hook").touch()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(wc, "generate_and_write_agents_md", MagicMock())
@@ -194,6 +196,7 @@ def test_init_fails_when_bare_exists_but_is_not_a_valid_clone(
     """A leftover, non-bare-repo `bare/` directory must fail the precondition, not get cloned over."""
     config_path = _make_project(tmp_path, marker=False)
     (tmp_path / "canon" / ".git").mkdir()
+    monkeypatch.setattr(wc, "_check_in_band_init_preconditions", MagicMock())
     bare_dir = tmp_path / "bare"
     bare_dir.mkdir()
     (bare_dir / "leftover.txt").write_text("junk\n", encoding="utf-8")

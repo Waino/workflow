@@ -11,6 +11,7 @@ import pytest
 from click.testing import CliRunner
 
 import workflow.commands.workflow as wc
+from tests.conftest import commit_in_band_init_files
 from workflow.cli import main
 from workflow.git_helpers import CommitResult
 from workflow.metadata import METADATA_FILENAME, ProjectMode, read_metadata
@@ -141,7 +142,7 @@ def _make_in_band_project(tmp_path: Path) -> Path:
     script.write_text("#!/bin/bash\n", encoding="utf-8")
     script.chmod(0o755)
     canon = _init_repo(tmp_path / "canon")
-    (canon / ".git-pre-commit-hook").touch()
+    commit_in_band_init_files(canon)
     return tmp_path / "config.yaml"
 
 
@@ -426,6 +427,67 @@ class TestInitInBand:
             assert _remotes(repo_path) == ["bare"], worktree
             assert _git(["remote", "get-url", "bare"], cwd=repo_path).stdout.decode().strip() == str(tmp_path / "bare")
         assert _upstream_of_main(tmp_path / "canon") == "bare/main"
+
+    @pytest.mark.parametrize(
+        ("untrack", "message"),
+        [
+            pytest.param(["pyproject.toml"], "pyproject.toml", id="neither_pyproject_nor_bootstrap"),
+            pytest.param([".git-pre-commit-hook"], ".git-pre-commit-hook must be committed", id="uncommitted_hook"),
+        ],
+    )
+    def test_uncommitted_required_file_fails_precondition(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        untrack: list[str],
+        message: str,
+    ) -> None:
+        _make_in_band_project(tmp_path)
+        _git(["rm", "--cached", *untrack], cwd=tmp_path / "canon")
+        _git(["commit", "-m", "untrack"], cwd=tmp_path / "canon")
+
+        result = _run_in_band_init(tmp_path, monkeypatch)
+
+        assert result.exit_code == 1
+        assert _contains(result.output, message)
+        assert not (tmp_path / "bare").exists()
+
+    def test_repo_without_commit_fails_precondition(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _make_in_band_project(tmp_path)
+        shutil.rmtree(tmp_path / "canon" / ".git")
+        _git(["init", "-b", "main"], cwd=tmp_path / "canon")
+
+        result = _run_in_band_init(tmp_path, monkeypatch)
+
+        assert result.exit_code == 1
+        assert _contains(result.output, "must have at least one commit")
+
+    @pytest.mark.parametrize(
+        ("mode", "ok"),
+        [pytest.param(0o755, True, id="executable"), pytest.param(0o644, False, id="not_executable")],
+    )
+    def test_bootstrap_script_replaces_pyproject(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mode: int,
+        *,
+        ok: bool,
+    ) -> None:
+        _make_in_band_project(tmp_path)
+        canon = tmp_path / "canon"
+        script = canon / DOCS_REPO / "bootstrap_venv.sh"
+        script.parent.mkdir()
+        script.write_text("#!/bin/bash\n", encoding="utf-8")
+        script.chmod(mode)
+        _git(["rm", "pyproject.toml"], cwd=canon)
+        _git(["add", "docs/bootstrap_venv.sh"], cwd=canon)
+        _git(["commit", "-m", "bootstrap instead of pyproject"], cwd=canon)
+
+        result = _run_in_band_init(tmp_path, monkeypatch)
+
+        assert (result.exit_code == 0) is ok, result.output
+        assert ok or _contains(result.output, "must be executable")
 
 
 class TestAddRepo:

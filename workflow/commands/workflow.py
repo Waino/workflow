@@ -678,15 +678,37 @@ def _resolve_init_metadata(
     return ProjectMetadata()
 
 
+def _require_executable_bootstrap(repo: Path, rel_path: str) -> None:
+    """Require *rel_path* in *repo* to exist, be executable, and be committed as executable."""
+    path = repo / rel_path
+    require(path.is_file(), f"{path} must exist.")
+    require(os.access(path, os.X_OK), f"{path} must be executable.")
+    # Agents clone the repo, so they only get the committed file and its committed mode.
+    require(
+        git_file_mode_at_ref(repo, "HEAD", rel_path) == _GIT_EXECUTABLE_MODE,
+        f"{path} must be committed as executable (git add --chmod=+x {rel_path}).",
+    )
+
+
 def _check_in_band_init_preconditions(layout: Layout) -> None:
     canon_repo = layout.git_repo_root(WorktreeName.canon)
-    if not (canon_repo / ".git").is_dir():
-        msg = f"{canon_repo} is not a git repository (no .git/ found)."
-        raise WorkflowError(msg)
-    if not (canon_repo / ".git-pre-commit-hook").is_file():
-        msg = f"{canon_repo / '.git-pre-commit-hook'} must exist."
-        raise WorkflowError(msg)
+    require((canon_repo / ".git").is_dir(), f"{canon_repo} is not a git repository (no .git/ found).")
+    require(git_rev_parse(canon_repo, "HEAD") is not None, f"{canon_repo} must have at least one commit.")
     require(not git_index_lock_present(canon_repo), f"leftover git lock in {canon_repo}; remove it first.")
+    # Agents clone HEAD, so a working-tree-only file fails later, inside the venv step.
+    require(
+        git_path_exists_at_ref(canon_repo, "HEAD", ".git-pre-commit-hook"),
+        f"{canon_repo / '.git-pre-commit-hook'} must be committed.",
+    )
+    bootstrap = f"{DOCS_REPO}/{BOOTSTRAP_VENV_FILENAME}"
+    has_bootstrap = git_path_exists_at_ref(canon_repo, "HEAD", bootstrap)
+    require(
+        has_bootstrap or git_path_exists_at_ref(canon_repo, "HEAD", "pyproject.toml"),
+        f"{canon_repo} must commit a pyproject.toml, or a {bootstrap} script that creates the venv "
+        "(see docs/example_bootstrap_venv.sh).",
+    )
+    if has_bootstrap:
+        _require_executable_bootstrap(canon_repo, bootstrap)
 
 
 def _check_oob_init_preconditions(layout: Layout) -> None:
@@ -702,14 +724,7 @@ def _check_oob_init_preconditions(layout: Layout) -> None:
         require(not git_index_lock_present(code_repo_path), f"leftover git lock in {code_repo_path}; remove it first.")
     body_path = docs_repo / BODY_OF_AGENTS_FILENAME
     require(body_path.is_file(), f"{body_path} must exist.")
-    bootstrap_path = docs_repo / BOOTSTRAP_VENV_FILENAME
-    require(bootstrap_path.is_file(), f"{bootstrap_path} must exist.")
-    require(os.access(bootstrap_path, os.X_OK), f"{bootstrap_path} must be executable.")
-    # Agents clone the docs repo, so they only get the committed file and its committed mode.
-    require(
-        git_file_mode_at_ref(docs_repo, "HEAD", BOOTSTRAP_VENV_FILENAME) == _GIT_EXECUTABLE_MODE,
-        f"{bootstrap_path} must be committed as executable (git add --chmod=+x {BOOTSTRAP_VENV_FILENAME}).",
-    )
+    _require_executable_bootstrap(docs_repo, BOOTSTRAP_VENV_FILENAME)
 
 
 def _check_init_preconditions(layout: Layout) -> None:

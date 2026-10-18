@@ -813,7 +813,8 @@ def test_dry_run_renders_the_expected_branch(
     if frontmatter_branch:
         frontmatter = f"---\nbranches:\n  docs:\n    branch: {frontmatter_branch}\n    base: abc1234\n---\n"
         (tmp_path / repo / "docs" / "plans" / state / "004_x.md").write_text(
-            frontmatter + "# 004_x\n", encoding="utf-8",
+            frontmatter + "# 004_x\n",
+            encoding="utf-8",
         )
     monkeypatch.chdir(tmp_path)
 

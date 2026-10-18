@@ -97,6 +97,13 @@ are the same, version-controlled ``AGENTS.md``). A single ``.venv`` at each wrap
 root covers every code repo, bootstrapped by the docs repo's own
 ``bootstrap_venv.sh`` — see :ref:`Docker`.
 
+Before an in-band ``workflow init``, ``canon`` must likewise be a git repo with at least
+one commit that contains ``.git-pre-commit-hook`` and either ``pyproject.toml`` or an
+executable ``docs/bootstrap_venv.sh`` (committed as executable) that creates the venv;
+a non-Python project commits its own, possibly no-op, script (see
+``docs/example_bootstrap_venv.sh``). Agents clone the committed ``HEAD``, so files that
+exist only in the working tree fail the venv step later; ``init`` checks for them up front.
+
 .. _Multi-repo handoffs:
 
 Multi-repo handoffs
