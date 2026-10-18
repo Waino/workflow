@@ -299,6 +299,22 @@ class TestTmuxConfig:
         cfg = WorkflowConfig(agents=[], states={}, tmux=TmuxConfig(session_name=explicit), project_name=project_name)
         assert cfg.session_name == expected
 
+    @pytest.mark.parametrize(
+        ("name", "valid"),
+        [
+            pytest.param("pinned", True, id="plain"),
+            pytest.param(None, True, id="none"),
+            pytest.param("a.b", False, id="dot"),
+            pytest.param("a:b", False, id="colon"),
+        ],
+    )
+    def test_explicit_session_name_validation(self, name: str | None, *, valid: bool) -> None:
+        if valid:
+            assert TmuxConfig(session_name=name).session_name == name
+        else:
+            with pytest.raises(ValueError, match="tmux rewrites"):
+                TmuxConfig(session_name=name)
+
 
 class TestDefaultConfig:
     def test_default_config_loads(self, tmp_path: Path) -> None:

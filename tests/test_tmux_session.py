@@ -33,7 +33,16 @@ def _server(*, alive: bool = True, session: MagicMock | None = None) -> MagicMoc
 
 def _session(tag: str | None, window: str = "builder") -> MagicMock:
     session = MagicMock()
-    session.show_option.side_effect = lambda option: tag if option == PROJECT_DIR_OPTION else None
+
+    def show_option(option: str) -> str | None:
+        if option != PROJECT_DIR_OPTION:
+            return None
+        if tag is None:
+            msg = f"invalid option: {PROJECT_DIR_OPTION}"
+            raise libtmux.exc.InvalidOption(msg)
+        return tag
+
+    session.show_option.side_effect = show_option
     session.active_window.name = window
     return session
 
@@ -99,9 +108,6 @@ def test_real_tmux_tagged_session_is_found(tmp_path: Path, real_tmux: libtmux.Se
     assert found.session_id == session.session_id
 
 
-# An untagged session (every session started before this change) makes show_option raise
-# InvalidOption instead of returning None, so the migration path crashes `workflow start`.
-@pytest.mark.xfail(strict=True, raises=libtmux.exc.InvalidOption)
 @pytest.mark.parametrize("query", [find_workflow_session, workflow_session_exists])
 def test_real_tmux_untagged_session_raises_workflow_error(
     tmp_path: Path,
@@ -111,6 +117,19 @@ def test_real_tmux_untagged_session_raises_workflow_error(
     config = _config(tmp_path)
     real_tmux.new_session(session_name=config.session_name, detach=True)
     with pytest.raises(WorkflowError, match="unknown project"):
+        query(config)
+
+
+@pytest.mark.parametrize("query", [find_workflow_session, workflow_session_exists])
+def test_real_tmux_foreign_session_raises_workflow_error(
+    tmp_path: Path,
+    real_tmux: libtmux.Server,
+    query: Callable[[WorkflowConfig], object],
+) -> None:
+    config = _config(tmp_path)
+    session = real_tmux.new_session(session_name=config.session_name, detach=True)
+    session.set_option(PROJECT_DIR_OPTION, "/other/project")
+    with pytest.raises(WorkflowError, match="/other/project"):
         query(config)
 
 

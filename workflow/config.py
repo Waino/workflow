@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from rich.text import Text
 
 from workflow.exceptions import WorkflowError
@@ -143,6 +143,14 @@ class TmuxConfig(BaseModel):
 
     prompt_send_delay: float = 1.0
     """Seconds to wait after window switch before send-keys."""
+
+    @field_validator("session_name")
+    @classmethod
+    def _no_tmux_rewritten_chars(cls, value: str | None) -> str | None:
+        if value is not None and value != value.translate(_TMUX_NAME_TABLE):
+            msg = f"tmux.session_name must not contain '.' or ':' (tmux rewrites them): {value!r}"
+            raise ValueError(msg)
+        return value
 
 
 # --- Top-level config ---

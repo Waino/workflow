@@ -24,7 +24,10 @@ def find_workflow_session(config: WorkflowConfig) -> libtmux.Session | None:
     session = server.sessions.get(session_name=name, default=None)
     if session is None or config.project_dir is None:
         return session
-    owner = session.show_option(PROJECT_DIR_OPTION)
+    try:
+        owner = session.show_option(PROJECT_DIR_OPTION)
+    except libtmux.exc.OptionError:
+        owner = None
     if owner is None or str(owner) != str(config.project_dir):
         whose = f"the project at {owner}" if owner else "an unknown project"
         msg = (
