@@ -351,6 +351,38 @@ def test_new_in_oob_prepends_branches_frontmatter_for_every_code_repo(
     assert body.startswith("# 001: Foo")
 
 
+def test_new_in_oob_fails_cleanly_when_a_planner_clone_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _setup_project(tmp_path, monkeypatch)
+    (tmp_path / "planner" / "dep1").rename(tmp_path / "dep1_elsewhere")
+    monkeypatch.setattr(wc, "_open_in_editor", MagicMock())
+
+    result = _run(tmp_path, config_path, monkeypatch, "new", "foo")
+
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert _contains(result.output, "planner/dep1 is missing")
+    assert not (tmp_path / "canon" / "docs" / "plans" / "intent" / "001_foo.md").exists()
+
+
+def test_check_still_runs_the_docs_hook_when_the_branch_deletes_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _setup_project(tmp_path, monkeypatch)
+    _commit_docs_and_dep1(tmp_path)
+    docs_repo = tmp_path / "builder" / DOCS_REPO
+    _git(["rm", "-q", ".git-pre-commit-hook"], cwd=docs_repo)
+    _git(["commit", "-q", "-m", "drop docs hook"], cwd=docs_repo)
+
+    result = _run_check(tmp_path, config_path, monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    assert _hook_calls(tmp_path)[0] == "builder --repo docs"
+
+
 def test_check_runs_no_docs_hook_when_docs_has_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _setup_project(tmp_path, monkeypatch, docs_hook=False)
     _commit_docs_and_dep1(tmp_path)
@@ -359,7 +391,7 @@ def test_check_runs_no_docs_hook_when_docs_has_none(tmp_path: Path, monkeypatch:
 
     assert result.exit_code == 0, result.output
     assert _hook_calls(tmp_path) == ["builder --repo dep1"]
-    assert _contains(result.output, "skipping pre-commit hook for docs (no hook)")
+    assert _contains(result.output, "skipping pre-commit hook for docs (no hook on main)")
 
 
 def test_canon_pre_commit_in_oob_runs_one_hook_per_enabled_repo(

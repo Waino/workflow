@@ -542,7 +542,7 @@ def test_render_workflow_section_oob_has_worktree_map_and_branch_rule(tmp_path: 
 
     lines = [" ".join(line.split()) for line in section.splitlines()]
     assert "<worktree>/ not a git repo" in lines
-    assert "foo/ git repo: code (pre-commit hook runs on check)" in lines
+    assert "foo/ git repo: code (pre-commit hook runs on check/accept)" in lines
     assert "bar/ git repo: code (pre-commit hook does not run)" in lines
     assert "This project is out-of-band: the worktree root is not a git repository." in section
     assert "bar: {branch: NAME, base: REF}" in section

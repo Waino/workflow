@@ -10,7 +10,7 @@
 #                 shell: open an interactive bash shell in an existing persistent container
 #                 hook:  run the pre-commit hook in a throwaway container
 # PROJECT       - project name (used in container name and volume path)
-# REPO          - agent name (agent/shell); agent name or 'canon' (venv); builder/reviewer/canon (hook)
+# REPO          - agent name (agent/shell); agent name or 'canon' (venv); agent name or 'canon' (hook)
 # --project-dir - absolute path to the project root directory (passed by `workflow start`)
 # --model       - model id forwarded to the agent CLI (agent only)
 # --reset       - remove the existing container before starting a fresh one (agent/venv only)

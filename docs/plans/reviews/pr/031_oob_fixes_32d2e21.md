@@ -93,6 +93,9 @@ with the optional docs hook. Nothing blocks the happy path.
     framework) must only warn. That case still exists for `run_hook: false` repos. Use
     `_setup_project(..., hook_repos=("dep1",))` (mypackage gets `--skip-hook`) and keep the `pre-commit` hook on
     mypackage.
+    **Withdrawn during fix:** `validate` skips the git-hooks check for `run_hook: false` repos, and `pre-commit` is a
+    managed hook for `run_hook: true` repos, so that case no longer exists. The builder's `post-commit` version is
+    correct.
 15. `test_render_workflow_section_oob_has_worktree_map_and_branch_rule` normalises whitespace, so it would not catch a
     broken column alignment (e.g. `format` padding). Low value to fix.
 16. The other new tests are good: real git, assertions on `docker_calls.log`, and the "nothing transitioned, nothing

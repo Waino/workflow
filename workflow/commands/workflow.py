@@ -35,6 +35,7 @@ from workflow.exceptions import (
 from workflow.frontmatter import PlanFrontmatter, RepoBranch, render_frontmatter, write_frontmatter
 from workflow.git_helpers import (
     BARE_REMOTE,
+    HOOK_FILENAME,
     TransferResult,
     branch_needs_rebase,
     delete_merged_branch,
@@ -244,15 +245,16 @@ def _run_pre_commit_hook(config: WorkflowConfig, worktree: str, *, dry_run: bool
     run_command(_hook_command(script, project_name, project_dir, worktree, repo=repo), dry_run=dry_run)
 
 
-def _hook_enabled(layout: Layout, worktree: WorktreeName, repo: str) -> bool:
+def _hook_enabled(layout: Layout, repo: str) -> bool:
     """Whether the pre-commit hook runs for *repo*: docs only if it ships a hook, code repos per ``run_hook``."""
     if repo == DOCS_REPO:
-        return pre_commit_hook_present(layout.git_repo_root(worktree, repo))
+        # Judged on bare's main, not the agent's tree, so a branch deleting the hook cannot switch the gate off.
+        return git_path_exists_at_ref(layout.bare_repo(DOCS_REPO), "main", HOOK_FILENAME)
     return layout.metadata.runs_hook(repo)
 
 
 def _skip_hook_message(repo: str) -> str:
-    reason = "no hook" if repo == DOCS_REPO else "run_hook: false"
+    reason = "no hook on main" if repo == DOCS_REPO else "run_hook: false"
     return f"[dim]skipping pre-commit hook for {repo} ({reason})[/dim]"
 
 
@@ -260,7 +262,7 @@ def _run_docs_hook(config: WorkflowConfig, layout: Layout, worktree: WorktreeNam
     """Run the docs repo's hook in *worktree* (oob: skipped when docs ships none)."""
     if layout.metadata.mode != ProjectMode.oob:
         _run_pre_commit_hook(config, worktree, dry_run=dry_run)
-    elif _hook_enabled(layout, worktree, DOCS_REPO):
+    elif _hook_enabled(layout, DOCS_REPO):
         _run_pre_commit_hook(config, worktree, dry_run=dry_run, repo=DOCS_REPO)
     else:
         console.print(_skip_hook_message(DOCS_REPO))
@@ -350,7 +352,7 @@ def _ensure_agent_push_config(repo_path: Path, *, dry_run: bool) -> None:
 
 
 def _wants_hook_symlink(repo_path: Path, *, run_hook: bool) -> bool:
-    return run_hook and (repo_path / ".git-pre-commit-hook").is_file()
+    return run_hook and (repo_path / HOOK_FILENAME).is_file()
 
 
 def _agent_repo_configure_ok(repo_path: Path, *, run_hook: bool) -> bool:
@@ -739,17 +741,37 @@ def _raise_if_issues(title: str, issues: list[str]) -> None:
         raise WorkflowError("\n".join([f"{title}:", *(f"- {issue}" for issue in issues)]))
 
 
-def _check_hook_committed(repo: Path, issues: list[str], *, skip_hint: str = "") -> None:
+def _check_hook_committed(repo: Path, issues: list[str]) -> None:
     """Append an issue unless *repo*'s HEAD has ``.git-pre-commit-hook`` (agents clone HEAD, not the working tree)."""
-    if not git_path_exists_at_ref(repo, "HEAD", ".git-pre-commit-hook"):
-        issues.append(f"{repo / '.git-pre-commit-hook'} must be committed{skip_hint}.")
+    if not git_path_exists_at_ref(repo, "HEAD", HOOK_FILENAME):
+        issues.append(f"{repo / HOOK_FILENAME} must be committed.")
 
 
-def _check_code_repo_init(layout: Layout, repo: str, issues: list[str]) -> None:
-    """Pre-flight one code repo: it has a commit and, if ``run_hook``, a committed hook."""
+def _check_code_repo_init(
+    layout: Layout,
+    repo: str,
+    issues: list[str],
+    *,
+    run_hook: bool,
+    skip_hint: str,
+) -> None:
+    """Pre-flight one code repo: it has a commit and, if *run_hook*, an executable committed hook (else *skip_hint*)."""
     repo_path = layout.git_repo_root(WorktreeName.canon, repo)
-    if _check_repo_with_commit(repo_path, issues) and layout.metadata.runs_hook(repo):
-        _check_hook_committed(repo_path, issues, skip_hint=f" (or pass --skip-hook {repo})")
+    # Executable, since check/accept refuse a hook the docker script cannot run (pre_commit_hook_present).
+    if (
+        _check_repo_with_commit(repo_path, issues)
+        and run_hook
+        and git_file_mode_at_ref(repo_path, "HEAD", HOOK_FILENAME) != _GIT_EXECUTABLE_MODE
+    ):
+        issues.append(
+            f"{repo_path / HOOK_FILENAME} must be committed as executable "
+            f"(git add --chmod=+x {HOOK_FILENAME}), or {skip_hint}.",
+        )
+
+
+def _run_hook_off_hint(repo: str) -> str:
+    """Recovery for a ``run_hook`` repo without a hook, once ``.workflow.json`` is persisted."""
+    return f"set run_hook: false for {repo} in {METADATA_FILENAME} and run workflow agents_md"
 
 
 def _check_in_band_init_preconditions(layout: Layout, issues: list[str]) -> None:
@@ -775,8 +797,11 @@ def _check_oob_init_preconditions(layout: Layout, issues: list[str]) -> None:
         if not body_path.is_file():
             issues.append(f"{body_path} must exist.")
         _check_executable_bootstrap(docs_repo, BOOTSTRAP_VENV_FILENAME, issues)
+    # --skip-hook is fixed at the first init; afterwards only the .workflow.json edit can switch the hook off.
+    persisted = (layout.project_dir / METADATA_FILENAME).exists()
     for repo in layout.code_repos():
-        _check_code_repo_init(layout, repo, issues)
+        skip_hint = _run_hook_off_hint(repo) if persisted else f"pass --skip-hook {repo}"
+        _check_code_repo_init(layout, repo, issues, run_hook=layout.metadata.runs_hook(repo), skip_hint=skip_hint)
 
 
 def _check_init_preconditions(layout: Layout) -> None:
@@ -933,7 +958,7 @@ def _add_repo_metadata(layout: Layout, name: str, *, run_hook: bool) -> ProjectM
         code_repos=[*metadata.code_repos, _code_repo_meta(name, run_hook=run_hook)],
     )
     issues: list[str] = []
-    _check_code_repo_init(layout.model_copy(update={"metadata": new_metadata}), name, issues)
+    _check_code_repo_init(layout, name, issues, run_hook=run_hook, skip_hint="pass --skip-hook")
     _check_bare_valid(layout.bare_repo(name), issues)
     _raise_if_issues("add-repo pre-flight checks failed", issues)
     return new_metadata
@@ -1240,13 +1265,12 @@ def _intent_frontmatter(layout: Layout, stem: str) -> PlanFrontmatter | None:
     """Default ``branches`` block for a new oob intent (every code repo on ``feat/<stem>``); ``None`` in-band."""
     if layout.metadata.mode == ProjectMode.in_band:
         return None
-    branches: dict[str, RepoBranch | None] = {
-        repo: RepoBranch(
-            branch=f"{BRANCH_PREFIX}{stem}",
-            base=resolve_default_branch(layout.git_repo_root(WorktreeName.planner, repo), BARE_REMOTE),
-        )
-        for repo in layout.code_repos()
-    }
+    branches: dict[str, RepoBranch | None] = {}
+    for repo in layout.code_repos():
+        planner_repo = layout.git_repo_root(WorktreeName.planner, repo)
+        require(planner_repo.is_dir(), f"{planner_repo} is missing; run workflow init (or add-repo) first.")
+        base = resolve_default_branch(planner_repo, BARE_REMOTE)
+        branches[repo] = RepoBranch(branch=f"{BRANCH_PREFIX}{stem}", base=base)
     return PlanFrontmatter(branches=branches)
 
 
@@ -1535,8 +1559,8 @@ def _require_pushable(
         require(info.branch != "HEAD", f"{repo_path} has a detached HEAD; commit on a named branch first.")
         require(
             not layout.metadata.runs_hook(info.repo) or pre_commit_hook_present(repo_path),
-            f"{repo_path} has no pre-commit hook but run_hook is true; commit .git-pre-commit-hook, or set "
-            f"run_hook: false for {info.repo} in .workflow.json and run workflow agents_md.",
+            f"{repo_path} has no pre-commit hook but run_hook is true; commit {HOOK_FILENAME}, or "
+            f"{_run_hook_off_hint(info.repo)}.",
         )
         if protect_default_branch:
             default_branch = resolve_default_branch(repo_path, BARE_REMOTE)
@@ -1589,7 +1613,7 @@ def _run_repo_push_set_hooks(
         _run_pre_commit_hook(config, worktree, dry_run=dry_run)
         return
     for info in push_set:
-        if _hook_enabled(layout, WorktreeName(worktree), info.repo):
+        if _hook_enabled(layout, info.repo):
             _run_pre_commit_hook(config, worktree, dry_run=dry_run, repo=info.repo)
         else:
             console.print(_skip_hook_message(info.repo))
@@ -2798,7 +2822,7 @@ def canon_pre_commit(ctx: click.Context) -> None:
         layout = config.layout()
         if layout.metadata.mode == ProjectMode.oob:
             for repo in layout.repos():
-                if _hook_enabled(layout, WorktreeName.canon, repo):
+                if _hook_enabled(layout, repo):
                     _run_pre_commit_hook(config, WorktreeName.canon, dry_run=dry_run, repo=repo)
                 else:
                     console.print(_skip_hook_message(repo))

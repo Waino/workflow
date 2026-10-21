@@ -621,11 +621,6 @@ class TestHookPreflight:
             assert not (tmp_path / "bare" / "dep2").exists()
             assert _add_repo(tmp_path, "dep2", "--skip-hook").exit_code == 0
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="add-repo's hint says '--skip-hook NAME' but its --skip-hook is a flag",
-    )
     def test_add_repo_skip_hook_hint_can_be_followed_literally(
         self,
         tmp_path: Path,
@@ -638,14 +633,9 @@ class TestHookPreflight:
         first = _add_repo(tmp_path, "dep2")
 
         assert first.exit_code == 1
-        if _contains(first.output, "--skip-hook dep2"):
-            assert _add_repo(tmp_path, "dep2", "--skip-hook", "dep2").exit_code == 0
+        assert _contains(first.output, "or pass --skip-hook.")
+        assert not _contains(first.output, "--skip-hook dep2")
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="init rerun suggests --skip-hook NAME, which a rerun always rejects",
-    )
     def test_init_rerun_skip_hook_hint_is_not_rejected(
         self,
         tmp_path: Path,
@@ -660,11 +650,9 @@ class TestHookPreflight:
         rerun = _run_init(tmp_path, monkeypatch)
 
         assert rerun.exit_code == 1
-        if _contains(rerun.output, "--skip-hook dep1"):
-            followed = _run_init(tmp_path, monkeypatch, "--skip-hook", "dep1")
-            assert not _contains(followed.output, "cannot be changed after init"), followed.output
+        assert not _contains(rerun.output, "--skip-hook")
+        assert _contains(rerun.output, "set run_hook: false for dep1 in .workflow.json and run workflow agents_md")
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason="pre-flight accepts a committed non-executable hook")
     def test_init_rejects_a_committed_non_executable_hook(
         self,
         tmp_path: Path,
@@ -680,7 +668,8 @@ class TestHookPreflight:
 
         # check/accept require an executable hook (`pre_commit_hook_present`), so init should catch this early
         assert result.exit_code == 1, result.output
-        assert _contains(result.output, "dep1/.git-pre-commit-hook")
+        assert _contains(result.output, "dep1/.git-pre-commit-hook must be committed as executable")
+        assert _contains(result.output, "or pass --skip-hook dep1")
 
 
 class TestAddRepo:

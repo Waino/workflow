@@ -217,7 +217,8 @@ Update `docs/source`:
 ## Decisions
 
 1. "Hook present" means what the docker script's `hook` subcommand would run (`.git-pre-commit-hook` or
-   `.git/hooks/pre-commit`, executable). The predicate is used by `check`/`accept`, `doctor` and the docs-hook skip.
+   `.git/hooks/pre-commit`, executable). The predicate is used by `check`/`accept` and `doctor`.
+   Amended (Decision 7): the docs-hook skip no longer uses it.
    `init`/`add-repo` instead require `.git-pre-commit-hook` committed at HEAD, because agents clone HEAD and never
    receive the operator's local `.git/hooks`.
 2. The `base` default comes from the planner clone's `bare/HEAD` via `resolve_default_branch`. Agent clones are made
@@ -236,6 +237,17 @@ Update `docs/source`:
 6. Builder clarifications: the resolver tie-break (formerly intent Decisions 11, 12) was revoked and is out of scope.
    The docs-hook predicate mirrors the docker script (executable `.git-pre-commit-hook` or `.git/hooks/pre-commit`),
    superseding the narrower intent Decision 8 wording. `canon_pre_commit` in oob stops at the first failing repo.
+7. Review fix: the docs hook is enabled iff `.git-pre-commit-hook` exists on `main` in the docs bare repo, not in the
+   agent's working tree. Otherwise a builder or reviewer could delete the hook on its branch and silently turn off
+   the `check`/`accept` gate. A docs repo whose hook lives only in `.git/hooks/pre-commit` is therefore never run.
+   That is acceptable, because agents clone and never get the operator's local hooks.
+8. Review fix: the `init`/`add-repo` pre-flight requires a code repo's hook to be committed as executable (mode
+   100755), matching what `check`/`accept` later require. The in-band `.git-pre-commit-hook` check stays
+   existence-only, so this plan does not change in-band behaviour (many in-band fixtures commit a non-executable
+   hook). The failure hint depends on the command. `add-repo` says `pass --skip-hook`. `init` says
+   `pass --skip-hook NAME`, but only while `.workflow.json` does not exist yet. On a rerun it points to the
+   `run_hook: false` edit in `.workflow.json`, because `--skip-hook` cannot change after init.
+9. Review fix: `doctor` flags a hook-less `run_hook` code repo in canon too (documented in `cli.rst`).
 
 ## Risks
 

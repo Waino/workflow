@@ -159,8 +159,9 @@ own reference. Only the following are automated:
   default branch would make ``workflow sync`` refuse that repo, and ``--force`` would
   discard them.
 * **The pre-commit hook runs once per repo** in the push set (skipping any repo
-  with ``run_hook: false``, and the docs repo when it ships no hook -- the docs hook is
-  optional), passing ``--repo NAME`` to the docker script so it runs
+  with ``run_hook: false``, and the docs repo when the bare repo's ``main`` has no
+  ``.git-pre-commit-hook`` -- the docs hook is optional, but a feature branch deleting it
+  does not switch it off), passing ``--repo NAME`` to the docker script so it runs
   inside the right subdirectory. ``check`` runs it on the builder's repos, ``accept``
   on the code repos holding reviewer commits. The same rule applies to the hook run
   after a rebase in ``todo``/``implement``/``accept`` (docs repo only).

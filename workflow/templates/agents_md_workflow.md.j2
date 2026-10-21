@@ -63,7 +63,7 @@ Every worktree (`canon`, `planner`, `builder`, `reviewer`) has this layout:
 {{ '%-24s '|format('  .venv/') }}shared virtual env for all repos
 {{ '%-24s '|format('  docs/') }}git repo: plans in docs/plans/, body_of_agents.md, bootstrap_venv.sh
 {% for repo in code_repos %}
-{{ '%-24s '|format('  ' ~ repo.name ~ '/') }}git repo: code (pre-commit hook {{ 'runs on check' if repo.run_hook else 'does not run' }})
+{{ '%-24s '|format('  ' ~ repo.name ~ '/') }}git repo: code (pre-commit hook {{ 'runs on check/accept' if repo.run_hook else 'does not run' }})
 {% endfor %}
 ```
 

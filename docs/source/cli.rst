@@ -61,14 +61,14 @@ Setup and session management
     ``--skip-hook NAME`` (repeatable, oob only) skips installing the pre-commit hook
     symlink for a given code repo. The mode and the ``--skip-hook`` choices are fixed
     at the first successful ``init`` and cannot be changed by a later run. Every code
-    repo without ``--skip-hook`` must have ``.git-pre-commit-hook`` committed.
+    repo without ``--skip-hook`` must have ``.git-pre-commit-hook`` committed as executable.
 
 ``add-repo NAME``
     Out-of-band only: register one more code repo after ``init`` (clone into ``bare``
     and every agent worktree, record it in ``.workflow.json``, regenerate every
     ``AGENTS.md`` copy). ``--skip-hook`` skips
     installing the pre-commit hook symlink for this repo; without it the repo must
-    have ``.git-pre-commit-hook`` committed. The venvs do not pick up the
+    have ``.git-pre-commit-hook`` committed as executable. The venvs do not pick up the
     new repo until it is added to ``docs/bootstrap_venv.sh`` and they are recreated.
     There is no command to remove a registered repo.
 
@@ -99,8 +99,9 @@ Setup and session management
     and impossible audit-log entries (a state-changing prompt logged by an agent
     that does not own it). Audit entries for active plans whose command no longer
     exists (e.g. renamed in ``config.yaml``) are listed as non-failing *Audit log
-    notes*. Out-of-band, a code repo with ``run_hook`` but no runnable pre-commit hook
-    is an anomaly.
+    notes*. Out-of-band, a clone of a code repo with ``run_hook`` but no runnable
+    pre-commit hook is an anomaly -- in canon too, e.g. when the operator checks out an
+    old branch without the hook.
     Exits non-zero if any anomaly is found; the separate *notes* column carries
     observations that are normal during parallel work (e.g. a branch that still
     needs rebasing) and never affects the exit code. Out-of-band: one ``bare``/
@@ -198,7 +199,7 @@ operations (push/pull/merge) needed at each handoff.
 
 ``canon_pre_commit``
     Run the pre-commit hook against the canon repo in a throwaway container.
-    Out-of-band, it runs once per repo: ``docs`` only if it ships a hook, code repos
+    Out-of-band, it runs once per repo: ``docs`` only if bare's ``main`` ships a hook, code repos
     per their ``run_hook`` setting (stopping at the first failure).
     Useful for validating manual edits, when you want the test suite to
     run containerized and not on the host.
