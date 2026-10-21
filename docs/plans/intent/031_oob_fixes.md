@@ -60,3 +60,27 @@ No plan found for '002_foo_bar' in repos: [<WorktreeName.planner: 'planner'>]
 $ workflow critique 002 --edit
 # worked
 ```
+
+## Decisions
+
+1. One plan (`031_oob_fixes`) covers all items in scope.
+2. §2: `new` renders the intent's own name into the frontmatter (`branch: feat/031_oob_fixes`); the generated
+   AGENTS.md tells the planner to rewrite it to each ticket's name.
+3. Amends §2: every code repo defaults to `{branch: feat/{intent name}, base: <default branch>}`, not only the first.
+   Code repos are detected at `init` (alphabetical scan), so "first repo is the main package" would be arbitrary.
+   Clearing unneeded repos to `null` is easier to remember than the non-skip format.
+4. §2: "`none`" means YAML `null` (intent/023_out_of_band Decision 22); a literal `none` would parse as a string.
+5. §2: `base` is each code repo's default branch as detected on `bare` (as `sync` does), not a hardcoded `main`.
+6. §2: the intent frontmatter has no `docs` entry; `implement` writes that one.
+7. §3: AGENTS.md (oob) gets a generic worktree map: worktree root is not a git repo, `AGENTS.md`, `.venv/`,
+   `docs/` (plans, `body_of_agents.md`), and each code repo with whether its pre-commit hook runs.
+   The planner branch rule is reworded for oob: it applies inside `docs/`; the planner never branches code repos.
+8. §4: the docs repo runs the pre-commit hook iff `docs/.git-pre-commit-hook` exists; no `.workflow.json` change,
+   matching how oob `validate` already treats hooks.
+9. §5: `init --oob` and `add-repo` pre-flight require `.git-pre-commit-hook` committed at HEAD in every code repo
+   with `run_hook: true`. Additionally, `doctor` flags existing violations (recovery: set `run_hook: false` in
+   `.workflow.json`), and `check`/`accept` fail early in their preconditions, before any step runs.
+10. §6 is postponed and out of scope: the failure could not be reproduced (see
+    `docs/reports/research/031_oob_name_resolution.md`); the operator will run the diagnostics there later.
+11. In scope (found while investigating §6): in a fully synced oob project, `ask 001` raises `AmbiguousPlanError`
+    between the builder and planner copies of the same intent. It should resolve to the planner's copy.
