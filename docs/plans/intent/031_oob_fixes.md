@@ -86,5 +86,6 @@ $ workflow critique 002 --edit
     between the builder and planner copies of the same intent. It should resolve to the planner's copy.
     Not oob-specific: `ask` is defined for both planner (intent) and builder (implementing), so its soft repo hint
     is {planner, builder}. `015_wide_resolver_test` row 1 (`synced-001-ask-ambiguous`) asserts this ambiguity on
-    purpose; the fix deliberately flips that case (likely tie-break: prefer the worktree whose agent owns the
-    candidates' state).
+    purpose; the fix deliberately flips that case.
+12. Fix for Decision 11: when every remaining candidate has the same state, prefer the candidate in the worktree
+    whose agent owns that state (intent → planner). Repo hints such as `planner/001` keep working.
