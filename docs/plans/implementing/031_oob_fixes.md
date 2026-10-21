@@ -254,3 +254,13 @@ Update `docs/source`:
 
 None. §6 of the intent stays open pending diagnostics; a follow-up plan may touch `_git_newest_touch` in
 `workflow/plan_resolver.py`, near the §6 change here.
+
+## Deviations
+
+- §1 and §2 landed in one commit (both edit `new`).
+- The doctor hook anomaly is added by `_check_hook_present`, called from `doctor()`, instead of a `run_hook` parameter on
+  `_check_worktree` (which would have exceeded the linter's complexity/argument limits).
+- Test fixtures: `_make_oob_project` now ships a hook in every code repo by default (`hook_repos=()` opts out), because
+  the §5 pre-flight rejects hook-less `run_hook` repos. `test_code_repos_own_pre_commit_hook_only_warns` now uses a
+  `post-commit` hook, since a `run_hook` repo always ships `pre-commit` now.
+- Manual scratch-project verification was not run; the behaviour is covered by the integration tests.
