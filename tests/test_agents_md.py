@@ -526,3 +526,23 @@ def test_render_workflow_section_oob_reads_idea_and_index(tmp_path: Path) -> Non
     section = render_workflow_section(_load_oob_config(tmp_path))
     assert "reading `docs/plans/intent/001_idea.md`" in section
     assert "If `docs/plans/index_of_decisions.md` exists" in section
+
+
+def test_render_workflow_section_oob_has_worktree_map_and_branch_rule(tmp_path: Path) -> None:
+    write_metadata(
+        tmp_path,
+        ProjectMetadata(
+            mode=ProjectMode.oob,
+            code_repos=[CodeRepoMeta(name="foo"), CodeRepoMeta(name="bar", run_hook=False)],
+        ),
+    )
+    copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
+
+    section = render_workflow_section(load_config(tmp_path / "config.yaml", project_dir=tmp_path))
+
+    lines = [" ".join(line.split()) for line in section.splitlines()]
+    assert "<worktree>/ not a git repo" in lines
+    assert "foo/ git repo: code (pre-commit hook runs on check)" in lines
+    assert "bar/ git repo: code (pre-commit hook does not run)" in lines
+    assert "This project is out-of-band: the worktree root is not a git repository." in section
+    assert "bar: {branch: NAME, base: REF}" in section

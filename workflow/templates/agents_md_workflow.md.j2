@@ -51,19 +51,40 @@ Planner branches: before writing anything for a planner prompt about plan `{inpu
 - `architecture` and `mvp` use `plan/002_architecture`.
 - `todo` merges whatever branch the planner has checked out; never leave unrelated work on it.
 {% if oob %}
-This project is out-of-band: plans live in `docs`, and code lives in separate repos ({{ code_repos|join(', ') }}).
+
+This project is out-of-band: the worktree root is not a git repository. The planner branch rule applies to the
+`docs` repo (run git inside `docs/`). The planner never creates or switches branches in code repos.
+
+Every worktree (`canon`, `planner`, `builder`, `reviewer`) has this layout:
+
+```
+{{ '%-24s '|format('<worktree>/') }}not a git repo
+{{ '%-24s '|format('  AGENTS.md') }}generated; do not edit
+{{ '%-24s '|format('  .venv/') }}shared virtual env for all repos
+{{ '%-24s '|format('  docs/') }}git repo: plans in docs/plans/, body_of_agents.md, bootstrap_venv.sh
+{% for repo in code_repos %}
+{{ '%-24s '|format('  ' ~ repo.name ~ '/') }}git repo: code (pre-commit hook {{ 'runs on check' if repo.run_hook else 'does not run' }})
+{% endfor %}
+```
+
 Every plan file in the `implementing` or `checking` state must carry a `branches` frontmatter block
-naming, for every one of those repos, either the branch/base it uses there or `null` if the plan
+naming, for every code repo, either the branch/base it uses there or `null` if the plan
 doesn't touch that repo:
 
 ```yaml
 ---
 branches:
-{% for repo in code_repos %}  {{ repo }}: null
-{% endfor %}---
+{% for repo in code_repos %}
+  {{ repo.name }}: {branch: NAME, base: REF}
+{% endfor %}
+---
 ```
 
-Replace `null` with `{branch: NAME, base: REF}` for any repo the plan actually changes.
+Use `null` instead of `{branch: NAME, base: REF}` for any repo the plan does not change.
+New intents start with a `branches` block that defaults every code repo to `feat/{intent name}`.
+When writing tickets from an intent, verify that the block is consistent with the intent;
+carry the block over if it is, else ask the user to confirm.
+When subdividing, rename each `feat/{intent name}` branch to the ticket's own name.
 {% endif %}
 {% for state in states %}
 

@@ -208,7 +208,7 @@ def render_workflow_section(config: WorkflowConfig) -> str:
     )
     template = env.from_string(template_text)
     oob = config.metadata is not None and config.metadata.mode == ProjectMode.oob
-    code_repos = [repo.name for repo in config.metadata.code_repos] if oob and config.metadata is not None else []
+    code_repos = config.metadata.code_repos if oob and config.metadata is not None else []
     plans_root_in_worktree = config.layout().plans_root_in_worktree
     return normalise(
         template.render(
