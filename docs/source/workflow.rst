@@ -159,9 +159,19 @@ own reference. Only the following are automated:
   default branch would make ``workflow sync`` refuse that repo, and ``--force`` would
   discard them.
 * **The pre-commit hook runs once per repo** in the push set (skipping any repo
-  with ``run_hook: false``), passing ``--repo NAME`` to the docker script so it runs
+  with ``run_hook: false``, and the docs repo when it ships no hook -- the docs hook is
+  optional), passing ``--repo NAME`` to the docker script so it runs
   inside the right subdirectory. ``check`` runs it on the builder's repos, ``accept``
-  on the code repos holding reviewer commits.
+  on the code repos holding reviewer commits. The same rule applies to the hook run
+  after a rebase in ``todo``/``implement``/``accept`` (docs repo only).
+* **``check``/``accept`` also refuse, before anything is transitioned, a code repo with
+  ``run_hook: true`` that has no runnable hook** (``.git-pre-commit-hook`` or
+  ``.git/hooks/pre-commit``, executable). To recover, set ``run_hook: false`` for that
+  repo in ``.workflow.json`` and run ``workflow agents_md``.
+* **``new`` seeds the intent's ``branches`` frontmatter** with every code repo on
+  ``feat/{intent name}`` (base: the repo's default branch). When writing tickets the
+  planner checks the block against the intent, sets ``null`` for repos the plan does not
+  touch, and renames the branches to the ticket's name when subdividing.
 
 The push-set table and the tracked/untracked dirty-tree precondition apply in-band
 too, where the push set is just the single repo.
