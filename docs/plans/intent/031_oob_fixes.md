@@ -82,10 +82,3 @@ $ workflow critique 002 --edit
    `.workflow.json`), and `check`/`accept` fail early in their preconditions, before any step runs.
 10. §6 is postponed and out of scope: the failure could not be reproduced (see
     `docs/reports/research/031_oob_name_resolution.md`); the operator will run the diagnostics there later.
-11. In scope (found while investigating §6): in a fully synced oob project, `ask 001` raises `AmbiguousPlanError`
-    between the builder and planner copies of the same intent. It should resolve to the planner's copy.
-    Not oob-specific: `ask` is defined for both planner (intent) and builder (implementing), so its soft repo hint
-    is {planner, builder}. `015_wide_resolver_test` row 1 (`synced-001-ask-ambiguous`) asserts this ambiguity on
-    purpose; the fix deliberately flips that case.
-12. Fix for Decision 11: when every remaining candidate has the same state, prefer the candidate in the worktree
-    whose agent owns that state (intent -> planner). Repo hints such as `planner/001` keep working.

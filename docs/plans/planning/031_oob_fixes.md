@@ -106,8 +106,8 @@ rendering, and with it `tests/fixtures/agents_md_default_section.txt`, stays byt
 3. **Frontmatter instructions.** Keep the existing `branches` example. Make the `null` placeholders in it match the new
    default: show `{branch: …, base: …}`, mention `null` for untouched repos, and add:
    > New intents start with a `branches` block that defaults every code repo to `feat/{intent name}`. When writing
-   > tickets from an intent, carry the block over, rename each branch to the ticket's own name, and set repos the
-   > ticket doesn't touch to `null`.
+   > tickets from an intent, verify that the block is consistent with the intent; carry the block over if it is,
+   > else ask the user to confirm. When subdividing, rename each `feat/{intent name}` branch to the ticket's own name.
 
 The `.workflow.json` hash already feeds `.agents_md_hash` (`HashFileV2.workflow_json_sha`), and `run_hook` lives in
 `.workflow.json`, so no hash change is needed.
@@ -197,41 +197,6 @@ Tests:
 - `tests/test_doctor_oob.py`: anomaly reported for a code repo with `run_hook: true` and no hook; nothing reported
   for `run_hook: false`.
 
-## §6 Resolver tie-break by state owner
-
-intent/031_oob_fixes Decisions 11, 12. `_disambiguate` (`workflow/plan_resolver.py`) gets one more rule, applied after
-the existing intent-vs-non-intent rule. If every match has the same state, and exactly one match lives in the
-worktree of that state's agent (`config.states[state].agent`), return it. States with no agent (`todo`, `done`, …)
-are unaffected.
-
-```python
-states = {p.state for p in matches}
-if len(states) == 1:
-    owner = config.states[next(iter(states))].agent
-    owned = [p for p in matches if owner is not None and p.worktree.value == owner]
-    if len(owned) == 1:
-        return owned[0]
-```
-
-`_disambiguate` gains a `config` (or `owner_of: Callable[[PlanState], str | None]`) parameter. Both call sites in
-`resolve_plan` already have `config`. Adapt the exact config field access to the existing `StateConfig` model. The
-comparison relies on agent names equalling worktree names (027.1_prompt_dispatch Decision 3).
-
-Dispatch then follows the resolved worktree (intent/027_various_fixes Decision 3), so `ask 001` goes to the planner.
-`builder/001` still selects the builder's copy.
-
-Tests:
-- `tests/test_plan_resolver_wide.py`: change `synced-001-ask-ambiguous` into an `_ok` case expecting
-  `(planner, INTENT)` and rename its id (e.g. `synced-001-ask-owner-tiebreak`). Rewrite the comment above it, which
-  warns about exactly this flip, to cite intent/031_oob_fixes Decision 12. Keep `synced-001-ask-repo-hint`.
-- `tests/test_plan_resolver.py`: unit tests for `_disambiguate`:
-  - same state with one owner copy → owner wins;
-  - same state with no owner copy (e.g. builder + reviewer for an intent) → still `AmbiguousPlanError`;
-  - an agentless state → still ambiguous;
-  - an oob variant of the synced `ask 001` case through `resolve_plan`.
-- Run the whole wide matrix. If any other `_err(..., AmbiguousPlanError)` case flips, check it against the rule before
-  updating it, and mention it in the PR.
-
 ## Documentation
 
 Update `docs/source`:
@@ -278,9 +243,6 @@ Update `docs/source`:
 - **Stricter pre-flights can block existing setups.** A project inited with a hook-less `run_hook: true` code repo now
   fails `check`/`accept` early instead of at hook time. This is intended, but the message must name the recovery
   path.
-- **Tie-break changes routing.** `ask 001` with no hint now goes to the planner silently, where it used to raise an
-  error asking for a hint. A builder-side question about an intent needs `builder/001`. Other wide-matrix cases may
-  flip; review each one.
 - **Branch defaults may be wrong.** Every code repo now defaults to a branch. A planner that forgets to null untouched
   repos produces tickets claiming branches that never exist. `validate` only checks that entries exist
   (intent/023_out_of_band Decision 14), so this shows up only at review. The AGENTS.md wording in §3 is the only
