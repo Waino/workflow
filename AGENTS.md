@@ -1,5 +1,17 @@
 # Project Guidelines
 
+## Layout and entry points (partial list)
+
+- Package dir: `workflow/`
+- Config file: `docs/default_config.yaml`
+- Pre-commit hook: `.git-pre-commit-hook`
+
+This list is partial. Map of all modules (first docstring line of each):
+
+    python -c "import ast,sys;[print(p+':',(ast.get_docstring(ast.parse(open(p).read())) or '').partition('\n')[0]) for p in sys.argv[1:]]" $(git ls-files '*.py')
+
+Every module needs a one-line docstring: enable ruff `D100` and `D104`.
+
 ## Code Style
 - black
 - Maximum line length 120.
@@ -30,8 +42,15 @@
 - Write user documentation in the `docs` subdirectory, in ReStructuredText format.
 - Update documentation when adding new features.
 
+## Migrations
+- Prefer migration scripts over backward compatibility.
+- Migration scripts use click.
+
 <!-- WORKFLOW BEGIN -->
 Always start by reading `docs/plans/intent/001_idea.md`.
+- Planner: read it completely.
+- Builder and reviewer: read the headings, then Synopsis, Goal, Terminology, Libraries,
+  and any other section relevant to the task.
 If `docs/plans/index_of_decisions.md` exists, read it next when planning or reviewing;
 when implementing, consult it if the plan leaves something unclear.
 Read its header, Plan summaries and Terminology, list the topics with `grep -n '^###'`,

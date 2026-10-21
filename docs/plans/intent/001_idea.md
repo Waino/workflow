@@ -1,3 +1,5 @@
+A multi-agent workflow orchestrator
+
 ## Goals
 
 - Ability to run (limited, 3 is enough) parallel agents:
@@ -13,7 +15,7 @@
 
 ## Components
 
-- Python helper script `workflow` for the human operator
+- Python script `workflow` for the human operator
     - Steps marked "script: workflow <subcommand> [<args>]" are pure script commands.
     - Steps marked "prompt: workflow <subcommand> [<args>]" are also invoked through the CLI,
       but instead of only running Python logic they dispatch a rendered prompt to the agent:
@@ -23,7 +25,6 @@
 - AGENTS.md: static instructions for agents (git branch strategy, coding standards, workflow orientation).
     - Auto-generated sections (plan state machine, command listing) are kept in sync by `workflow agents_md`.
     - Does not contain prompt command text; full prompts are rendered from the config and sent directly by the CLI.
-- Changes to project cookiecutter
 
 ## Prompts modifying the shorthand
 
@@ -104,7 +105,7 @@ then save and close; the modified text is sent to the reviewer.
 
 ## Loose path parsing
 
-- Humans are lazy writers. The path_to_plan parameters in both scripts and prompts should match loosely
+- The path_to_plan parameters in both scripts and prompts should match loosely
 - All of the following should work, as well as intermediate forms between them:
     - absolute path all the way to the plan file
     - planner/docs/plans/planning/002_pydantic_models.md        # relative path to md file
@@ -255,28 +256,6 @@ Directory structure:
 - script: workflow cheat
 - Prints a cheat sheet outlining the workflow
     - Use color: distinguish by markers, fade out table delimiters to gray.
-- Markers, `-` for script, `@` for prompt shorthand, `( ... )` for other, `>` for transition
-```
-                                             Command cheatsheet
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┓
-┃ planner                    ┃               ┃ builder      ┃ reviewer   ┃                ┃ reviewer        ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━┩
-│ intent          planning   │ todo          │ implementing │ checking   │ done  rejected │ review          │
-│ ──────────────  ────────── │ ───────────── │ ──────────── │ ────────── │ ────  ──────── │ ─────────────── │
-│ - new           ( adjust ) │ - implement > │ @ ask        │ ( review ) │                │ @ full review   │
-│ - push          @ critique │ - push        │ ( answer )   │ @ pr       │                │ @ followthrough │
-│ @ architecture  ( revise ) │               │ @ build      │ ( adjust ) │                │ @ refresh       │
-│ @ mvp           @ rebase   │               │ - check >    │ @ fix      │                │                 │
-│ @ ask           - todo >   │               │              │ @ rebase   │                │                 │
-│ ( answer )                 │               │              │ - validate │                │                 │
-│ @ critique                 │               │              │ - accept > │                │                 │
-│ ( revise )                 │               │              │ - reject > │                │                 │
-│ @ plan >                   │               │              │            │                │                 │
-│ @ subdivide >              │               │              │            │                │                 │
-└────────────────────────────┴───────────────┴──────────────┴────────────┴────────────────┴─────────────────┘
-
-```
-
 
 ### Init
 
@@ -286,7 +265,7 @@ Directory structure:
 
 Directory structure after:
     /home/auggie/projects/foo/              # project directory
-        canon/                             # repo for merging and human work
+        canon/                              # repo for merging and human work
         bare/                               # bare git repo for push
         planner/                            # repo for planner agent
         builder/                            # repo for builder agent

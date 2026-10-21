@@ -1,14 +1,58 @@
 #!/bin/bash
-set -eux
+set -eu
 
-# Reformat using black
-black --skip-string-normalization workflow tests/* scripts
+mapfile -d '' staged < <(git diff --cached --name-only -z --diff-filter=ACMR)
 
-# Lint using ruff
-ruff check --fix
+# Formatting only the staged files must not sweep unstaged edits into the commit.
+partial=()
+[ "${#staged[@]}" -eq 0 ] || mapfile -d '' partial < <(git diff --name-only -z -- "${staged[@]}")
+if [ "${#partial[@]}" -gt 0 ]; then
+    echo "Commit aborted: these paths have unstaged changes:" >&2
+    printf '  %s\n' "${partial[@]}" >&2
+    echo "Stage them fully, or stash the unstaged part (git stash push -p)." >&2
+    exit 1
+fi
 
-# Unit tests
-python -m pytest -m "not slow" -n auto
+# run NAME CMD...: quiet on success, dump captured output on failure.
+run() {
+    local name=$1 out status=0
+    shift
+    if [ -n "${GIT_HOOK_IS_VERBOSE:-}" ]; then
+        "$@"
+        return
+    fi
+    out=$(mktemp)
+    "$@" >"$out" 2>&1 || status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "$name: FAILED" >&2
+        cat "$out" >&2
+    else
+        echo "$name: passed"
+    fi
+    rm "$out"
+    return "$status"
+}
 
-# Type checking
-mypy workflow tests scripts
+py=()
+docs_only=1
+for f in "${staged[@]}"; do
+    case "$f" in *.py) py+=("$f") ;; esac
+    case "$f" in docs/*) ;; *) docs_only=0 ;; esac
+done
+[ "${#staged[@]}" -gt 0 ] || docs_only=0
+
+if [ "${#py[@]}" -gt 0 ]; then
+    run black black --skip-string-normalization -- "${py[@]}"
+    run "ruff fix" ruff check --fix -- "${py[@]}"
+    git add -- "${py[@]}"
+fi
+
+run ruff ruff check
+
+if [ "$docs_only" -eq 1 ]; then
+    echo "docs-only commit: skipping pytest and mypy"
+    exit 0
+fi
+
+run pytest python -m pytest -q -m "not slow" -n auto
+run mypy mypy workflow tests scripts

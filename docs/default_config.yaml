@@ -70,6 +70,7 @@ states:
         prompt: |
           First apply the planner branch rule from AGENTS.md.
           Read the plan at {{ plan.path_in_worktree }}.
+          For exploration, consider launching `research` subagents.
           Ask any questions until you have a clear understanding.
         reminder: critique
       - command_type: manual
@@ -96,6 +97,7 @@ states:
         prompt: |
           First apply the planner branch rule from AGENTS.md.
           Read the intent at {{ plan.path_in_worktree }}.
+          For exploration, consider launching `research` subagents.
           Write a detailed implementation plan into {{ plans_root_in_worktree }}/planning/.
           Commit your changes.
         transition: planning
@@ -110,6 +112,7 @@ states:
           Write each plan into `{{ plans_root_in_worktree }}/planning/`.
           Use running numbers in a hierarchy below the input plan,
           e.g. `{{ plans_root_in_worktree }}/planning/{{ plan.sequence_number_str }}.1_foo.md` and `{{ plans_root_in_worktree }}/planning/{{ plan.sequence_number_str }}.2_bar.md`
+          For exploration, consider launching `research` subagents.
           Commit your changes.
         transition: planning
         reminder: critique
@@ -203,10 +206,11 @@ states:
           {%- if not loop.last %}- {{ e.name }} ({{ e.path }}, commit range {{ e.commit_range }})
           {% endif -%}
           {%- endfor %}
-          Read those plans for context only; do not re-implement or modify them.
+          You may read those plans for context only (consider using a mapper subagent); do not re-implement or modify them.
           Implement only {{ plan.path_in_worktree }}.
           {%- else %}
           Implement the plan.
+          Consider launching subagents: research for exploration, committer to fix trivial issues and commit, fixer for mechanical multi-file edits.
           {%- endif %}
           Commit your changes, making sure to run the pre-commit hook.
         reminder: check
@@ -243,7 +247,12 @@ states:
           {% for e in stack %}- {{ e.name }} ({{ e.path }}, commit range {{ e.commit_range }})
           {% endfor -%}
           The review covers the whole branch, but organise it per plan.
+          Rembember to use stack-reviewer subagents.
           {%- endif %}
+          For defect verification, consider launching `research` subagents.
+          Structure the report with one section per plan (a single one unless the branch carries a stack).
+          Within each plan section, use the headings: Findings (sub-headed blocking / high / medium / low),
+          Confirmed non-issues, Proposed AGENTS.md entry-point edit, Verdict.
           Write a report into {{ plans_root_in_worktree }}/reviews/pr/{{ plan.name }}_{{ commit }}.md.
           Commit your changes. Do not modify the code.
         reminder: fix
@@ -255,6 +264,7 @@ states:
         description: Fix issues from the most recent review.
         prompt: |
           Fix the issues identified in the most recent review `{{ plans_root_in_worktree }}/reviews/pr/{{ plan.name }}_*.md`.
+          Consider launching subagents: research for exploration, committer to fix trivial issues and commit, fixer for mechanical multi-file edits.
         reminder: validate
       - command_type: prompt
         name: rebase
@@ -296,6 +306,7 @@ states:
         description: Perform a full review of the current codebase.
         prompt: |
           Perform a full review of the current state of the codebase.
+          Consider launching subagents: research for exploration, mapper for bulk reading.
           Write a report into {{ plans_root_in_worktree }}/reviews/full/{{ today }}_{{ commit }}.md.
       - command_type: prompt
         name: followthrough
@@ -307,6 +318,7 @@ states:
           If `{{ plans_root_in_worktree }}/index_of_decisions.md` exists, also go through its deferred work section:
           remove every item that the codebase shows to be completed, and record the `main` commit
           your branch was cut from as the last followthrough pass. Do not create the index file if it does not exist.
+          For bulk reading, consider launching `mapper` subagents.
       - command_type: prompt
         name: index_decisions
         description: Update the index of decisions from plans and intents not yet indexed.
@@ -321,6 +333,7 @@ states:
           - is not covered by a Plan summaries entry (as head, related file, or subplan range), or
           - changed since the last indexing pass: `git -C {{ plans_root_in_worktree }} diff --name-only --relative <hash>..HEAD -- .`
           For a changed file, update its existing entries instead of adding duplicates.
+          For bulk reading, consider launching `mapper` subagents.
 
           File layout. Start the file with exactly this header, filling in the hashes:
 

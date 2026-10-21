@@ -249,6 +249,7 @@ case "$SUBCOMMAND" in
             -v /home/auggie/dot_cache:/home/auggie/.cache \
             -v /home/auggie/dot_local/share/uv/python:/home/auggie/.local/share/uv/python \
             --env PROJECT="$PROJECT" --env AGENT="$REPO" ${CONTAINER_ENVS} \
+            --env GIT_HOOK_IS_VERBOSE=1 \
             "${IMAGE}" bash -lc "$HOOK_CMD"
         ;;
     agent)
