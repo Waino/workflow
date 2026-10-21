@@ -739,13 +739,24 @@ def _raise_if_issues(title: str, issues: list[str]) -> None:
         raise WorkflowError("\n".join([f"{title}:", *(f"- {issue}" for issue in issues)]))
 
 
+def _check_hook_committed(repo: Path, issues: list[str], *, skip_hint: str = "") -> None:
+    """Append an issue unless *repo*'s HEAD has ``.git-pre-commit-hook`` (agents clone HEAD, not the working tree)."""
+    if not git_path_exists_at_ref(repo, "HEAD", ".git-pre-commit-hook"):
+        issues.append(f"{repo / '.git-pre-commit-hook'} must be committed{skip_hint}.")
+
+
+def _check_code_repo_init(layout: Layout, repo: str, issues: list[str]) -> None:
+    """Pre-flight one code repo: it has a commit and, if ``run_hook``, a committed hook."""
+    repo_path = layout.git_repo_root(WorktreeName.canon, repo)
+    if _check_repo_with_commit(repo_path, issues) and layout.metadata.runs_hook(repo):
+        _check_hook_committed(repo_path, issues, skip_hint=f" (or pass --skip-hook {repo})")
+
+
 def _check_in_band_init_preconditions(layout: Layout, issues: list[str]) -> None:
     canon_repo = layout.git_repo_root(WorktreeName.canon)
     if not _check_repo_with_commit(canon_repo, issues):
         return
-    # Agents clone HEAD, so a working-tree-only file fails later, inside the venv step.
-    if not git_path_exists_at_ref(canon_repo, "HEAD", ".git-pre-commit-hook"):
-        issues.append(f"{canon_repo / '.git-pre-commit-hook'} must be committed.")
+    _check_hook_committed(canon_repo, issues)
     if git_path_exists_at_ref(canon_repo, "HEAD", IN_BAND_BOOTSTRAP_PATH):
         _check_executable_bootstrap(canon_repo, IN_BAND_BOOTSTRAP_PATH, issues)
     elif not git_path_exists_at_ref(canon_repo, "HEAD", "pyproject.toml"):
@@ -765,7 +776,7 @@ def _check_oob_init_preconditions(layout: Layout, issues: list[str]) -> None:
             issues.append(f"{body_path} must exist.")
         _check_executable_bootstrap(docs_repo, BOOTSTRAP_VENV_FILENAME, issues)
     for repo in layout.code_repos():
-        _check_repo_with_commit(layout.git_repo_root(WorktreeName.canon, repo), issues)
+        _check_code_repo_init(layout, repo, issues)
 
 
 def _check_init_preconditions(layout: Layout) -> None:
@@ -922,7 +933,7 @@ def _add_repo_metadata(layout: Layout, name: str, *, run_hook: bool) -> ProjectM
         code_repos=[*metadata.code_repos, _code_repo_meta(name, run_hook=run_hook)],
     )
     issues: list[str] = []
-    _check_repo_with_commit(layout.git_repo_root(WorktreeName.canon, name), issues)
+    _check_code_repo_init(layout.model_copy(update={"metadata": new_metadata}), name, issues)
     _check_bare_valid(layout.bare_repo(name), issues)
     _raise_if_issues("add-repo pre-flight checks failed", issues)
     return new_metadata
@@ -1522,6 +1533,11 @@ def _require_pushable(
     for info in _code_repo_entries(push_set):
         repo_path = layout.git_repo_root(worktree, info.repo)
         require(info.branch != "HEAD", f"{repo_path} has a detached HEAD; commit on a named branch first.")
+        require(
+            not layout.metadata.runs_hook(info.repo) or pre_commit_hook_present(repo_path),
+            f"{repo_path} has no pre-commit hook but run_hook is true; commit .git-pre-commit-hook, or set "
+            f"run_hook: false for {info.repo} in .workflow.json and run workflow agents_md.",
+        )
         if protect_default_branch:
             default_branch = resolve_default_branch(repo_path, BARE_REMOTE)
             require(

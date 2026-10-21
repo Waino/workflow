@@ -398,3 +398,25 @@ def test_post_rebase_verify_in_oob_targets_the_docs_repo(
     wc._run_docs_hook(config, config.layout(), WorktreeName.planner, dry_run=False)
 
     assert _hook_calls(tmp_path) == expected
+
+
+def test_check_fails_before_any_transition_when_a_run_hook_repo_has_no_hook(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _setup_project(tmp_path, monkeypatch)
+    _commit_docs_and_dep1(tmp_path)
+    dep1 = tmp_path / "builder" / "dep1"
+    _git(["rm", "-q", "--cached", ".git-pre-commit-hook"], cwd=dep1)
+    _git(["commit", "-q", "-m", "drop hook"], cwd=dep1)
+    (dep1 / ".git-pre-commit-hook").unlink()
+    (dep1 / ".git" / "hooks" / "pre-commit").unlink()
+
+    result = _run_check(tmp_path, config_path, monkeypatch)
+
+    assert result.exit_code == 1
+    assert _contains(result.output, "has no pre-commit hook but run_hook is true")
+    assert _contains(result.output, "run_hook: false for dep1")
+    assert (tmp_path / "builder" / "docs" / "plans" / "implementing" / "005_foo.md").exists()
+    assert _bare_sha(tmp_path, "docs", "feat/005_foo") is None
+    assert _bare_sha(tmp_path, "dep1", "add-feature") is None

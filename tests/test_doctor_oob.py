@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import pytest
 from click.testing import CliRunner
 
-from tests.test_init_oob import _git, _make_oob_project, _run_init
+from tests.test_init_oob import HOOK_FILENAME, _git, _make_oob_project, _run_init
 from workflow.cli import main
 
 if TYPE_CHECKING:
@@ -114,3 +114,26 @@ def test_doctor_still_flags_a_stray_docs_branch(tmp_path: Path, monkeypatch: pyt
 
     assert result.exit_code == 1
     assert _contains(result.output, "stray branch 'feature/widget'")
+
+
+def test_doctor_flags_a_run_hook_code_repo_without_a_hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COLUMNS", "250")  # rich truncates instead of wrapping a narrow anomalies cell
+    config_path = _setup_project(tmp_path, monkeypatch)
+    builder_mypackage = tmp_path / "builder" / "mypackage"
+    _git(["rm", "-q", HOOK_FILENAME], cwd=builder_mypackage)
+    _git(["commit", "-q", "-m", "drop hook"], cwd=builder_mypackage)
+
+    result = CliRunner().invoke(main, ["--config", str(config_path), "doctor"])
+
+    assert result.exit_code == 1
+    assert _contains(result.output, "pre-commit hook missing (run_hook is true)")
+
+
+def test_doctor_accepts_a_hookless_repo_with_run_hook_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _make_oob_project(tmp_path, ["mypackage"], hook_repos=())
+    assert _run_init(tmp_path, monkeypatch, "--skip-hook", "mypackage").exit_code == 0
+
+    result = CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "doctor"])
+
+    assert result.exit_code == 0, result.output
+    assert not _contains(result.output, "pre-commit hook missing")

@@ -37,6 +37,7 @@ from workflow.git_helpers import (
     git_remote_url,
     git_rev_parse,
     git_status_porcelain,
+    pre_commit_hook_present,
     resolve_default_branch,
 )
 from workflow.metadata import LEGACY_ROOT_MARKER, ProjectMode
@@ -160,6 +161,12 @@ def _note_finished_planner_branch(check: WorktreeCheck, worktree: WorktreeName, 
     is_plan_branch = worktree == WorktreeName.planner and branch.startswith("plan/")
     if is_plan_branch and git_is_ancestor(repo_path, branch, "main"):
         check.notes.append(f"branch {branch!r} has no commits ahead of main (merged or empty)")
+
+
+def _check_hook_present(check: WorktreeCheck, repo_path: Path) -> None:
+    """Flag a clone of a ``run_hook`` code repo that has no runnable pre-commit hook."""
+    if check.valid and not pre_commit_hook_present(repo_path):
+        check.anomalies.append("pre-commit hook missing (run_hook is true)")
 
 
 def _check_worktree(
@@ -455,7 +462,7 @@ def doctor(ctx: click.Context) -> None:
         bare_path = layout.bare_repo(repo)
         check_repo = repo if oob else None
         checks.append(_check_bare(bare_path, repo=check_repo))
-        checks.extend(
+        worktree_checks = [
             _check_worktree(
                 worktree,
                 layout.git_repo_root(worktree, repo),
@@ -464,7 +471,11 @@ def doctor(ctx: click.Context) -> None:
                 repo=check_repo,
             )
             for worktree in WorktreeName
-        )
+        ]
+        if oob and repo != DOCS_REPO and layout.metadata.runs_hook(repo):
+            for worktree_check in worktree_checks:
+                _check_hook_present(worktree_check, layout.git_repo_root(WorktreeName(worktree_check.name), repo))
+        checks.extend(worktree_checks)
     console.print(_render_table(checks))
 
     duplicate_anomalies = _duplicate_plan_anomalies(layout)

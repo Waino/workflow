@@ -110,10 +110,10 @@ def _make_oob_project(
     tmp_path: Path,
     code_repos: list[str],
     *,
-    hook_repos: tuple[str, ...] = (),
+    hook_repos: tuple[str, ...] | None = None,
     docs_hook: bool = False,
 ) -> Path:
-    """Build project_dir/{env.list,config.yaml,run_agent_in_docker.sh,canon/{docs,*repos}}."""
+    """Build project_dir/{env.list,config.yaml,run_agent_in_docker.sh,canon/{docs,*repos}} (code repos ship hooks)."""
     (tmp_path / "env.list").touch()
     shutil.copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
     script = tmp_path / "run_agent_in_docker.sh"
@@ -134,7 +134,7 @@ def _make_oob_project(
     _git(["commit", "-m", "add bootstrap script"], cwd=docs_repo)
 
     for name in code_repos:
-        hook = {HOOK_FILENAME: "#!/bin/bash\n"} if name in hook_repos else None
+        hook = {HOOK_FILENAME: "#!/bin/bash\n"} if hook_repos is None or name in hook_repos else None
         _init_repo(tmp_path / "canon" / name, extra_files=hook)
 
     return tmp_path / "config.yaml"
@@ -357,8 +357,8 @@ class TestInitOob:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        _make_oob_project(tmp_path, ["mypackage"])
-        result = _run_init(tmp_path, monkeypatch)
+        _make_oob_project(tmp_path, ["mypackage"], hook_repos=())
+        result = _run_init(tmp_path, monkeypatch, "--skip-hook", "mypackage")
         assert result.exit_code == 0, result.output
         hook = tmp_path / "builder" / "mypackage" / ".git" / "hooks" / "pre-commit"
         assert not hook.exists()
@@ -554,6 +554,74 @@ class TestInitOobPreflight:
         assert _contains(result.output, "not a valid bare clone")
 
 
+def _make_hookless_repo(path: Path, state: str) -> None:
+    """A code repo whose hook is ``committed``, only in the ``working_tree``, or ``absent``."""
+    _init_repo(path, extra_files={HOOK_FILENAME: "#!/bin/bash\n"} if state == "committed" else None)
+    if state == "working_tree":
+        (path / HOOK_FILENAME).write_text("#!/bin/bash\n", encoding="utf-8")
+
+
+_HOOK_STATES = [("committed", True), ("working_tree", False), ("absent", False)]
+
+
+class TestHookPreflight:
+    @pytest.mark.parametrize(("state", "passes"), _HOOK_STATES)
+    def test_init_requires_a_committed_hook_for_run_hook_repos(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        state: str,
+        *,
+        passes: bool,
+    ) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        shutil.rmtree(tmp_path / "canon" / "dep1", ignore_errors=True)
+        _make_hookless_repo(tmp_path / "canon" / "dep1", state)
+
+        result = _run_init(tmp_path, monkeypatch)
+
+        assert (result.exit_code == 0) is passes, result.output
+        if not passes:
+            assert _contains(result.output, "dep1/.git-pre-commit-hook must be committed")
+            assert _contains(result.output, "--skip-hook dep1")
+            assert not (tmp_path / "bare").exists()
+
+    @pytest.mark.parametrize("state", ["working_tree", "absent"])
+    def test_init_skip_hook_bypasses_the_hook_preflight(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        state: str,
+    ) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        _make_hookless_repo(tmp_path / "canon" / "dep1", state)
+
+        result = _run_init(tmp_path, monkeypatch, "--skip-hook", "dep1")
+
+        assert result.exit_code == 0, result.output
+
+    @pytest.mark.parametrize(("state", "passes"), _HOOK_STATES)
+    def test_add_repo_requires_a_committed_hook_unless_skipped(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        state: str,
+        *,
+        passes: bool,
+    ) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        assert _run_init(tmp_path, monkeypatch).exit_code == 0
+        _make_hookless_repo(tmp_path / "canon" / "dep2", state)
+
+        result = _add_repo(tmp_path, "dep2")
+
+        assert (result.exit_code == 0) is passes, result.output
+        if not passes:
+            assert _contains(result.output, "dep2/.git-pre-commit-hook must be committed")
+            assert not (tmp_path / "bare" / "dep2").exists()
+            assert _add_repo(tmp_path, "dep2", "--skip-hook").exit_code == 0
+
+
 class TestAddRepo:
     def test_happy_path_registers_clones_and_updates_metadata(
         self,
@@ -625,7 +693,7 @@ class TestAddRepo:
         _make_oob_project(tmp_path, ["mypackage"])
         first = _run_init(tmp_path, monkeypatch)
         assert first.exit_code == 0, first.output
-        _init_repo(tmp_path / "canon" / "dep2")
+        _init_repo(tmp_path / "canon" / "dep2", extra_files={HOOK_FILENAME: "#!/bin/bash\n"})
         metadata_before = (tmp_path / METADATA_FILENAME).read_text(encoding="utf-8")
 
         result = CliRunner().invoke(main, ["--dry-run", "--config", str(tmp_path / "config.yaml"), "add-repo", "dep2"])

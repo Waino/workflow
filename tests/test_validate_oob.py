@@ -22,10 +22,19 @@ from workflow.validate import CheckResult, validate
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 
 
-def _setup_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, hook_repos: tuple[str, ...] = ()) -> Path:
-    """Build a real oob project (docs, mypackage, dep1) via a default `init --oob`; return its config path."""
+def _setup_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    hook_repos: tuple[str, ...] = ("mypackage", "dep1"),
+) -> Path:
+    """Build a real oob project (docs, mypackage, dep1) via `init --oob`; return its config path.
+
+    Code repos outside *hook_repos* ship no hook and are passed as ``--skip-hook``.
+    """
     _make_oob_project(tmp_path, ["mypackage", "dep1"], hook_repos=hook_repos)
-    result = _run_init(tmp_path, monkeypatch)
+    skips = [arg for repo in ("mypackage", "dep1") if repo not in hook_repos for arg in ("--skip-hook", repo)]
+    result = _run_init(tmp_path, monkeypatch, *skips)
     assert result.exit_code == 0, result.output
     return tmp_path / "config.yaml"
 
@@ -204,7 +213,7 @@ def _commit_builder_plan(tmp_path: Path, frontmatter: PlanFrontmatter | None = N
 
 
 def test_default_project_passes_git_hooks_in_every_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No repo ships .git-pre-commit-hook, so init installs no symlink and validate must not demand one."""
+    """Code repos ship the hook and init symlinks it, so validate passes the git-hooks check everywhere."""
     config_path = _setup_project(tmp_path, monkeypatch)
     config = load_config(config_path, tmp_path)
     plan = _plan(tmp_path, "planner", PlanState.PLANNING)
@@ -218,11 +227,11 @@ def test_default_project_passes_git_hooks_in_every_repo(tmp_path: Path, monkeypa
 
 
 def test_code_repos_own_pre_commit_hook_only_warns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A third-party repo's own pre-commit hook (e.g. the pre-commit framework) is routine."""
+    """A third-party repo's own extra hook is routine."""
     config_path = _setup_project(tmp_path, monkeypatch)
     config = load_config(config_path, tmp_path)
     plan = _plan(tmp_path, "planner", PlanState.PLANNING)
-    hook = tmp_path / "planner" / "mypackage" / ".git" / "hooks" / "pre-commit"
+    hook = tmp_path / "planner" / "mypackage" / ".git" / "hooks" / "post-commit"
     hook.write_text("#!/bin/sh\n", encoding="utf-8")
     hook.chmod(0o755)
 
@@ -230,7 +239,7 @@ def test_code_repos_own_pre_commit_hook_only_warns(tmp_path: Path, monkeypatch: 
 
     result = next(r for r in results if r.check_name == "git-hooks" and r.repo == "mypackage")
     assert result.status == "warn"
-    assert result.details == ["unexpected executable hook: pre-commit"]
+    assert result.details == ["unexpected executable hook: post-commit"]
 
 
 def test_missing_managed_symlink_fails_when_repo_ships_the_hook(
