@@ -20,12 +20,12 @@ This plan fixes all of these.
 
 ## Scope
 
-In scope: intent items §1–§5, plus the resolver tie-break (intent/031_oob_fixes Decisions 11, 12).
+In scope: intent items §1–§5, plus the resolver tie-break (intent/031_oob_fixes Decisions 11, 12), plus the oob
+hook invocations that run at the wrapper root (post-rebase verify, `canon_pre_commit`; Decision 4).
 
 Out of scope:
 - §6 (`{number}_{slug}` failing to resolve) is postponed until diagnostics have been run on the real project
   (intent/031_oob_fixes Decision 10).
-- `canon_pre_commit` in oob. It still calls the hook without `--repo` and so fails at the wrapper root (see Risks).
 - Changing `--skip-hook` after init. The recovery path is a manual `.workflow.json` edit (see §5).
 
 Suggested commit order: one commit per section below (§1 … §6).
@@ -141,6 +141,11 @@ In oob, the docs repo runs the pre-commit hook only if a runnable hook is presen
   route all three call sites through one helper, e.g. `_run_docs_hook(config, layout, worktree, dry_run)`:
   - in-band: unchanged call;
   - oob: skip when `_hook_enabled(layout, worktree, DOCS_REPO)` is false, else call with `repo=DOCS_REPO`.
+- **`canon_pre_commit` (pre-existing oob bug, same cause).** It calls `_run_pre_commit_hook(config, canon)` without
+  `repo`, so in oob it also runs at the wrapper root and fails. In oob, loop over `layout.repos()` and run the hook
+  with `repo=<name>` for every repo where `_hook_enabled(layout, WorktreeName.canon, repo)` is true. Print the same
+  dim "skipping" line for the others. In-band is unchanged. A `run_hook: true` code repo without a hook fails loudly
+  here (the docker script errors), which is correct. Write the audit entry once, after all repos pass.
 - Leave `CodeRepoMeta`/`ProjectMetadata.runs_hook` semantics as they are (docs → `True` means "symlink and validate
   the hook if it ships"). Only touch the docstring so it no longer claims the docs hook always runs.
 - `validate` needs no change: oob already only checks hooks whose source ships (`_installed_managed_hooks`).
@@ -151,6 +156,9 @@ Tests (`tests/test_oob_handoff.py`; reuse `test_check_skips_the_hook_for_a_repo_
 - With a docs hook present, `check` runs it with `--repo docs`.
 - Unit test `pre_commit_hook_present`, parametrized: tracked script executable / not executable /
   `.git/hooks/pre-commit` only / none.
+- `canon_pre_commit` in oob runs one hook command per enabled repo (`--repo docs` only if docs has a hook,
+  `--repo NAME` per `run_hook: true` code repo) and none for `run_hook: false`. Model it on
+  `test_canon_pre_commit_runs_hook`; the in-band variant stays unchanged.
 - A post-rebase verify in oob passes `--repo docs`. Use the accept-rebase integration path if an oob variant is
   cheap; otherwise unit-test `_run_docs_hook` with a captured `run_command`.
 
@@ -230,6 +238,7 @@ Update `docs/source`:
 - `cli.rst` `new`: prints the path, and adds `branches` frontmatter in oob.
 - `cli.rst` `init`/`add-repo`: a code repo needs a committed `.git-pre-commit-hook` unless `--skip-hook`.
 - `cli.rst` `doctor`: the new anomaly.
+- `cli.rst` `canon_pre_commit`: in oob it runs per repo (docs only if it has a hook; code repos per `run_hook`).
 - `workflow.rst` multi-repo section: the docs hook is optional; the intent frontmatter defaults and the
   planner's job of renaming and nulling them; the `run_hook: false` recovery recipe.
 - Plan resolution: same-state ties go to the copy owned by the state's agent.
@@ -256,7 +265,8 @@ Update `docs/source`:
    repo, and rendering it would make the trusted hash depend on docs content.
 4. The oob post-rebase verify (`todo`/`implement`/`accept`) runs the hook with `--repo docs`, or skips it when docs
    has none. It is in scope because it is the same docs-hook bug as §4 on a different path.
-   `canon_pre_commit` in oob has the same wrapper-root problem but is left out (no reported use; see Risks).
+   Amended: `canon_pre_commit` is in scope too (operator request). In oob it runs the hook once per enabled repo in
+   canon, using the same `_hook_enabled` rule.
 5. The intent frontmatter is serialized with `render_frontmatter`, not added to `intent.md.j2`, so the YAML
    follows the `PlanFrontmatter` model and in-band output is unchanged.
 
@@ -275,7 +285,6 @@ Update `docs/source`:
   repos produces tickets claiming branches that never exist. `validate` only checks that entries exist
   (intent/023_out_of_band Decision 14), so this shows up only at review. The AGENTS.md wording in §3 is the only
   guard.
-- **`canon_pre_commit` in oob** still fails at the wrapper root (pre-existing; Decision 4).
 
 ## Dependencies
 
