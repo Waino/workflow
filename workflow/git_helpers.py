@@ -17,6 +17,7 @@ accurate preview is impossible without it.
 from __future__ import annotations
 
 import enum
+import os
 import re
 import subprocess
 from typing import TYPE_CHECKING
@@ -458,6 +459,11 @@ def git_file_mode_at_ref(repo_path: Path, ref: str, rel_path: str) -> str | None
     )
     fields = result.stdout.decode().split()
     return fields[0] if result.returncode == 0 and fields else None
+
+
+def pre_commit_hook_present(repo_path: Path) -> bool:
+    """Whether the docker script's ``hook`` subcommand would find a hook to run in *repo_path*."""
+    return any(os.access(repo_path / rel, os.X_OK) for rel in (".git-pre-commit-hook", ".git/hooks/pre-commit"))
 
 
 def resolve_default_branch(repo_path: Path, remote: str) -> str:

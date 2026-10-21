@@ -20,9 +20,10 @@ import workflow.commands.workflow as wc
 from tests.test_init_oob import _git, _make_oob_project, _run_init
 from workflow import tmux_dispatch
 from workflow.cli import main
+from workflow.config import load_config
 from workflow.frontmatter import PlanFrontmatter, RepoBranch, strip_frontmatter, write_frontmatter
 from workflow.metadata import read_metadata
-from workflow.names import DOCS_REPO
+from workflow.names import DOCS_REPO, WorktreeName
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -39,10 +40,15 @@ def _contains(text: str, phrase: str) -> bool:
     return strip(phrase) in strip(text)
 
 
-def _setup_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, skip_dep1_hook: bool = False) -> Path:
-    """Build a real oob project (docs, mypackage, dep1) and return its config path."""
-    # --skip-hook only accepts a repo that ships a hook, so dep1 gets one in that case.
-    _make_oob_project(tmp_path, ["mypackage", "dep1"], hook_repos=("dep1",) if skip_dep1_hook else ())
+def _setup_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    skip_dep1_hook: bool = False,
+    docs_hook: bool = True,
+) -> Path:
+    """Build a real oob project (docs, mypackage, dep1; every repo ships a hook) and return its config path."""
+    _make_oob_project(tmp_path, ["mypackage", "dep1"], hook_repos=("mypackage", "dep1"), docs_hook=docs_hook)
     result = _run_init(tmp_path, monkeypatch, *(["--skip-hook", "dep1"] if skip_dep1_hook else []))
     assert result.exit_code == 0, result.output
     script = tmp_path / "run_agent_in_docker.sh"
@@ -343,3 +349,52 @@ def test_new_in_oob_prepends_branches_frontmatter_for_every_code_repo(
     assert fm.branches["mypackage"] == RepoBranch(branch="feat/001_foo", base="main")
     assert fm.branches["dep1"] == RepoBranch(branch="feat/001_foo", base="master")
     assert body.startswith("# 001: Foo")
+
+
+def test_check_runs_no_docs_hook_when_docs_has_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _setup_project(tmp_path, monkeypatch, docs_hook=False)
+    _commit_docs_and_dep1(tmp_path)
+
+    result = _run_check(tmp_path, config_path, monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    assert _hook_calls(tmp_path) == ["builder --repo dep1"]
+    assert _contains(result.output, "skipping pre-commit hook for docs (no hook)")
+
+
+def test_canon_pre_commit_in_oob_runs_one_hook_per_enabled_repo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _setup_project(tmp_path, monkeypatch, skip_dep1_hook=True)
+
+    result = _run(tmp_path, config_path, monkeypatch, "canon_pre_commit")
+
+    assert result.exit_code == 0, result.output
+    assert _hook_calls(tmp_path) == ["canon --repo docs", "canon --repo mypackage"]
+    assert _contains(result.output, "skipping pre-commit hook for dep1 (run_hook: false)")
+
+
+def test_canon_pre_commit_in_oob_skips_docs_without_a_hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _setup_project(tmp_path, monkeypatch, docs_hook=False)
+
+    result = _run(tmp_path, config_path, monkeypatch, "canon_pre_commit")
+
+    assert result.exit_code == 0, result.output
+    assert _hook_calls(tmp_path) == ["canon --repo dep1", "canon --repo mypackage"]
+
+
+@pytest.mark.parametrize(("docs_hook", "expected"), [(True, ["planner --repo docs"]), (False, [])])
+def test_post_rebase_verify_in_oob_targets_the_docs_repo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    docs_hook: bool,
+    expected: list[str],
+) -> None:
+    config_path = _setup_project(tmp_path, monkeypatch, docs_hook=docs_hook)
+    config = load_config(config_path, project_dir=tmp_path)
+
+    wc._run_docs_hook(config, config.layout(), WorktreeName.planner, dry_run=False)
+
+    assert _hook_calls(tmp_path) == expected

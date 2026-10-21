@@ -71,6 +71,8 @@ def _init_repo(path: Path, *, extra_files: dict[str, str] | None = None) -> Path
         target = path / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
+        if name == HOOK_FILENAME:
+            target.chmod(0o755)
     _git(["add", "."], cwd=path)
     _git(["commit", "-m", "initial commit"], cwd=path)
     return path
@@ -100,10 +102,17 @@ def _add_repo(tmp_path: Path, *args: str) -> Any:
     return CliRunner().invoke(main, ["--config", str(tmp_path / "config.yaml"), "add-repo", *args])
 
 
+HOOK_FILENAME = ".git-pre-commit-hook"
 _AGENT_WORKTREES = ("planner", "builder", "reviewer")
 
 
-def _make_oob_project(tmp_path: Path, code_repos: list[str], *, hook_repos: tuple[str, ...] = ()) -> Path:
+def _make_oob_project(
+    tmp_path: Path,
+    code_repos: list[str],
+    *,
+    hook_repos: tuple[str, ...] = (),
+    docs_hook: bool = False,
+) -> Path:
     """Build project_dir/{env.list,config.yaml,run_agent_in_docker.sh,canon/{docs,*repos}}."""
     (tmp_path / "env.list").touch()
     shutil.copyfile(Path(__file__).parents[1] / "docs" / "default_config.yaml", tmp_path / "config.yaml")
@@ -113,7 +122,10 @@ def _make_oob_project(tmp_path: Path, code_repos: list[str], *, hook_repos: tupl
 
     docs_repo = _init_repo(
         tmp_path / "canon" / DOCS_REPO,
-        extra_files={"body_of_agents.md": "# Hand-written body\n"},
+        extra_files={
+            "body_of_agents.md": "# Hand-written body\n",
+            **({HOOK_FILENAME: "#!/bin/bash\n"} if docs_hook else {}),
+        },
     )
     bootstrap = docs_repo / "bootstrap_venv.sh"
     bootstrap.write_text("#!/bin/bash\necho bootstrap\n", encoding="utf-8")
@@ -122,7 +134,7 @@ def _make_oob_project(tmp_path: Path, code_repos: list[str], *, hook_repos: tupl
     _git(["commit", "-m", "add bootstrap script"], cwd=docs_repo)
 
     for name in code_repos:
-        hook = {".git-pre-commit-hook": "#!/bin/bash\n"} if name in hook_repos else None
+        hook = {HOOK_FILENAME: "#!/bin/bash\n"} if name in hook_repos else None
         _init_repo(tmp_path / "canon" / name, extra_files=hook)
 
     return tmp_path / "config.yaml"

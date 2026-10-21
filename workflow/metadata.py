@@ -91,7 +91,7 @@ class ProjectMetadata(BaseModel):
         return self
 
     def runs_hook(self, repo: str) -> bool:
-        """Return whether the pre-commit hook applies to *repo* (always true for the docs repo)."""
+        """Return whether the pre-commit hook applies to *repo* (docs: always; it only runs if shipped)."""
         return next((code_repo.run_hook for code_repo in self.code_repos if code_repo.name == repo), True)
 
 

@@ -66,6 +66,7 @@ from workflow.git_helpers import (
     git_status,
     git_status_porcelain,
     park_on_main,
+    pre_commit_hook_present,
     refresh_main,
     resolve_default_branch,
     transfer_branch_to_main,
@@ -241,6 +242,28 @@ def _run_pre_commit_hook(config: WorkflowConfig, worktree: str, *, dry_run: bool
     project_name = config.project_name or project_dir.name
     script = _find_docker_script(project_dir)
     run_command(_hook_command(script, project_name, project_dir, worktree, repo=repo), dry_run=dry_run)
+
+
+def _hook_enabled(layout: Layout, worktree: WorktreeName, repo: str) -> bool:
+    """Whether the pre-commit hook runs for *repo*: docs only if it ships a hook, code repos per ``run_hook``."""
+    if repo == DOCS_REPO:
+        return pre_commit_hook_present(layout.git_repo_root(worktree, repo))
+    return layout.metadata.runs_hook(repo)
+
+
+def _skip_hook_message(repo: str) -> str:
+    reason = "no hook" if repo == DOCS_REPO else "run_hook: false"
+    return f"[dim]skipping pre-commit hook for {repo} ({reason})[/dim]"
+
+
+def _run_docs_hook(config: WorkflowConfig, layout: Layout, worktree: WorktreeName, *, dry_run: bool) -> None:
+    """Run the docs repo's hook in *worktree* (oob: skipped when docs ships none)."""
+    if layout.metadata.mode != ProjectMode.oob:
+        _run_pre_commit_hook(config, worktree, dry_run=dry_run)
+    elif _hook_enabled(layout, worktree, DOCS_REPO):
+        _run_pre_commit_hook(config, worktree, dry_run=dry_run, repo=DOCS_REPO)
+    else:
+        console.print(_skip_hook_message(DOCS_REPO))
 
 
 def _plan_path_in_state(layout: Layout, worktree: WorktreeName, state: PlanState, plan: Plan) -> Path:
@@ -1334,7 +1357,7 @@ def todo(ctx: click.Context, plan_path: str, *, force_validation: bool, force_pu
                 force_push=force_push,
                 already_fetched=True,  # the rebase classification step just fetched
                 other_worktrees=_other_worktrees(layout, WorktreeName.planner),
-                post_rebase_verify=lambda: _run_pre_commit_hook(config, WorktreeName.planner, dry_run=dry_run),
+                post_rebase_verify=lambda: _run_docs_hook(config, layout, WorktreeName.planner, dry_run=dry_run),
                 dry_run=dry_run,
             )
             _warn_if_rebased(result, planner_branch)
@@ -1550,10 +1573,10 @@ def _run_repo_push_set_hooks(
         _run_pre_commit_hook(config, worktree, dry_run=dry_run)
         return
     for info in push_set:
-        if not layout.metadata.runs_hook(info.repo):
-            console.print(f"[dim]skipping pre-commit hook for {info.repo} (run_hook: false)[/dim]")
-            continue
-        _run_pre_commit_hook(config, worktree, dry_run=dry_run, repo=info.repo)
+        if _hook_enabled(layout, WorktreeName(worktree), info.repo):
+            _run_pre_commit_hook(config, worktree, dry_run=dry_run, repo=info.repo)
+        else:
+            console.print(_skip_hook_message(info.repo))
 
 
 def _classify_rebase_step(
@@ -1739,7 +1762,7 @@ def _run_transfer_and_todo_steps(  # noqa: PLR0913
             force_push=force_push,
             already_fetched=True,  # the rebase classification step just fetched
             other_worktrees=_other_worktrees(layout, WorktreeName.planner),
-            post_rebase_verify=lambda: _run_pre_commit_hook(config, WorktreeName.planner, dry_run=dry_run),
+            post_rebase_verify=lambda: _run_docs_hook(config, layout, WorktreeName.planner, dry_run=dry_run),
             dry_run=dry_run,
         )
         _warn_if_rebased(result, planner_branch)
@@ -2613,7 +2636,7 @@ def accept(ctx: click.Context, plan_path: str, *, force_push: bool) -> None:
                 force_push=force_push,
                 already_fetched=True,  # the rebase classification step just fetched
                 other_worktrees=_other_worktrees(layout, WorktreeName.reviewer),
-                post_rebase_verify=lambda: _run_pre_commit_hook(config, WorktreeName.reviewer, dry_run=dry_run),
+                post_rebase_verify=lambda: _run_docs_hook(config, layout, WorktreeName.reviewer, dry_run=dry_run),
                 dry_run=dry_run,
             )
             _warn_if_rebased(result, branch)
@@ -2752,11 +2775,19 @@ def reject(ctx: click.Context, plan_path: str, target_repo: WorktreeName) -> Non
 @register_script("canon_pre_commit")
 @click.pass_context
 def canon_pre_commit(ctx: click.Context) -> None:
-    """Run the pre-commit hook against canon in a throwaway container."""
+    """Run the pre-commit hook against canon in a throwaway container (oob: once per enabled repo)."""
     config: WorkflowConfig = ctx.obj["config"]
     dry_run: bool = ctx.obj["dry_run"]
     try:
-        _run_pre_commit_hook(config, WorktreeName.canon, dry_run=dry_run)
+        layout = config.layout()
+        if layout.metadata.mode == ProjectMode.oob:
+            for repo in layout.repos():
+                if _hook_enabled(layout, WorktreeName.canon, repo):
+                    _run_pre_commit_hook(config, WorktreeName.canon, dry_run=dry_run, repo=repo)
+                else:
+                    console.print(_skip_hook_message(repo))
+        else:
+            _run_pre_commit_hook(config, WorktreeName.canon, dry_run=dry_run)
         _write_script_audit_log(config, "canon_pre_commit", dry_run=dry_run)
     except (subprocess.CalledProcessError, WorkflowError) as exc:
         print_workflow_error(exc)

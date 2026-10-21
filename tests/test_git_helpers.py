@@ -1050,3 +1050,23 @@ def test_git_fetch_remote_dry_run_does_not_fetch(tmp_path: Path) -> None:
     git_fetch_remote(clone, "bare", dry_run=True)
 
     assert git_rev_parse(clone, "refs/remotes/bare/new") is None
+
+
+@pytest.mark.parametrize(
+    ("hook_path", "mode", "expected"),
+    [
+        (".git-pre-commit-hook", 0o755, True),
+        (".git-pre-commit-hook", 0o644, False),
+        (".git/hooks/pre-commit", 0o755, True),
+        (None, 0o755, False),
+    ],
+    ids=["tracked_executable", "tracked_not_executable", "git_hooks_only", "none"],
+)
+def test_pre_commit_hook_present(tmp_path: Path, hook_path: str | None, mode: int, *, expected: bool) -> None:
+    if hook_path is not None:
+        hook = tmp_path / hook_path
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        hook.write_text("#!/bin/bash\n", encoding="utf-8")
+        hook.chmod(mode)
+
+    assert git_helpers.pre_commit_hook_present(tmp_path) is expected
