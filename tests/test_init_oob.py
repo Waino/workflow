@@ -621,6 +621,67 @@ class TestHookPreflight:
             assert not (tmp_path / "bare" / "dep2").exists()
             assert _add_repo(tmp_path, "dep2", "--skip-hook").exit_code == 0
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="add-repo's hint says '--skip-hook NAME' but its --skip-hook is a flag",
+    )
+    def test_add_repo_skip_hook_hint_can_be_followed_literally(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _make_oob_project(tmp_path, ["mypackage"])
+        assert _run_init(tmp_path, monkeypatch).exit_code == 0
+        _make_hookless_repo(tmp_path / "canon" / "dep2", "absent")
+
+        first = _add_repo(tmp_path, "dep2")
+
+        assert first.exit_code == 1
+        if _contains(first.output, "--skip-hook dep2"):
+            assert _add_repo(tmp_path, "dep2", "--skip-hook", "dep2").exit_code == 0
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="init rerun suggests --skip-hook NAME, which a rerun always rejects",
+    )
+    def test_init_rerun_skip_hook_hint_is_not_rejected(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _make_oob_project(tmp_path, ["mypackage", "dep1"])
+        assert _run_init(tmp_path, monkeypatch).exit_code == 0
+        dep1 = tmp_path / "canon" / "dep1"
+        _git(["rm", "-q", HOOK_FILENAME], cwd=dep1)
+        _git(["commit", "-q", "-m", "drop hook"], cwd=dep1)
+
+        rerun = _run_init(tmp_path, monkeypatch)
+
+        assert rerun.exit_code == 1
+        if _contains(rerun.output, "--skip-hook dep1"):
+            followed = _run_init(tmp_path, monkeypatch, "--skip-hook", "dep1")
+            assert not _contains(followed.output, "cannot be changed after init"), followed.output
+
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason="pre-flight accepts a committed non-executable hook")
+    def test_init_rejects_a_committed_non_executable_hook(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _make_oob_project(tmp_path, ["mypackage", "dep1"])
+        dep1 = tmp_path / "canon" / "dep1"
+        _git(["update-index", "--chmod=-x", HOOK_FILENAME], cwd=dep1)
+        _git(["commit", "-q", "-m", "hook not executable"], cwd=dep1)
+        (dep1 / HOOK_FILENAME).chmod(0o644)
+
+        result = _run_init(tmp_path, monkeypatch)
+
+        # check/accept require an executable hook (`pre_commit_hook_present`), so init should catch this early
+        assert result.exit_code == 1, result.output
+        assert _contains(result.output, "dep1/.git-pre-commit-hook")
+
 
 class TestAddRepo:
     def test_happy_path_registers_clones_and_updates_metadata(
