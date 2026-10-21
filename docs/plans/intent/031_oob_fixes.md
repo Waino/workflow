@@ -84,3 +84,7 @@ $ workflow critique 002 --edit
     `docs/reports/research/031_oob_name_resolution.md`); the operator will run the diagnostics there later.
 11. In scope (found while investigating §6): in a fully synced oob project, `ask 001` raises `AmbiguousPlanError`
     between the builder and planner copies of the same intent. It should resolve to the planner's copy.
+    Not oob-specific: `ask` is defined for both planner (intent) and builder (implementing), so its soft repo hint
+    is {planner, builder}. `015_wide_resolver_test` row 1 (`synced-001-ask-ambiguous`) asserts this ambiguity on
+    purpose; the fix deliberately flips that case (likely tie-break: prefer the worktree whose agent owns the
+    candidates' state).
