@@ -679,7 +679,9 @@ def test_new_renders_template_and_calls_git_add(tmp_path: Path, monkeypatch: pyt
     assert result.exit_code == 0
     expected = tmp_path / "canon" / "docs" / "plans" / "intent" / "001_flux_capacitor.md"
     assert expected.exists()
+    assert f"Created: {expected}" in result.output
     content = expected.read_text(encoding="utf-8")
+    assert content.startswith("# 001: Flux Capacitor")
     assert "# 001: Flux Capacitor" in content
     assert "## Goal" in content
     assert [(c.args[0], c.args[1]) for c in fake_git_add.call_args_list] == [

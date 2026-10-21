@@ -32,7 +32,7 @@ from workflow.exceptions import (
     PlanNotFoundError,
     WorkflowError,
 )
-from workflow.frontmatter import PlanFrontmatter, RepoBranch, write_frontmatter
+from workflow.frontmatter import PlanFrontmatter, RepoBranch, render_frontmatter, write_frontmatter
 from workflow.git_helpers import (
     BARE_REMOTE,
     TransferResult,
@@ -1202,6 +1202,20 @@ def start(ctx: click.Context, *, reset: bool) -> None:
 _SLUG_RE = re.compile(r"[a-z0-9]+(?:_[a-z0-9]+)*")
 
 
+def _intent_frontmatter(layout: Layout, stem: str) -> PlanFrontmatter | None:
+    """Default ``branches`` block for a new oob intent (every code repo on ``feat/<stem>``); ``None`` in-band."""
+    if layout.metadata.mode == ProjectMode.in_band:
+        return None
+    branches: dict[str, RepoBranch | None] = {
+        repo: RepoBranch(
+            branch=f"{BRANCH_PREFIX}{stem}",
+            base=resolve_default_branch(layout.git_repo_root(WorktreeName.planner, repo), BARE_REMOTE),
+        )
+        for repo in layout.code_repos()
+    }
+    return PlanFrontmatter(branches=branches)
+
+
 @register_script("new")
 @click.argument("slug")
 @click.pass_context
@@ -1223,6 +1237,9 @@ def new(ctx: click.Context, slug: str) -> None:
             importlib.resources.files("workflow.templates").joinpath("intent.md.j2").read_text(encoding="utf-8")
         )
         content = jinja2.Template(template_text).render(number=number, slug=slug)
+        frontmatter = _intent_frontmatter(layout, intent_path.stem)
+        if frontmatter is not None:
+            content = render_frontmatter(frontmatter) + content
         if dry_run:
             console.print(f"Would create: {intent_path}")
             console.print(f"Would open in $EDITOR: {intent_path}")
@@ -1230,6 +1247,7 @@ def new(ctx: click.Context, slug: str) -> None:
             intent_path.parent.mkdir(parents=True, exist_ok=True)
             intent_path.write_text(content, encoding="utf-8")
             _open_in_editor(intent_path)
+            console.print(f"Created: {intent_path}", markup=False, soft_wrap=True)
         canon_repo = layout.git_repo_root(WorktreeName.canon)
         git_add(
             canon_repo,

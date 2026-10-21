@@ -1,6 +1,6 @@
 # 031: OOB fixes from first use
 
-Input: `intent/031_oob_fixes` (Decisions 1–12), `docs/reports/research/031_oob_name_resolution.md`
+Input: `intent/031_oob_fixes` (Decisions 1–10), `docs/reports/research/031_oob_name_resolution.md`
 
 Completeness: complete
 
@@ -14,13 +14,12 @@ The first real out-of-band (oob) project hit several rough edges. Issues:
   root, which isn't a git repo.
 - `check` requires a pre-commit hook in `docs`.
 - A code repo with `run_hook: true` but no hook only failed at hook time.
-- `ask 001` is ambiguous whenever the builder also has the intent.
 
 This plan fixes all of these.
 
 ## Scope
 
-In scope: intent items §1–§5, plus the resolver tie-break (intent/031_oob_fixes Decisions 11, 12), plus the oob
+In scope: intent items §1–§5, plus the oob
 hook invocations that run at the wrapper root (post-rebase verify, `canon_pre_commit`; Decision 4).
 
 Out of scope:
@@ -28,7 +27,7 @@ Out of scope:
   (intent/031_oob_fixes Decision 10).
 - Changing `--skip-hook` after init. The recovery path is a manual `.workflow.json` edit (see §5).
 
-Suggested commit order: one commit per section below (§1 … §6).
+Suggested commit order: one commit per section below (§1 … §5).
 
 ## §1 `new` prints the path
 
@@ -206,7 +205,6 @@ Update `docs/source`:
 - `cli.rst` `canon_pre_commit`: in oob it runs per repo (docs only if it has a hook; code repos per `run_hook`).
 - `workflow.rst` multi-repo section: the docs hook is optional; the intent frontmatter defaults and the
   planner's job of renaming and nulling them; the `run_hook: false` recovery recipe.
-- Plan resolution: same-state ties go to the copy owned by the state's agent.
 
 ## Verification
 
@@ -234,6 +232,10 @@ Update `docs/source`:
    canon, using the same `_hook_enabled` rule.
 5. The intent frontmatter is serialized with `render_frontmatter`, not added to `intent.md.j2`, so the YAML
    follows the `PlanFrontmatter` model and in-band output is unchanged.
+
+6. Builder clarifications: the resolver tie-break (formerly intent Decisions 11, 12) was revoked and is out of scope.
+   The docs-hook predicate mirrors the docker script (executable `.git-pre-commit-hook` or `.git/hooks/pre-commit`),
+   superseding the narrower intent Decision 8 wording. `canon_pre_commit` in oob stops at the first failing repo.
 
 ## Risks
 

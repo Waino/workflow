@@ -20,7 +20,8 @@ import workflow.commands.workflow as wc
 from tests.test_init_oob import _git, _make_oob_project, _run_init
 from workflow import tmux_dispatch
 from workflow.cli import main
-from workflow.frontmatter import PlanFrontmatter, RepoBranch, write_frontmatter
+from workflow.frontmatter import PlanFrontmatter, RepoBranch, strip_frontmatter, write_frontmatter
+from workflow.metadata import read_metadata
 from workflow.names import DOCS_REPO
 
 if TYPE_CHECKING:
@@ -316,3 +317,29 @@ def test_prompt_dispatch_fetches_code_repos_and_only_warns_on_failure(
     send.assert_called_once()
     assert _contains(result.output, "fetch skipped in")
     assert _git(["rev-parse", "--verify", "refs/remotes/bare/upstream-news"], cwd=tmp_path / "planner" / "dep1")
+
+
+def test_new_in_oob_prepends_branches_frontmatter_for_every_code_repo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _setup_project(tmp_path, monkeypatch)
+    # dep1's default branch is master (as seen from the planner clone)
+    _git(["branch", "-m", "main", "master"], cwd=tmp_path / "bare" / "dep1")
+    planner_dep1 = tmp_path / "planner" / "dep1"
+    _git(["fetch", "--prune", "bare"], cwd=planner_dep1)
+    _git(["remote", "set-head", "bare", "-a"], cwd=planner_dep1)
+    monkeypatch.setattr(wc, "_open_in_editor", MagicMock())
+    monkeypatch.setattr(wc, "git_add", MagicMock())
+
+    result = _run(tmp_path, config_path, monkeypatch, "new", "foo")
+
+    assert result.exit_code == 0, result.output
+    intent = tmp_path / "canon" / "docs" / "plans" / "intent" / "001_foo.md"
+    text = intent.read_text(encoding="utf-8")
+    fm, body = strip_frontmatter(text)
+    assert fm is not None
+    assert list(fm.branches) == [repo.name for repo in read_metadata(tmp_path).code_repos]
+    assert fm.branches["mypackage"] == RepoBranch(branch="feat/001_foo", base="main")
+    assert fm.branches["dep1"] == RepoBranch(branch="feat/001_foo", base="master")
+    assert body.startswith("# 001: Foo")
